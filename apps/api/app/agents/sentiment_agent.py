@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from app.agents.contracts import AgentInput, AgentName, AgentOutput, Claim
 
-
 POSITIVE = {
     "strong",
     "robust",
