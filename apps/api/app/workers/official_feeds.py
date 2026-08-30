@@ -47,7 +47,7 @@ class OfficialFeedWorker:
                     not_modified_count += 1
                 else:
                     success_count += 1
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - isolate one feed from the rest of the batch
                 await self.repository.fail(claim, exc)
                 failed_count += 1
                 results.append(
