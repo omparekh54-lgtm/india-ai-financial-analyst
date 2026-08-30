@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 from app.ingestion.macro import MacroObservation
-from app.ingestion.market import MarketBarInput
+from app.ingestion.market import MarketBarInput, normalize_market_bar
 
 
 class ReferenceFileError(ValueError):
@@ -43,16 +43,18 @@ def parse_benchmark_csv(
                 tz,
             )
             bars.append(
-                MarketBarInput(
-                    ts=ts,
-                    open=_required_number(row, "open"),
-                    high=_required_number(row, "high"),
-                    low=_required_number(row, "low"),
-                    close=_required_number(row, "close"),
-                    volume=_optional_number(row.get("volume")),
-                    provider=provider,
-                    interval=interval,
-                    is_adjusted=_bool_value(row.get("is_adjusted")),
+                normalize_market_bar(
+                    MarketBarInput(
+                        ts=ts,
+                        open=_required_number(row, "open"),
+                        high=_required_number(row, "high"),
+                        low=_required_number(row, "low"),
+                        close=_required_number(row, "close"),
+                        volume=_optional_number(row.get("volume")),
+                        provider=provider,
+                        interval=interval,
+                        is_adjusted=_bool_value(row.get("is_adjusted")),
+                    )
                 )
             )
         except (TypeError, ValueError) as exc:
