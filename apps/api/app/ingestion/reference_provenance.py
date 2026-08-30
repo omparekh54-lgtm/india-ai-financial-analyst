@@ -1,12 +1,27 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+
+_SYNTHETIC_SOURCE_TOKENS = frozenset(
+    {
+        "synthetic",
+        "mock",
+        "fake",
+        "dummy",
+        "fixture",
+        "sample",
+        "example",
+        "generated",
+        "placeholder",
+    }
+)
 
 
 async def resolve_security(engine: AsyncEngine, identifier: str) -> tuple[UUID, str]:
@@ -44,6 +59,35 @@ def validate_source_uri(value: str) -> str:
         raise ValueError("source_uri must be an absolute URI with a scheme")
     if parsed.username or parsed.password:
         raise ValueError("source_uri must not contain embedded credentials")
+
+    normalized_scheme = parsed.scheme.strip().lower()
+    if normalized_scheme in _SYNTHETIC_SOURCE_TOKENS:
+        raise ValueError("synthetic/mock/sample source URIs are not permitted")
+
+    provenance_text = unquote(
+        " ".join(
+            part
+            for part in (parsed.netloc, parsed.path, parsed.params, parsed.query, parsed.fragment)
+            if part
+        )
+    ).lower()
+    tokens = {token for token in re.split(r"[^a-z0-9]+", provenance_text) if token}
+    blocked = sorted(tokens & _SYNTHETIC_SOURCE_TOKENS)
+    if blocked:
+        raise ValueError(
+            "source_uri appears to identify non-production data: " + ", ".join(blocked)
+        )
+    return cleaned
+
+
+def validate_provider_name(value: str) -> str:
+    cleaned = value.strip().lower()
+    if not cleaned:
+        raise ValueError("provider cannot be empty")
+    tokens = {token for token in re.split(r"[^a-z0-9]+", cleaned) if token}
+    blocked = sorted(tokens & _SYNTHETIC_SOURCE_TOKENS)
+    if blocked:
+        raise ValueError("synthetic/mock/sample providers are not permitted")
     return cleaned
 
 
