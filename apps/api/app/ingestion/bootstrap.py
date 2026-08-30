@@ -12,6 +12,13 @@ class BenchmarkBootstrapSpec:
 
 
 @dataclass(frozen=True)
+class FinancialBootstrapSpec:
+    security: str
+    file: Path
+    source_uri: str
+
+
+@dataclass(frozen=True)
 class BootstrapStage:
     name: str
     command: tuple[str, ...]
@@ -29,6 +36,18 @@ def parse_benchmark_spec(value: str) -> BenchmarkBootstrapSpec:
     )
 
 
+def parse_financial_spec(value: str) -> FinancialBootstrapSpec:
+    parts = [part.strip() for part in value.split(",", 2)]
+    if len(parts) != 3 or not all(parts):
+        raise ValueError("financial must use SECURITY,FILE,SOURCE_URI format")
+    security, file_name, source_uri = parts
+    return FinancialBootstrapSpec(
+        security=security,
+        file=Path(file_name),
+        source_uri=source_uri,
+    )
+
+
 def build_bootstrap_plan(
     *,
     python_executable: str,
@@ -37,6 +56,8 @@ def build_bootstrap_plan(
     nse_file: Path | None,
     nse_url: str | None,
     nse_min_rows: int,
+    financials: tuple[FinancialBootstrapSpec, ...],
+    financial_min_rows: int,
     benchmarks: tuple[BenchmarkBootstrapSpec, ...],
     benchmark_interval: str,
     benchmark_timezone: str,
@@ -51,6 +72,8 @@ def build_bootstrap_plan(
 ) -> tuple[BootstrapStage, ...]:
     if nse_min_rows < 1:
         raise ValueError("nse_min_rows must be >= 1")
+    if financial_min_rows < 1:
+        raise ValueError("financial_min_rows must be >= 1")
     if benchmark_min_rows < 1:
         raise ValueError("benchmark_min_rows must be >= 1")
     if macro_min_rows < 1:
@@ -79,6 +102,28 @@ def build_bootstrap_plan(
         if dry_run:
             command.append("--dry-run")
         stages.append(BootstrapStage(name="nse_security_master", command=tuple(command)))
+
+    for index, spec in enumerate(financials, start=1):
+        command = [
+            python_executable,
+            str(scripts_dir / "import_financial_csv.py"),
+            "--file",
+            str(spec.file),
+            "--security",
+            spec.security,
+            "--source-uri",
+            spec.source_uri,
+            "--min-rows",
+            str(financial_min_rows),
+        ]
+        if dry_run:
+            command.append("--dry-run")
+        stages.append(
+            BootstrapStage(
+                name=f"financial_{index}_{spec.security.upper()}",
+                command=tuple(command),
+            )
+        )
 
     for index, spec in enumerate(benchmarks, start=1):
         command = [
