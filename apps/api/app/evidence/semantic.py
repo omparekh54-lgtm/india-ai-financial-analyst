@@ -99,6 +99,7 @@ class SemanticEvidenceRetriever:
                     published_at = row["published_at"]
                     retrieved_at = row["retrieved_at"]
                     evidence = EvidenceRef(
+                        evidence_id=row["id"],
                         source_type=str(row["source_type"] or "exchange_filing"),
                         source_uri=str(row["source_uri"]),
                         title=str(row["title"] or "Exchange filing evidence"),
