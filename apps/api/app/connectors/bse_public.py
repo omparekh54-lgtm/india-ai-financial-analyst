@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from datetime import datetime, timedelta
 from urllib.parse import urlencode, urlparse
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -11,6 +12,7 @@ from app.connectors.http_fetcher import FetchedDocument, SourceFetchError
 _BSE_HOST = "api.bseindia.com"
 _BSE_API_PATH = "/BseIndiaAPI/api/AnnSubCategoryGetData/w"
 _MAX_PUBLIC_PAGES = 8
+_INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 
 class BsePublicAnnouncementsFetcher:
@@ -27,7 +29,7 @@ class BsePublicAnnouncementsFetcher:
         _validate_bse_api_url(url)
         lookback_days = max(0, min(lookback_days, 7))
         max_pages = max(1, min(max_pages, _MAX_PUBLIC_PAGES))
-        today = date.today()
+        today = datetime.now(_INDIA_TZ).date()
         start = today - timedelta(days=lookback_days)
         request_headers = {
             "User-Agent": (
@@ -101,16 +103,19 @@ def _parse_bse_page(data: bytes) -> tuple[list[dict[str, object]], int]:
     return rows, total
 
 
-def _build_page_url(url: str, *, page: int, start: date, end: date) -> str:
+def _build_page_url(url: str, *, page: int, start: object, end: object) -> str:
+    # ``url`` is validated by the caller; keeping it in the signature makes tests and
+    # future licensed-route replacement explicit even though the current public route is fixed.
+    _validate_bse_api_url(url)
     base = f"https://{_BSE_HOST}{_BSE_API_PATH}"
     query = urlencode(
         {
             "pageno": page,
             "strCat": "-1",
-            "strPrevDate": start.strftime("%d%m%Y"),
+            "strPrevDate": start.strftime("%d%m%Y"),  # type: ignore[attr-defined]
             "strScrip": "",
             "strSearch": "P",
-            "strToDate": end.strftime("%d%m%Y"),
+            "strToDate": end.strftime("%d%m%Y"),  # type: ignore[attr-defined]
             "strType": "C",
             "subcategory": "-1",
         }
