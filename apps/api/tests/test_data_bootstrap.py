@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from app.ingestion.bootstrap import build_bootstrap_plan, parse_benchmark_spec
+from app.ingestion.bootstrap import (
+    build_bootstrap_plan,
+    parse_benchmark_spec,
+    parse_financial_spec,
+)
 
 
 def _plan(**overrides: object):
@@ -15,6 +19,8 @@ def _plan(**overrides: object):
         "nse_file": Path("/data/EQUITY_L.csv"),
         "nse_url": None,
         "nse_min_rows": 1000,
+        "financials": (),
+        "financial_min_rows": 5,
         "benchmarks": (),
         "benchmark_interval": "1d",
         "benchmark_timezone": "Asia/Kolkata",
@@ -43,12 +49,32 @@ def test_parse_benchmark_spec_rejects_incomplete_value() -> None:
         parse_benchmark_spec("NIFTY50,/data/nifty.csv")
 
 
+def test_parse_financial_spec_preserves_provenance_uri() -> None:
+    spec = parse_financial_spec(
+        "RELIANCE,/data/reliance.csv,https://licensed.example/reliance/fy26"
+    )
+    assert spec.security == "RELIANCE"
+    assert spec.file == Path("/data/reliance.csv")
+    assert spec.source_uri == "https://licensed.example/reliance/fy26"
+
+
+def test_parse_financial_spec_rejects_incomplete_value() -> None:
+    with pytest.raises(ValueError, match="SECURITY,FILE,SOURCE_URI"):
+        parse_financial_spec("RELIANCE,/data/reliance.csv")
+
+
 def test_bootstrap_plan_has_deterministic_dependency_order() -> None:
+    financials = (
+        parse_financial_spec(
+            "RELIANCE,/data/reliance.csv,https://licensed.example/reliance/fy26"
+        ),
+    )
     benchmarks = (
         parse_benchmark_spec("NIFTY50,nse,/data/nifty.csv"),
         parse_benchmark_spec("INDIAVIX,nse,/data/vix.csv"),
     )
     plan = _plan(
+        financials=financials,
         benchmarks=benchmarks,
         macro_files=(Path("/data/rbi.csv"),),
         run_official_feeds=True,
@@ -58,6 +84,7 @@ def test_bootstrap_plan_has_deterministic_dependency_order() -> None:
 
     assert [stage.name for stage in plan] == [
         "nse_security_master",
+        "financial_1_RELIANCE",
         "benchmark_1_NIFTY50",
         "benchmark_2_INDIAVIX",
         "macro_1",
@@ -70,6 +97,11 @@ def test_bootstrap_plan_has_deterministic_dependency_order() -> None:
 def test_dry_run_propagates_only_to_file_validation_stages() -> None:
     plan = _plan(
         dry_run=True,
+        financials=(
+            parse_financial_spec(
+                "RELIANCE,/data/reliance.csv,https://licensed.example/reliance/fy26"
+            ),
+        ),
         benchmarks=(parse_benchmark_spec("NIFTY50,nse,/data/nifty.csv"),),
         macro_files=(Path("/data/rbi.csv"),),
     )
@@ -93,6 +125,9 @@ def test_skip_nse_allows_resumable_partial_bootstrap() -> None:
 
 
 def test_bootstrap_plan_rejects_invalid_limits() -> None:
+    with pytest.raises(ValueError, match="financial_min_rows"):
+        _plan(financial_min_rows=0)
+
     with pytest.raises(ValueError, match="official_feed_limit"):
         _plan(official_feed_limit=21)
 
