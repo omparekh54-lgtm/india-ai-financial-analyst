@@ -68,14 +68,14 @@ def parse_fred_series(
 
     raw_observations = envelope.payload.get("observations")
     if not isinstance(raw_observations, list):
-        raise ValueError("FRED payload does not contain an observations list")
+        raise TypeError("FRED payload does not contain an observations list")
 
     observations: list[MacroObservation] = []
     seen_dates: set[date] = set()
     skipped_missing = 0
     for raw in raw_observations:
         if not isinstance(raw, dict):
-            raise ValueError("FRED observations must be JSON objects")
+            raise TypeError("FRED observations must be JSON objects")
         raw_date = str(raw.get("date") or "").strip()
         raw_value = str(raw.get("value") or "").strip()
         if not raw_date:
