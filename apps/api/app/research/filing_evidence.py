@@ -31,8 +31,9 @@ async def load_exchange_filing_evidence(
                              ces.document_role, ces.source_id,
                              s.source_type, s.source_uri, s.title, s.published_at,
                              s.retrieved_at, s.freshness, s.checksum,
-                             ec.chunk_index, ec.page_number, ec.section as chunk_section,
-                             ec.content, ec.metadata as chunk_metadata,
+                             ec.id as evidence_id, ec.chunk_index, ec.page_number,
+                             ec.section as chunk_section, ec.content,
+                             ec.metadata as chunk_metadata,
                              row_number() over (
                                partition by ces.source_id,
                                             (coalesce(ec.section, '') = 'multimodal_extraction')
@@ -75,6 +76,7 @@ async def load_exchange_filing_evidence(
         is_ai = str(row["chunk_section"] or "") == "multimodal_extraction"
         evidence.append(
             EvidenceRef(
+                evidence_id=row["evidence_id"],
                 source_type="ai_extraction"
                 if is_ai
                 else str(row["source_type"] or "exchange_filing"),
