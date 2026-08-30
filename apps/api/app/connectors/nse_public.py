@@ -62,7 +62,7 @@ class NsePublicAnnouncementsFetcher:
         try:
             response.raise_for_status()
             normalized = normalize_nse_announcement_json(response.content)
-        except (httpx.HTTPError, ValueError) as exc:
+        except (httpx.HTTPError, TypeError, ValueError) as exc:
             raise SourceFetchError("Invalid NSE public announcements response") from exc
 
         return FetchedDocument(
@@ -79,7 +79,7 @@ def normalize_nse_announcement_json(data: bytes) -> bytes:
     payload = json.loads(data.decode("utf-8-sig"))
     rows = payload if isinstance(payload, list) else payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(rows, list):
-        raise ValueError("NSE announcements response did not contain a row list")
+        raise TypeError("NSE announcements response did not contain a row list")
 
     normalized: list[dict[str, object]] = []
     for raw in rows:
