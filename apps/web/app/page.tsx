@@ -49,6 +49,15 @@ type Evidence = {
   excerpt?: string | null;
 };
 
+type ResearchNarrative = {
+  bull_case?: string[];
+  bear_case?: string[];
+  watch_items?: string[];
+  confidence_note?: string;
+  provider?: string;
+  model?: string;
+};
+
 type ResearchReport = {
   query: string;
   mode: string;
@@ -58,6 +67,8 @@ type ResearchReport = {
   special_mode?: Record<string, unknown> | null;
   evidence_catalog: Record<string, Evidence>;
   confidence: Record<string, number>;
+  executive_summary?: string | null;
+  narrative?: ResearchNarrative | null;
   validation?: Record<string, unknown>;
   warnings?: string[];
   research_disclaimer?: string;
@@ -459,9 +470,17 @@ function ResearchResult({ result }: { result: ResearchResponse }) {
         </div>
         <div className="validationBadge">
           <span>Evidence gate</span>
-          <strong>{String(report.validation?.evidence_coverage ?? "—")}</strong>
+          <strong>{formatCoverage(report.validation?.evidence_coverage)}</strong>
         </div>
       </section>
+
+      {report.executive_summary || report.narrative || report.warnings?.length ? (
+        <AnalystNarrative
+          summary={report.executive_summary}
+          narrative={report.narrative}
+          warnings={report.warnings ?? []}
+        />
+      ) : null}
 
       {report.special_mode ? (
         <section className="panel specialPanel">
@@ -498,6 +517,54 @@ function ResearchResult({ result }: { result: ResearchResponse }) {
 
       {report.research_disclaimer ? <p className="disclaimer">{report.research_disclaimer}</p> : null}
     </>
+  );
+}
+
+function AnalystNarrative({
+  summary,
+  narrative,
+  warnings,
+}: {
+  summary?: string | null;
+  narrative?: ResearchNarrative | null;
+  warnings: string[];
+}) {
+  const groups = [
+    ["Bull Case", narrative?.bull_case ?? []],
+    ["Bear Case", narrative?.bear_case ?? []],
+    ["Watch Items", narrative?.watch_items ?? []],
+  ] as const;
+
+  return (
+    <section className="panel narrativePanel">
+      <p className="eyebrow">CHIEF ANALYST SYNTHESIS</p>
+      {summary ? <p className="narrativeSummary">{summary}</p> : null}
+      {groups.some(([, items]) => items.length > 0) ? (
+        <div className="narrativeGrid">
+          {groups.map(([label, items]) => (
+            <article className="narrativeCard" key={label}>
+              <strong>{label}</strong>
+              {items.length ? (
+                <ul>
+                  {items.map((item, index) => <li key={`${label}-${index}`}>{item}</li>)}
+                </ul>
+              ) : (
+                <small>No validated item was admitted.</small>
+              )}
+            </article>
+          ))}
+        </div>
+      ) : null}
+      {narrative?.confidence_note ? (
+        <p className="confidenceNote"><strong>Confidence note:</strong> {narrative.confidence_note}</p>
+      ) : null}
+      {warnings.length ? (
+        <div className="validationWarnings">
+          <strong>Validation warnings</strong>
+          {warnings.map((warning, index) => <span key={index}>{warning}</span>)}
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -605,4 +672,9 @@ function safeExternalHref(uri: string) {
 function formatDate(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function formatCoverage(value: unknown) {
+  if (typeof value !== "number") return "—";
+  return `${Math.round(value * 100)}%`;
 }
