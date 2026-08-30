@@ -43,6 +43,79 @@ class ResearchRepository:
             )
             return result.scalar_one()
 
+    async def list_user_jobs(self, user_id: UUID, *, limit: int = 25) -> list[dict[str, object]]:
+        statement = text(
+            """
+            select
+                job.id,
+                job.query,
+                job.status,
+                job.mode,
+                job.security_id,
+                job.started_at,
+                job.completed_at,
+                job.created_at,
+                security.legal_name,
+                security.nse_symbol,
+                security.bse_code,
+                report.data_confidence,
+                report.thesis_confidence,
+                report.valuation_confidence,
+                report.catalyst_confidence
+            from research_jobs job
+            left join securities security on security.id = job.security_id
+            left join research_reports report on report.job_id = job.id
+            where job.requested_by = :user_id
+            order by job.created_at desc
+            limit :limit
+            """
+        )
+        async with self.engine.connect() as connection:
+            rows = (
+                await connection.execute(
+                    statement,
+                    {"user_id": user_id, "limit": max(1, min(limit, 100))},
+                )
+            ).mappings().all()
+        return [dict(row) for row in rows]
+
+    async def get_user_job(self, user_id: UUID, job_id: UUID) -> dict[str, object] | None:
+        statement = text(
+            """
+            select
+                job.id,
+                job.query,
+                job.status,
+                job.mode,
+                job.security_id,
+                job.started_at,
+                job.completed_at,
+                job.created_at,
+                security.legal_name,
+                security.nse_symbol,
+                security.bse_code,
+                report.report_json,
+                report.data_confidence,
+                report.thesis_confidence,
+                report.valuation_confidence,
+                report.catalyst_confidence
+            from research_jobs job
+            left join securities security on security.id = job.security_id
+            left join research_reports report on report.job_id = job.id
+            where job.id = :job_id
+              and job.requested_by = :user_id
+            limit 1
+            """
+        )
+        async with self.engine.connect() as connection:
+            row = (
+                await connection.execute(
+                    statement,
+                    {"job_id": job_id, "user_id": user_id},
+                )
+            ).mappings().one_or_none()
+        return dict(row) if row is not None else None
+
     async def set_job_status(self, job_id: UUID, status: str) -> None:
         fields = {"status": status, "job_id": job_id}
         timestamp_sql = ""
