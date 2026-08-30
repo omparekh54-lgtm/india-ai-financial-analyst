@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { BrokerConnectionBar } from "./broker-connection-bar";
+import "./broker.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
