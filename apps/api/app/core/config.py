@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     semantic_evidence_max_chunks: int = Field(default=24, ge=4, le=48)
     semantic_evidence_per_query: int = Field(default=6, ge=1, le=12)
 
+    # Quota-aware fresh web/news acquisition. Results are cached in `sources` and reused.
+    web_research_cache_seconds: int = Field(default=900, ge=60, le=86400)
+    web_research_max_searches_per_job: int = Field(default=2, ge=1, le=3)
+    web_research_max_results_per_search: int = Field(default=5, ge=2, le=10)
+
     max_agent_concurrency: int = Field(default=6, ge=1, le=16)
     max_research_job_seconds: int = Field(default=240, ge=30, le=1800)
     official_feed_poll_seconds: int = Field(default=60, ge=30, le=3600)
