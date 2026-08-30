@@ -24,7 +24,7 @@ Market Capitalization,2026-08-29,"2,000,000",INR cr,
     assert by_name["pe"].value == Decimal("24.5")
     assert by_name["pe"].metadata["source_scope"] == "ttm"
     assert by_name["roce"].value == Decimal("18.2")
-    assert by_name["market_cap"].value == Decimal("2000000")
+    assert by_name["market_cap"].value == Decimal(2000000)
 
 
 def test_security_metrics_csv_rejects_alias_duplicates() -> None:
