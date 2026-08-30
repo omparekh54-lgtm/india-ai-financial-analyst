@@ -61,7 +61,11 @@ class LlmEnrichedAgent:
         if not self.gateway.enabled:
             return base
 
-        evidence = _select_evidence(base.evidence or agent_input.evidence, self.max_evidence)
+        evidence = _select_enrichment_evidence(
+            base.evidence or agent_input.evidence,
+            agent_input.evidence,
+            self.max_evidence,
+        )
         if not evidence:
             return base
 
@@ -81,7 +85,9 @@ class LlmEnrichedAgent:
                         content=(
                             "You are an evidence-constrained Indian equity research annotator. "
                             "Return JSON only. Never invent facts, figures, dates, causes, or events. "
-                            "Use only the supplied evidence and deterministic metrics."
+                            "Use only the supplied evidence and deterministic metrics. Evidence with "
+                            "type=ai_extraction is a secondary AI visual interpretation, not a primary "
+                            "filing fact; never treat it as independently verified."
                         ),
                     ),
                     ChatMessage(role="user", content=prompt),
@@ -220,7 +226,25 @@ class LlmSynthesisAgent:
         return base.model_copy(update={"metrics": metrics})
 
 
+def _select_enrichment_evidence(
+    base_items: list[EvidenceRef],
+    all_items: list[EvidenceRef],
+    limit: int,
+) -> list[EvidenceRef]:
+    ai_items = [item for item in all_items if item.source_type == "ai_extraction"]
+    ai_limit = min(2, len(ai_items), max(0, limit - 2))
+    primary_limit = limit - ai_limit
+    primary = _select_evidence(
+        [item for item in base_items if item.source_type != "ai_extraction"],
+        primary_limit,
+    )
+    ai = _select_evidence(ai_items, ai_limit) if ai_limit else []
+    return [*primary, *ai]
+
+
 def _select_evidence(items: list[EvidenceRef], limit: int) -> list[EvidenceRef]:
+    if limit <= 0:
+        return []
     ranked = sorted(
         items,
         key=lambda item: (
@@ -272,7 +296,9 @@ def _enrichment_prompt(
         '{"insights":[{"statement":"...","claim_type":"inference|risk|catalyst",'
         '"confidence":0.0,"evidence_keys":["E1"]}]}\n'
         "Rules: maximum 3 insights; every insight must cite at least one evidence key; "
-        "do not infer exact numbers not present in evidence; do not give buy/sell instructions."
+        "do not infer exact numbers not present in evidence; do not give buy/sell instructions; "
+        "ai_extraction evidence is secondary and should be cross-checked against primary evidence "
+        "wherever possible."
     )
 
 
