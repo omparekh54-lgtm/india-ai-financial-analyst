@@ -6,6 +6,7 @@ from app.core.config import Settings
 
 class Capability(StrEnum):
     FAST_REASONING = "fast_reasoning"
+    LOW_LATENCY = "low_latency"
     DEEP_REASONING = "deep_reasoning"
     MULTIMODAL = "multimodal"
     LONG_CONTEXT = "long_context"
@@ -48,6 +49,13 @@ class ProviderRouter:
                 ("groq", bool(self.settings.groq_api_key), "General reasoning fallback"),
                 ("cerebras", bool(self.settings.cerebras_api_key), "Low-latency fallback"),
                 ("gemini", bool(self.settings.gemini_api_key), "General fallback"),
+            ]
+        elif capability == Capability.LOW_LATENCY:
+            ordered = [
+                ("cerebras", bool(self.settings.cerebras_api_key), "Low-latency primary"),
+                ("groq", bool(self.settings.groq_api_key), "Fast-reasoning fallback"),
+                ("gemini", bool(self.settings.gemini_api_key), "General fallback"),
+                ("nvidia", bool(self.settings.nvidia_api_key), "Deep-reasoning fallback"),
             ]
         else:
             ordered = [
