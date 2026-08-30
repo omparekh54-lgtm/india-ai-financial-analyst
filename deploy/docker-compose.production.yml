@@ -21,3 +21,14 @@ services:
       APP_ENV: production
     command: ["python", "scripts/run_official_feed_daemon.py"]
     restart: unless-stopped
+
+  live-market-worker:
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      APP_ENV: production
+    command: ["python", "scripts/run_live_market_worker.py"]
+    restart: unless-stopped
