@@ -14,7 +14,9 @@ from app.connectors.india_official import (
     parse_rbi_macro_series,
 )
 from app.ingestion.exchange import ExchangeDisclosure, ExchangeDisclosureIngestor
+from app.ingestion.financials import FinancialFactIngestor
 from app.ingestion.macro import MacroObservationIngestor
+from app.ingestion.xbrl_financials import parse_financial_xbrl
 from app.securities.repository import SecurityMasterRepository
 
 
@@ -25,6 +27,7 @@ class OfficialIndiaIngestionService:
         self.engine = engine
         self.securities = SecurityMasterRepository(engine)
         self.exchange_ingestor = ExchangeDisclosureIngestor(engine)
+        self.financial_ingestor = FinancialFactIngestor(engine)
         self.macro_ingestor = MacroObservationIngestor(engine)
 
     async def ingest_exchange_payload(
@@ -99,6 +102,61 @@ class OfficialIndiaIngestionService:
             "event_types": event_types,
         }
 
+    async def ingest_financial_xbrl(
+        self,
+        *,
+        exchange: str,
+        identifier: str,
+        data: bytes,
+        media_type: str,
+        source_uri: str,
+        title: str,
+        published_at: datetime | None = None,
+    ) -> dict[str, object]:
+        normalized_exchange = exchange.strip().upper()
+        if normalized_exchange not in {"NSE", "BSE"}:
+            raise ValueError("exchange must be NSE or BSE")
+        security_id = await self._resolve_security_id(normalized_exchange, identifier)
+        if security_id is None:
+            raise ValueError(f"Security not found for {normalized_exchange} identifier {identifier!r}")
+
+        raw_facts = parse_financial_xbrl(data, media_type)
+        if not raw_facts:
+            return {
+                "exchange": normalized_exchange,
+                "identifier": identifier,
+                "security_id": str(security_id),
+                "input_count": 0,
+                "normalized_count": 0,
+                "derived_count": 0,
+            }
+
+        source_id = await self._ensure_security_source(
+            security_id=security_id,
+            source_type="exchange_filing",
+            source_uri=source_uri,
+            title=title,
+            published_at=published_at,
+            metadata={
+                "exchange": normalized_exchange,
+                "identifier": identifier,
+                "document_type": "financial_results_xbrl",
+                "media_type": media_type,
+            },
+        )
+        result = await self.financial_ingestor.ingest_batch(
+            security_id=security_id,
+            source_id=source_id,
+            facts=raw_facts,
+        )
+        return {
+            "exchange": normalized_exchange,
+            "identifier": identifier,
+            "security_id": str(security_id),
+            "source_id": str(source_id),
+            **result,
+        }
+
     async def ingest_rbi_series(
         self,
         *,
@@ -145,6 +203,94 @@ class OfficialIndiaIngestionService:
             "series_keys": sorted({item.series_key for item in observations}),
             **result,
         }
+
+    async def _resolve_security_id(self, exchange: str, identifier: str) -> UUID | None:
+        candidate = identifier.strip()
+        if not candidate:
+            return None
+        records = await self.securities.list_all()
+        if exchange == "NSE":
+            upper = candidate.upper()
+            return next(
+                (
+                    record.id
+                    for record in records
+                    if record.nse_symbol and record.nse_symbol.strip().upper() == upper
+                ),
+                None,
+            )
+        digits = "".join(character for character in candidate if character.isdigit())
+        return next(
+            (
+                record.id
+                for record in records
+                if record.bse_code and record.bse_code.strip() == digits
+            ),
+            None,
+        )
+
+    async def _ensure_security_source(
+        self,
+        *,
+        security_id: UUID,
+        source_type: str,
+        source_uri: str,
+        title: str,
+        published_at: datetime | None,
+        metadata: dict[str, object],
+    ) -> UUID:
+        if not source_uri.startswith("https://"):
+            raise ValueError("Official source_uri must use HTTPS")
+        parameters = {
+            "security_id": security_id,
+            "source_type": source_type,
+            "source_uri": source_uri,
+            "title": title,
+            "published_at": published_at,
+            "retrieved_at": datetime.now(UTC),
+            "metadata": json.dumps(metadata),
+        }
+        async with self.engine.begin() as connection:
+            result = await connection.execute(
+                text(
+                    """
+                    insert into sources (
+                        security_id, source_type, source_uri, title, published_at,
+                        retrieved_at, freshness, metadata
+                    ) values (
+                        :security_id, :source_type, :source_uri, :title, :published_at,
+                        :retrieved_at, 'periodic', cast(:metadata as jsonb)
+                    )
+                    on conflict do nothing
+                    returning id
+                    """
+                ),
+                parameters,
+            )
+            source_id = result.scalar_one_or_none()
+            if source_id is not None:
+                return source_id
+            source_id = await connection.scalar(
+                text(
+                    """
+                    select id
+                    from sources
+                    where security_id = :security_id
+                      and source_uri = :source_uri
+                      and published_at is not distinct from :published_at
+                    order by retrieved_at desc
+                    limit 1
+                    """
+                ),
+                {
+                    "security_id": security_id,
+                    "source_uri": source_uri,
+                    "published_at": published_at,
+                },
+            )
+            if source_id is None:
+                raise RuntimeError("Unable to resolve official security source")
+            return source_id
 
     async def _ensure_global_source(
         self,
