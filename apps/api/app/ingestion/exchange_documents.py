@@ -10,12 +10,19 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import get_settings
 from app.documents.parser import DocumentParseError, chunk_document, parse_document
+from app.documents.visual import (
+    GeminiDocumentVisualAnalyzer,
+    MultimodalAnalysisError,
+    MultimodalDocumentResult,
+)
 from app.evidence.embeddings import (
     EmbeddingError,
     EmbeddingProvider,
     build_embedding_provider,
     vector_literal,
 )
+
+_VISUAL_EVENT_TYPES = {"financial_results", "investor_presentation", "annual_report"}
 
 
 class ExchangeDocumentIngestor:
@@ -26,9 +33,12 @@ class ExchangeDocumentIngestor:
         engine: AsyncEngine,
         *,
         embedder: EmbeddingProvider | None = None,
+        visual_analyzer: GeminiDocumentVisualAnalyzer | None = None,
     ) -> None:
         self.engine = engine
-        self.embedder = embedder or build_embedding_provider(get_settings())
+        settings = get_settings()
+        self.embedder = embedder or build_embedding_provider(settings)
+        self.visual_analyzer = visual_analyzer or GeminiDocumentVisualAnalyzer(settings)
 
     async def ingest(
         self,
@@ -79,6 +89,7 @@ class ExchangeDocumentIngestor:
                 "chunk_count": 0,
                 "parse_status": "unsupported",
                 "embedding_status": "not_applicable",
+                "multimodal_status": "not_applicable",
                 "checksum": checksum,
             }
 
@@ -101,6 +112,13 @@ class ExchangeDocumentIngestor:
         )
         embedding_model = self.embedder.model_name if self.embedder is not None else None
         section = str(source_metadata.get("event_type") or document_role)
+        visual_result, multimodal_status = await self._analyze_visuals(
+            content=content,
+            media_type=media_type,
+            title=title,
+            page_text=[page.text for page in parsed.pages],
+            event_type=section,
+        )
 
         async with self.engine.begin() as connection:
             await connection.execute(
@@ -136,24 +154,65 @@ class ExchangeDocumentIngestor:
                                 ).hexdigest(),
                                 "embedding_status": embedding_status,
                                 "embedding_model": embedding_model,
+                                "ai_assisted": False,
                             }
                         ),
                     },
                 )
 
+            if visual_result is not None:
+                for offset, finding in enumerate(visual_result.findings):
+                    content_text = (
+                        f"AI-assisted visual interpretation ({finding.kind}) of official filing "
+                        f"page {finding.page_number}: {finding.summary}"
+                    )
+                    await connection.execute(
+                        text(
+                            """
+                            insert into evidence_chunks (
+                                source_id, chunk_index, page_number, section, content, embedding, metadata
+                            ) values (
+                                :source_id, :chunk_index, :page_number, 'multimodal_extraction',
+                                :content, null, cast(:metadata as jsonb)
+                            )
+                            """
+                        ),
+                        {
+                            "source_id": source_id,
+                            "chunk_index": len(chunks) + offset,
+                            "page_number": finding.page_number,
+                            "content": content_text,
+                            "metadata": json.dumps(
+                                {
+                                    "ai_assisted": True,
+                                    "provider": visual_result.provider,
+                                    "model": visual_result.model,
+                                    "visual_kind": finding.kind,
+                                    "confidence": finding.confidence,
+                                    "raw_source_section": section,
+                                }
+                            ),
+                        },
+                    )
+
+        link_metadata = {
+            **source_metadata,
+            "page_count": len(parsed.pages),
+            "chunk_count": len(chunks),
+            "embedding_status": embedding_status,
+            "embedding_model": embedding_model,
+            "multimodal_status": multimodal_status,
+            "multimodal_finding_count": len(visual_result.findings) if visual_result else 0,
+            "multimodal_model": visual_result.model if visual_result else None,
+            "multimodal_pages": visual_result.analyzed_pages if visual_result else [],
+        }
         await self._link_event(
             event_id=event_id,
             source_id=source_id,
             document_role=document_role,
             media_type=media_type,
             parse_status="parsed",
-            metadata={
-                **source_metadata,
-                "page_count": len(parsed.pages),
-                "chunk_count": len(chunks),
-                "embedding_status": embedding_status,
-                "embedding_model": embedding_model,
-            },
+            metadata=link_metadata,
         )
         return {
             "source_id": str(source_id),
@@ -163,6 +222,8 @@ class ExchangeDocumentIngestor:
             "parse_status": "parsed",
             "embedding_status": embedding_status,
             "embedded_chunk_count": sum(value is not None for value in embedding_values),
+            "multimodal_status": multimodal_status,
+            "multimodal_finding_count": len(visual_result.findings) if visual_result else 0,
             "checksum": checksum,
         }
 
@@ -198,6 +259,33 @@ class ExchangeDocumentIngestor:
         return [
             vector_literal(vector, dimensions=self.embedder.dimensions) for vector in vectors
         ], "embedded"
+
+    async def _analyze_visuals(
+        self,
+        *,
+        content: bytes,
+        media_type: str,
+        title: str,
+        page_text: list[str],
+        event_type: str,
+    ) -> tuple[MultimodalDocumentResult | None, str]:
+        if media_type.split(";", 1)[0].lower() != "application/pdf":
+            return None, "not_applicable"
+        if event_type not in _VISUAL_EVENT_TYPES:
+            return None, "not_selected"
+        if not self.visual_analyzer.enabled:
+            return None, "disabled"
+        try:
+            result = await self.visual_analyzer.analyze_pdf(
+                content,
+                title=title,
+                page_text=page_text,
+            )
+        except MultimodalAnalysisError:
+            return None, "failed"
+        if result is None:
+            return None, "no_visual_pages"
+        return result, "analyzed"
 
     async def _ensure_source(
         self,
