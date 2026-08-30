@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from cryptography.fernet import Fernet
 import pytest
+from cryptography.fernet import Fernet
 
 from app.core.config import Settings
 from app.core.readiness import assert_production_ready, audit_settings
