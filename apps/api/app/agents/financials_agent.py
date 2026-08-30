@@ -18,6 +18,50 @@ FINANCIAL_SOURCE_TYPES = {
     "regulator",
 }
 
+SECTOR_KPIS = (
+    "net_interest_income",
+    "interest_income",
+    "deposits",
+    "advances",
+    "gross_advances",
+    "net_advances",
+    "provisions",
+    "provision_coverage_pct",
+    "gross_npa_pct",
+    "net_npa_pct",
+    "nim_pct",
+    "casa_ratio_pct",
+    "credit_cost_pct",
+    "capital_adequacy_pct",
+    "roa_pct",
+    "roe_pct",
+    "gross_stage3_pct",
+    "net_stage3_pct",
+    "aum",
+    "disbursements",
+    "gross_written_premium",
+    "new_business_premium",
+    "ape",
+    "vnb",
+    "vnb_margin_pct",
+    "embedded_value",
+    "embedded_value_per_share",
+    "solvency_ratio_pct",
+    "combined_ratio_pct",
+    "expense_ratio_pct",
+    "claims_incurred",
+    "persistency_ratio_pct",
+    "attrition_pct",
+    "utilization_pct",
+    "tcv",
+    "constant_currency_growth_pct",
+    "employee_count",
+    "volume_growth_pct",
+    "market_share_pct",
+    "order_book",
+    "capacity_utilization_pct",
+)
+
 
 class FinancialForensicAgent:
     """Code-first financial analysis agent over normalized sourced facts."""
@@ -31,7 +75,7 @@ class FinancialForensicAgent:
                 warnings=["No normalized financial facts were supplied"],
             )
 
-        metrics = {
+        calculated_metrics = {
             "revenue_growth": growth_rate(facts.get("revenue"), facts.get("previous_revenue")),
             "ebitda_margin": margin(facts.get("ebitda"), facts.get("revenue")),
             "net_margin": margin(facts.get("pat"), facts.get("revenue")),
@@ -46,7 +90,7 @@ class FinancialForensicAgent:
                 facts.get("ebit"), facts.get("total_assets"), facts.get("current_liabilities")
             ),
         }
-        metrics.update(
+        calculated_metrics.update(
             working_capital_days(
                 facts.get("receivables"),
                 facts.get("inventory"),
@@ -56,8 +100,14 @@ class FinancialForensicAgent:
             )
         )
 
+        sector_metrics = {
+            name: value
+            for name in SECTOR_KPIS
+            if (value := _number(facts.get(name))) is not None
+        }
         evidence = [item for item in agent_input.evidence if item.source_type in FINANCIAL_SOURCE_TYPES]
         evidence_ids = [item.evidence_id for item in evidence]
+
         claims = [
             Claim(
                 agent=AgentName.FINANCIALS,
@@ -68,10 +118,32 @@ class FinancialForensicAgent:
                 status="pending",
                 data={"metric": name, "value": value},
             )
-            for name, value in metrics.items()
+            for name, value in calculated_metrics.items()
             if value is not None
         ]
+        claims.extend(
+            Claim(
+                agent=AgentName.FINANCIALS,
+                statement=f"{name} reported at {value:.4f}",
+                claim_type="fact",
+                confidence=0.98,
+                evidence_ids=evidence_ids,
+                status="pending",
+                data={
+                    "metric": name,
+                    "value": value,
+                    "period_end": facts.get(f"{name}_period_end"),
+                    "sector_kpi": True,
+                },
+            )
+            for name, value in sector_metrics.items()
+        )
+
         warnings = [] if evidence_ids else ["Financial calculations lack source-linked evidence"]
+        metrics: dict[str, object] = {
+            **calculated_metrics,
+            "sector_kpis": sector_metrics,
+        }
         return AgentOutput(
             agent=AgentName.FINANCIALS,
             claims=claims,
@@ -79,3 +151,10 @@ class FinancialForensicAgent:
             metrics=metrics,
             warnings=warnings,
         )
+
+
+def _number(value: object) -> float | None:
+    try:
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
