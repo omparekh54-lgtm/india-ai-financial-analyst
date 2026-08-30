@@ -183,8 +183,9 @@ def evaluate_data_coverage(
                 "Normalized financial facts appear stale; latest period is "
                 f"{_iso(coverage.latest_financial_period)}."
             )
-    if coverage.corporate_events == 0 or coverage.evidence_chunks == 0:
-        warnings.append("No parsed corporate-event filing evidence is populated.")
+
+    if coverage.corporate_events == 0:
+        warnings.append("No corporate events are populated.")
     else:
         _require_full_provenance(
             errors,
@@ -197,6 +198,9 @@ def evaluate_data_coverage(
                 "Corporate-event filing evidence appears stale; latest event is "
                 f"{_iso(coverage.latest_corporate_event)}."
             )
+    if coverage.evidence_chunks == 0:
+        warnings.append("No parsed corporate-event filing evidence is populated.")
+
     if coverage.market_bars == 0:
         warnings.append("No stored security market bars are populated.")
     else:
