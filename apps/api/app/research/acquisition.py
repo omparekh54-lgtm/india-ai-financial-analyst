@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime
 from urllib.parse import urlparse
 from uuid import UUID
 
