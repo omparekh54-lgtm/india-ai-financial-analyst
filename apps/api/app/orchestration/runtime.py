@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Mapping
 from typing import Protocol
 
-from app.agents.contracts import AgentInput, AgentName, AgentOutput
+from app.agents.contracts import AgentInput, AgentName, AgentOutput, EvidenceRef
 from app.orchestration.plan import ResearchPlan
 
 
@@ -31,7 +31,7 @@ class AgentRegistry:
 
 
 class OrchestratorRuntime:
-    """Executes a research DAG without allowing agents to silently bypass validation."""
+    """Executes the research DAG while preserving evidence and validation boundaries."""
 
     def __init__(self, registry: AgentRegistry, *, max_concurrency: int = 6) -> None:
         self.registry = registry
@@ -47,8 +47,20 @@ class OrchestratorRuntime:
                     claim.model_dump(mode="json")
                     for output in outputs
                     for claim in output.claims
+                    if output.agent != AgentName.VALIDATOR
                 ]
-                working_input.evidence = _dedupe_evidence(outputs)
+
+            if stage.name == "synthesize":
+                validator_output = _latest_output(outputs, AgentName.VALIDATOR)
+                if validator_output is None:
+                    raise RuntimeError("Synthesis cannot run before evidence validation")
+                working_input.context["validated_claims"] = [
+                    claim.model_dump(mode="json")
+                    for claim in validator_output.claims
+                    if claim.status in {"verified", "supported", "inferred"}
+                ]
+                working_input.context["validation_metrics"] = validator_output.metrics
+                working_input.context["validation_warnings"] = validator_output.warnings
 
             if stage.parallel:
                 stage_outputs = await asyncio.gather(
@@ -60,6 +72,7 @@ class OrchestratorRuntime:
                     stage_outputs.append(await self._run_one(agent, working_input))
 
             outputs.extend(stage_outputs)
+            working_input.evidence = _dedupe_evidence(outputs)
             working_input.context.setdefault("agent_outputs", {}).update(
                 {
                     output.agent.value: output.model_dump(mode="json")
@@ -75,7 +88,14 @@ class OrchestratorRuntime:
             return await handler.run(agent_input.model_copy(deep=True))
 
 
-def _dedupe_evidence(outputs: list[AgentOutput]):
+def _latest_output(outputs: list[AgentOutput], agent: AgentName) -> AgentOutput | None:
+    for output in reversed(outputs):
+        if output.agent == agent:
+            return output
+    return None
+
+
+def _dedupe_evidence(outputs: list[AgentOutput]) -> list[EvidenceRef]:
     evidence = {}
     for output in outputs:
         for item in output.evidence:
