@@ -124,3 +124,17 @@ create table if not exists research_reports (
   catalyst_confidence numeric(5,4),
   created_at timestamptz not null default now()
 );
+
+-- Defense in depth: public-schema tables are backend-only until user-facing
+-- policies are explicitly introduced alongside Supabase Auth.
+alter table securities enable row level security;
+alter table research_jobs enable row level security;
+alter table sources enable row level security;
+alter table evidence_chunks enable row level security;
+alter table agent_runs enable row level security;
+alter table claims enable row level security;
+alter table claim_evidence enable row level security;
+alter table market_bars enable row level security;
+alter table research_reports enable row level security;
+
+revoke all on securities, research_jobs, sources, evidence_chunks, agent_runs, claims, claim_evidence, market_bars, research_reports from anon, authenticated;
