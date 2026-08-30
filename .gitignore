@@ -1,0 +1,40 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Node
+node_modules/
+.next/
+out/
+coverage/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local data / model cache
+data/raw/
+data/cache/
+.cache/
+*.sqlite3
+*.db
+
+# Build / logs
+build/
+dist/
+*.log
+
+# Vercel
+.vercel/
