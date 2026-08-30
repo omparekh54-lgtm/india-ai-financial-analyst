@@ -16,7 +16,6 @@ from sqlalchemy import text
 from app.core.config import get_settings
 from app.db import create_database_engine
 
-
 DEFAULT_URL = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
 _ALLOWED_REMOTE_HOSTS = {"nsearchives.nseindia.com", "www.nseindia.com", "nseindia.com"}
 
