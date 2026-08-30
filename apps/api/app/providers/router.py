@@ -19,35 +19,53 @@ class ProviderChoice:
 
 
 class ProviderRouter:
-    """Selects an available provider without embedding credentials in code.
-
-    Actual provider clients are added behind this interface. Routing is deterministic first;
-    quota/latency/health-aware scoring will be layered on once telemetry is connected.
-    """
+    """Deterministic provider routing with ordered fallbacks and no secret exposure."""
 
     def __init__(self, settings: Settings):
         self.settings = settings
 
-    def choose(self, capability: Capability) -> ProviderChoice:
+    def candidates(self, capability: Capability) -> list[ProviderChoice]:
         if not self.settings.enable_external_llm_calls:
-            return ProviderChoice("disabled", capability, "External LLM calls disabled by runtime flag")
+            return [
+                ProviderChoice(
+                    "disabled",
+                    capability,
+                    "External LLM calls disabled by runtime flag",
+                )
+            ]
 
-        if capability in {Capability.MULTIMODAL, Capability.LONG_CONTEXT} and self.settings.gemini_api_key:
-            return ProviderChoice("gemini", capability, "Preferred multimodal/long-context provider")
+        ordered: list[tuple[str, bool, str]]
+        if capability in {Capability.MULTIMODAL, Capability.LONG_CONTEXT}:
+            ordered = [
+                ("gemini", bool(self.settings.gemini_api_key), "Multimodal/long-context primary"),
+                ("nvidia", bool(self.settings.nvidia_api_key), "Deep-reasoning fallback"),
+                ("groq", bool(self.settings.groq_api_key), "Fast-reasoning fallback"),
+                ("cerebras", bool(self.settings.cerebras_api_key), "Low-latency fallback"),
+            ]
+        elif capability == Capability.DEEP_REASONING:
+            ordered = [
+                ("nvidia", bool(self.settings.nvidia_api_key), "Deep-reasoning primary"),
+                ("groq", bool(self.settings.groq_api_key), "General reasoning fallback"),
+                ("cerebras", bool(self.settings.cerebras_api_key), "Low-latency fallback"),
+                ("gemini", bool(self.settings.gemini_api_key), "General fallback"),
+            ]
+        else:
+            ordered = [
+                ("groq", bool(self.settings.groq_api_key), "Fast-reasoning primary"),
+                ("cerebras", bool(self.settings.cerebras_api_key), "Low-latency fallback"),
+                ("gemini", bool(self.settings.gemini_api_key), "General fallback"),
+                ("nvidia", bool(self.settings.nvidia_api_key), "Deep-reasoning fallback"),
+            ]
 
-        if capability == Capability.DEEP_REASONING and self.settings.nvidia_api_key:
-            return ProviderChoice("nvidia", capability, "Preferred deep-reasoning provider")
+        choices = [
+            ProviderChoice(provider, capability, reason)
+            for provider, configured, reason in ordered
+            if configured
+        ]
+        if choices:
+            return choices
 
-        if self.settings.groq_api_key:
-            return ProviderChoice("groq", capability, "Primary fast reasoning provider")
+        return [ProviderChoice("unavailable", capability, "No configured provider credential")]
 
-        if self.settings.cerebras_api_key:
-            return ProviderChoice("cerebras", capability, "Low-latency fallback provider")
-
-        if self.settings.gemini_api_key:
-            return ProviderChoice("gemini", capability, "Available fallback provider")
-
-        if self.settings.nvidia_api_key:
-            return ProviderChoice("nvidia", capability, "Available fallback provider")
-
-        return ProviderChoice("unavailable", capability, "No configured provider credential")
+    def choose(self, capability: Capability) -> ProviderChoice:
+        return self.candidates(capability)[0]
