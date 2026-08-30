@@ -15,10 +15,12 @@ async def load_exchange_filing_evidence(
     *,
     max_chunks: int = 48,
     max_chunks_per_document: int = 8,
+    max_ai_chunks_per_document: int = 4,
 ) -> list[EvidenceRef]:
-    """Load bounded page-aware chunks from recent parsed exchange filing attachments."""
+    """Load bounded raw filing chunks plus separately-labeled AI visual interpretations."""
     max_chunks = max(1, min(max_chunks, 80))
     max_chunks_per_document = max(1, min(max_chunks_per_document, 12))
+    max_ai_chunks_per_document = max(1, min(max_ai_chunks_per_document, 6))
     async with engine.connect() as connection:
         rows = (
             await connection.execute(
@@ -29,9 +31,11 @@ async def load_exchange_filing_evidence(
                              ces.document_role, ces.source_id,
                              s.source_type, s.source_uri, s.title, s.published_at,
                              s.retrieved_at, s.freshness, s.checksum,
-                             ec.chunk_index, ec.page_number, ec.content,
+                             ec.chunk_index, ec.page_number, ec.section as chunk_section,
+                             ec.content, ec.metadata as chunk_metadata,
                              row_number() over (
-                               partition by ces.source_id
+                               partition by ces.source_id,
+                                            (coalesce(ec.section, '') = 'multimodal_extraction')
                                order by ec.chunk_index
                              ) as chunk_rank
                       from corporate_event_sources ces
@@ -42,7 +46,13 @@ async def load_exchange_filing_evidence(
                         and ces.parse_status = 'parsed'
                     )
                     select * from ranked
-                    where chunk_rank <= :max_per_document
+                    where (
+                        coalesce(chunk_section, '') = 'multimodal_extraction'
+                        and chunk_rank <= :max_ai_per_document
+                    ) or (
+                        coalesce(chunk_section, '') <> 'multimodal_extraction'
+                        and chunk_rank <= :max_per_document
+                    )
                     order by event_at desc nulls last,
                              materiality desc nulls last,
                              source_id,
@@ -53,29 +63,35 @@ async def load_exchange_filing_evidence(
                 {
                     "security_id": security_id,
                     "max_per_document": max_chunks_per_document,
+                    "max_ai_per_document": max_ai_chunks_per_document,
                     "max_chunks": max_chunks,
                 },
             )
         ).mappings().all()
 
     now = datetime.now(UTC).isoformat()
-    return [
-        EvidenceRef(
-            source_type=str(row["source_type"] or "exchange_filing"),
-            source_uri=str(row["source_uri"]),
-            title=str(row["title"] or f"{row['event_type']} exchange filing"),
-            published_at=(
-                row["published_at"].isoformat()
-                if row["published_at"]
-                else row["event_at"].isoformat() if row["event_at"] else None
-            ),
-            retrieved_at=row["retrieved_at"].isoformat() if row["retrieved_at"] else now,
-            freshness=str(row["freshness"] or "near_live"),
-            excerpt=str(row["content"]),
-            page_number=row["page_number"],
-            section=str(row["event_type"]),
-            checksum=row["checksum"],
-            source_priority=1,
+    evidence: list[EvidenceRef] = []
+    for row in rows:
+        is_ai = str(row["chunk_section"] or "") == "multimodal_extraction"
+        evidence.append(
+            EvidenceRef(
+                source_type="ai_extraction"
+                if is_ai
+                else str(row["source_type"] or "exchange_filing"),
+                source_uri=str(row["source_uri"]),
+                title=str(row["title"] or f"{row['event_type']} exchange filing"),
+                published_at=(
+                    row["published_at"].isoformat()
+                    if row["published_at"]
+                    else row["event_at"].isoformat() if row["event_at"] else None
+                ),
+                retrieved_at=row["retrieved_at"].isoformat() if row["retrieved_at"] else now,
+                freshness=str(row["freshness"] or "near_live"),
+                excerpt=str(row["content"]),
+                page_number=row["page_number"],
+                section="multimodal_extraction" if is_ai else str(row["event_type"]),
+                checksum=row["checksum"],
+                source_priority=4 if is_ai else 1,
+            )
         )
-        for row in rows
-    ]
+    return evidence
