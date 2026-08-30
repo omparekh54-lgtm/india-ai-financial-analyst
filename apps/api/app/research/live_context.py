@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.agents.contracts import EvidenceRef
 from app.core.config import Settings
-from app.evidence.embeddings import build_embedding_provider
+from app.evidence.embeddings import EmbeddingError, build_embedding_provider
 from app.evidence.semantic import SemanticEvidenceRetriever, build_research_queries
 from app.market.live_overlay import LiveMarketOverlayService
 from app.research.context import DatabaseResearchContextLoader
@@ -45,29 +46,42 @@ class UserAwareResearchContextLoader:
 
         security = context.get("security")
         if self.semantic is not None and isinstance(security, dict):
-            matches = await self.semantic.search(
-                security_id,
-                build_research_queries(
-                    user_query=str(security.get("legal_name") or security.get("nse_symbol") or ""),
-                    security=security,
-                    mode=mode,
-                ),
-                per_query=self.settings.semantic_evidence_per_query,
-                max_results=self.settings.semantic_evidence_max_chunks,
-            )
-            semantic_filing_evidence = [match.evidence for match in matches]
-            context["semantic_evidence"] = {
-                "enabled": True,
-                "match_count": len(matches),
-                "top_similarity": round(matches[0].similarity, 4) if matches else None,
-                "queries": len({match.query for match in matches}),
-            }
+            try:
+                matches = await self.semantic.search(
+                    security_id,
+                    build_research_queries(
+                        user_query=str(
+                            security.get("legal_name") or security.get("nse_symbol") or ""
+                        ),
+                        security=security,
+                        mode=mode,
+                    ),
+                    per_query=self.settings.semantic_evidence_per_query,
+                    max_results=self.settings.semantic_evidence_max_chunks,
+                )
+            except (EmbeddingError, SQLAlchemyError):
+                context["semantic_evidence"] = {
+                    "enabled": True,
+                    "status": "degraded",
+                    "match_count": 0,
+                }
+            else:
+                semantic_filing_evidence = [match.evidence for match in matches]
+                context["semantic_evidence"] = {
+                    "enabled": True,
+                    "status": "ready",
+                    "match_count": len(matches),
+                    "top_similarity": round(matches[0].similarity, 4) if matches else None,
+                    "queries": len({match.query for match in matches}),
+                }
         else:
-            context["semantic_evidence"] = {"enabled": False, "match_count": 0}
+            context["semantic_evidence"] = {
+                "enabled": False,
+                "status": "disabled",
+                "match_count": 0,
+            }
 
-        filing_evidence = _dedupe_evidence(
-            [*semantic_filing_evidence, *recent_filing_evidence]
-        )
+        filing_evidence = _dedupe_evidence([*semantic_filing_evidence, *recent_filing_evidence])
         if filing_evidence:
             context["parsed_exchange_filing_chunks"] = len(filing_evidence)
             evidence = _dedupe_evidence([*evidence, *filing_evidence])
