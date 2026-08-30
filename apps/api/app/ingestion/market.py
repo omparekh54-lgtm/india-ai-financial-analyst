@@ -66,6 +66,7 @@ class MarketBarIngestor:
         *,
         benchmark_code: str,
         bars: list[MarketBarInput],
+        source_id: UUID | None = None,
     ) -> dict[str, int]:
         normalized = [normalize_market_bar(bar) for bar in bars]
         async with self.engine.begin() as connection:
@@ -81,10 +82,10 @@ class MarketBarIngestor:
                         """
                         insert into benchmark_bars (
                             benchmark_id, interval, ts, open, high, low, close,
-                            volume, provider, is_adjusted
+                            volume, provider, is_adjusted, source_id
                         ) values (
                             :benchmark_id, :interval, :ts, :open, :high, :low, :close,
-                            :volume, :provider, :is_adjusted
+                            :volume, :provider, :is_adjusted, :source_id
                         )
                         on conflict (benchmark_id, interval, ts, provider)
                         do update set
@@ -93,10 +94,15 @@ class MarketBarIngestor:
                             low = excluded.low,
                             close = excluded.close,
                             volume = excluded.volume,
-                            is_adjusted = excluded.is_adjusted
+                            is_adjusted = excluded.is_adjusted,
+                            source_id = coalesce(excluded.source_id, benchmark_bars.source_id)
                         """
                     ),
-                    {"benchmark_id": benchmark_id, **_bar_parameters(bar)},
+                    {
+                        "benchmark_id": benchmark_id,
+                        "source_id": source_id,
+                        **_bar_parameters(bar),
+                    },
                 )
         return {"input_count": len(bars), "normalized_count": len(normalized)}
 
