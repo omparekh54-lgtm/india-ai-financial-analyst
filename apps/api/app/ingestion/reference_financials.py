@@ -84,5 +84,5 @@ def _metadata(value: str | None, *, row: int) -> dict[str, object]:
     except json.JSONDecodeError as exc:
         raise ValueError(f"metadata_json on row {row} is not valid JSON") from exc
     if not isinstance(parsed, dict):
-        raise ValueError(f"metadata_json on row {row} must be a JSON object")
+        raise TypeError(f"metadata_json on row {row} must be a JSON object")
     return {"source_format": "approved_csv", **parsed}
