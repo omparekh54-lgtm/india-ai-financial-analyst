@@ -1,15 +1,18 @@
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Annotated
+from urllib.parse import urlencode
 from uuid import UUID
 
 import sentry_sdk
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import ORJSONResponse
+from fastapi.responses import ORJSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.auth import AuthenticatedUser, require_authenticated_user
+from app.brokers.repository import BrokerRepository
+from app.brokers.upstox_oauth import UpstoxOAuthError, UpstoxOAuthService
 from app.core.config import get_settings
 from app.db import create_database_engine, database_health
 from app.orchestration.plan import AnalysisMode, build_research_plan
@@ -37,7 +40,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.4.0",
+    version="0.5.0",
     default_response_class=ORJSONResponse,
     lifespan=lifespan,
 )
@@ -45,7 +48,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -74,6 +77,12 @@ async def health() -> dict[str, object]:
         "database_configured": bool(settings.database_url),
         "database_healthy": db_ok,
         "auth_configured": bool(settings.supabase_url and settings.supabase_publishable_key),
+        "upstox_oauth_configured": bool(
+            settings.upstox_client_id
+            and settings.upstox_client_secret
+            and settings.upstox_redirect_uri
+            and settings.broker_token_encryption_key
+        ),
         "live_market_enabled": settings.enable_live_market,
         "external_llm_calls_enabled": settings.enable_external_llm_calls,
         "external_data_calls_enabled": settings.enable_external_data_calls,
@@ -99,6 +108,56 @@ async def agents() -> dict[str, object]:
 @app.get("/v1/auth/me")
 async def auth_me(user: CurrentUser) -> dict[str, object]:
     return {"id": str(user.id), "email": user.email}
+
+
+@app.get("/v1/brokers")
+async def broker_status(user: CurrentUser) -> dict[str, object]:
+    if not settings.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
+    engine = create_database_engine(settings.database_url)
+    service = UpstoxOAuthService(BrokerRepository(engine), settings)
+    return {
+        "live_market_enabled": settings.enable_live_market,
+        "connections": [await service.status(user.id)],
+    }
+
+
+@app.post("/v1/brokers/upstox/connect")
+async def connect_upstox(user: CurrentUser) -> dict[str, object]:
+    if not settings.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
+    engine = create_database_engine(settings.database_url)
+    service = UpstoxOAuthService(BrokerRepository(engine), settings)
+    try:
+        authorize_url = await service.begin(user.id)
+    except UpstoxOAuthError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"provider": "upstox", "authorize_url": authorize_url}
+
+
+@app.get("/v1/brokers/upstox/callback")
+async def upstox_callback(code: str, state: str) -> RedirectResponse:
+    if not settings.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
+    engine = create_database_engine(settings.database_url)
+    service = UpstoxOAuthService(BrokerRepository(engine), settings)
+    status = "connected"
+    try:
+        await service.complete(code=code, state=state)
+    except UpstoxOAuthError:
+        status = "error"
+    target = f"{settings.web_app_url.rstrip('/')}?{urlencode({'broker': 'upstox', 'status': status})}"
+    return RedirectResponse(target, status_code=303)
+
+
+@app.delete("/v1/brokers/upstox")
+async def disconnect_upstox(user: CurrentUser) -> dict[str, object]:
+    if not settings.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
+    engine = create_database_engine(settings.database_url)
+    service = UpstoxOAuthService(BrokerRepository(engine), settings)
+    disconnected = await service.disconnect(user.id)
+    return {"provider": "upstox", "disconnected": disconnected}
 
 
 @app.post("/v1/research/plan")
@@ -148,7 +207,11 @@ async def run_research(
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
 
     engine = create_database_engine(settings.database_url)
-    service = ResearchService(engine, max_concurrency=settings.max_agent_concurrency)
+    service = ResearchService(
+        engine,
+        max_concurrency=settings.max_agent_concurrency,
+        settings=settings,
+    )
     try:
         execution = await service.execute(
             query=request.query,
