@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+from uuid import UUID
 
-from app.agents.contracts import AgentInput, AgentName, AgentOutput, Claim
+from app.agents.contracts import AgentInput, AgentName, AgentOutput, Claim, EvidenceRef
 
 
 @dataclass(frozen=True)
@@ -12,6 +13,7 @@ class RiskSignal:
     severity: str
     statement: str
     data: dict[str, Any]
+    evidence_ids: list[UUID] = field(default_factory=list)
 
 
 class RiskRedFlagAgent:
@@ -20,16 +22,20 @@ class RiskRedFlagAgent:
     async def run(self, agent_input: AgentInput) -> AgentOutput:
         financials = agent_input.context.get("financial_metrics") or {}
         governance = agent_input.context.get("governance") or {}
-        signals = _financial_risk_signals(financials) + _governance_risk_signals(governance)
-        evidence_ids = [item.evidence_id for item in agent_input.evidence]
+        signals = (
+            _financial_risk_signals(financials)
+            + _governance_risk_signals(governance)
+            + _filing_risk_signals(agent_input.evidence)
+        )
+        fallback_evidence_ids = [item.evidence_id for item in agent_input.evidence]
 
         claims = [
             Claim(
                 agent=AgentName.RISK,
                 statement=signal.statement,
                 claim_type="risk",
-                confidence=0.85 if evidence_ids else 0.45,
-                evidence_ids=evidence_ids,
+                confidence=0.90 if signal.evidence_ids else 0.85 if fallback_evidence_ids else 0.45,
+                evidence_ids=signal.evidence_ids or fallback_evidence_ids,
                 status="pending",
                 data={
                     "title": signal.title,
@@ -37,16 +43,18 @@ class RiskRedFlagAgent:
                     **signal.data,
                 },
             )
-            for signal in signals
+            for signal in _dedupe_signals(signals)
         ]
         return AgentOutput(
             agent=AgentName.RISK,
             claims=claims,
             evidence=agent_input.evidence,
             metrics={
-                "signal_count": len(signals),
-                "high_severity_count": sum(signal.severity == "high" for signal in signals),
-                "signals": [signal.__dict__ for signal in signals],
+                "signal_count": len(claims),
+                "high_severity_count": sum(
+                    claim.data.get("severity") == "high" for claim in claims
+                ),
+                "signals": [signal.__dict__ for signal in _dedupe_signals(signals)],
             },
         )
 
@@ -132,6 +140,100 @@ def _governance_risk_signals(governance: dict[str, Any]) -> list[RiskSignal]:
             )
         )
     return signals
+
+
+def _filing_risk_signals(evidence: list[EvidenceRef]) -> list[RiskSignal]:
+    signals: list[RiskSignal] = []
+    for item in evidence:
+        if item.source_type not in {"exchange_filing", "company_filing", "regulator"}:
+            continue
+        section = item.section or ""
+        text = f"{item.title or ''}\n{item.excerpt or ''}".lower()
+        signal = _filing_signal(section, text, item)
+        if signal is not None:
+            signals.append(signal)
+    return signals
+
+
+def _filing_signal(section: str, text: str, evidence: EvidenceRef) -> RiskSignal | None:
+    evidence_ids = [evidence.evidence_id]
+    source = {
+        "source_uri": evidence.source_uri,
+        "page_number": evidence.page_number,
+        "event_type": section,
+    }
+    if section == "auditor_resignation" or ("auditor" in text and "resign" in text):
+        return RiskSignal(
+            "Auditor resignation filing",
+            "high",
+            "An official filing reports an auditor resignation; the stated reasons and any audit disagreements require review.",
+            source,
+            evidence_ids,
+        )
+    if section in {"cfo_change", "ceo_change", "director_change"} and any(
+        word in text for word in ("resign", "cessation")
+    ):
+        return RiskSignal(
+            "Senior management or board departure",
+            "medium",
+            "An official filing reports a senior management or board departure; timing and stated reasons should be assessed.",
+            source,
+            evidence_ids,
+        )
+    if section == "regulatory_action":
+        return RiskSignal(
+            "Regulatory action disclosure",
+            "high",
+            "An official filing references regulatory action; the order, financial exposure and remediation should be reviewed.",
+            source,
+            evidence_ids,
+        )
+    if section == "litigation":
+        return RiskSignal(
+            "Material legal or tax disclosure",
+            "medium",
+            "An official filing references litigation, arbitration, a court order or tax demand requiring materiality assessment.",
+            source,
+            evidence_ids,
+        )
+    if section == "credit_rating" and "downgrade" in text:
+        return RiskSignal(
+            "Credit rating downgrade filing",
+            "high",
+            "An official filing contains a credit-rating downgrade that may signal increased financing or liquidity risk.",
+            source,
+            evidence_ids,
+        )
+    if section == "promoter_pledge":
+        return RiskSignal(
+            "Promoter pledge or encumbrance disclosure",
+            "medium",
+            "A promoter pledge or encumbrance filing is present; the direction and current pledged percentage should be verified.",
+            source,
+            evidence_ids,
+        )
+    if section == "related_party":
+        return RiskSignal(
+            "Related-party transaction disclosure",
+            "low",
+            "A related-party transaction filing is present and should be assessed for size, terms and governance implications.",
+            source,
+            evidence_ids,
+        )
+    return None
+
+
+def _dedupe_signals(signals: list[RiskSignal]) -> list[RiskSignal]:
+    output: list[RiskSignal] = []
+    seen: set[tuple[str, str | None]] = set()
+    for signal in signals:
+        uri = str(signal.data.get("source_uri")) if signal.data.get("source_uri") else None
+        key = (signal.title, uri)
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(signal)
+    return output
 
 
 def _number(value: Any) -> float | None:
