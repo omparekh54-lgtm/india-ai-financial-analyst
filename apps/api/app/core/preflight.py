@@ -37,6 +37,16 @@ _REQUIRED_RLS_TABLES = (
     "agent_runs",
     "claims",
     "claim_evidence",
+    "analysis_snapshots",
+)
+
+_REQUIRED_OWNER_POLICIES = (
+    "research_jobs_owner_read",
+    "agent_runs_owner_read",
+    "claims_owner_read",
+    "claim_evidence_owner_read",
+    "research_reports_owner_read",
+    "analysis_snapshots_owner_read",
 )
 
 
@@ -48,6 +58,7 @@ class DatabasePreflight:
     research_ownership_column: bool
     missing_tables: tuple[str, ...]
     rls_disabled_tables: tuple[str, ...]
+    missing_owner_policies: tuple[str, ...]
     error_type: str | None = None
 
     @property
@@ -59,6 +70,7 @@ class DatabasePreflight:
             and self.research_ownership_column
             and not self.missing_tables
             and not self.rls_disabled_tables
+            and not self.missing_owner_policies
             and self.error_type is None
         )
 
@@ -71,6 +83,7 @@ class DatabasePreflight:
             "research_ownership_column": self.research_ownership_column,
             "missing_tables": list(self.missing_tables),
             "rls_disabled_tables": list(self.rls_disabled_tables),
+            "missing_owner_policies": list(self.missing_owner_policies),
             "error_type": self.error_type,
         }
 
@@ -107,6 +120,7 @@ async def database_preflight(engine: AsyncEngine) -> DatabasePreflight:
             )
             missing_tables = await _missing_tables(connection)
             rls_disabled_tables = await _rls_disabled_tables(connection)
+            missing_owner_policies = await _missing_owner_policies(connection)
     except Exception as exc:  # noqa: BLE001 - preflight returns a bounded failure type, not DB details
         return DatabasePreflight(
             connected=False,
@@ -115,6 +129,7 @@ async def database_preflight(engine: AsyncEngine) -> DatabasePreflight:
             research_ownership_column=False,
             missing_tables=(),
             rls_disabled_tables=(),
+            missing_owner_policies=(),
             error_type=type(exc).__name__,
         )
 
@@ -125,6 +140,7 @@ async def database_preflight(engine: AsyncEngine) -> DatabasePreflight:
         research_ownership_column=research_ownership_column,
         missing_tables=missing_tables,
         rls_disabled_tables=rls_disabled_tables,
+        missing_owner_policies=missing_owner_policies,
     )
 
 
@@ -164,6 +180,31 @@ async def _rls_disabled_tables(connection: AsyncConnection) -> tuple[str, ...]:
                 """
             ),
             {"names": list(_REQUIRED_RLS_TABLES)},
+        )
+    ).scalars().all()
+    return tuple(str(row) for row in rows)
+
+
+async def _missing_owner_policies(connection: AsyncConnection) -> tuple[str, ...]:
+    rows = (
+        await connection.execute(
+            text(
+                """
+                with required(policyname) as (
+                  select unnest(cast(:names as text[]))
+                )
+                select required.policyname
+                from required
+                where not exists (
+                  select 1
+                  from pg_policies policy
+                  where policy.schemaname = 'public'
+                    and policy.policyname = required.policyname
+                )
+                order by required.policyname
+                """
+            ),
+            {"names": list(_REQUIRED_OWNER_POLICIES)},
         )
     ).scalars().all()
     return tuple(str(row) for row in rows)
