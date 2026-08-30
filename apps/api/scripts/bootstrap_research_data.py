@@ -16,6 +16,7 @@ from app.ingestion.bootstrap import (
     parse_benchmark_spec,
     parse_financial_spec,
     parse_market_spec,
+    parse_metrics_spec,
 )
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -108,6 +109,14 @@ def main() -> int:
     parser.add_argument("--market-timezone", default="Asia/Kolkata")
     parser.add_argument("--market-min-rows", type=int, default=30)
     parser.add_argument(
+        "--metrics",
+        action="append",
+        default=[],
+        metavar="SECURITY,FILE,SOURCE_URI",
+        help="Repeat for each approved/licensed one-security comparable-metrics CSV export.",
+    )
+    parser.add_argument("--metrics-min-rows", type=int, default=3)
+    parser.add_argument(
         "--benchmark",
         action="append",
         default=[],
@@ -134,6 +143,7 @@ def main() -> int:
     try:
         financials = tuple(parse_financial_spec(value) for value in args.financial)
         markets = tuple(parse_market_spec(value) for value in args.market)
+        metrics = tuple(parse_metrics_spec(value) for value in args.metrics)
         benchmarks = tuple(parse_benchmark_spec(value) for value in args.benchmark)
         plan = build_bootstrap_plan(
             python_executable=sys.executable,
@@ -148,6 +158,8 @@ def main() -> int:
             market_interval=args.market_interval,
             market_timezone=args.market_timezone,
             market_min_rows=args.market_min_rows,
+            metrics=metrics,
+            metrics_min_rows=args.metrics_min_rows,
             benchmarks=benchmarks,
             benchmark_interval=args.benchmark_interval,
             benchmark_timezone=args.benchmark_timezone,
