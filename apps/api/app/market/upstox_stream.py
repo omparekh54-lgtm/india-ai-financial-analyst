@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 
 import httpx
 from websockets.asyncio.client import connect
-from websockets.exceptions import ConnectionClosed, WebSocketException
+from websockets.exceptions import ConnectionClosed
 
 from app.brokers.repository import BrokerRepository
 from app.brokers.upstox_oauth import UpstoxOAuthService
@@ -55,8 +55,6 @@ class UpstoxLiveMarketWorker:
                             name=f"upstox-stream-{user_id}",
                         )
                 await asyncio.sleep(self.settings.live_market_worker_poll_seconds)
-        except asyncio.CancelledError:
-            raise
         finally:
             tasks = list(self._tasks.values())
             for task in tasks:
@@ -72,8 +70,11 @@ class UpstoxLiveMarketWorker:
                 task.result()
             except asyncio.CancelledError:
                 pass
-            except Exception:  # noqa: BLE001 - isolate one user's stream from the coordinator
-                logger.exception("Upstox user stream exited unexpectedly", extra={"user_id": str(user_id)})
+            except Exception:
+                logger.exception(
+                    "Upstox user stream exited unexpectedly",
+                    extra={"user_id": str(user_id)},
+                )
 
     async def _run_user(self, user_id: UUID) -> None:
         acquired = await self.repository.acquire_stream_lease(
@@ -97,7 +98,7 @@ class UpstoxLiveMarketWorker:
                     retry = 0
                 except asyncio.CancelledError:
                     raise
-                except Exception:  # noqa: BLE001 - reconnect boundary for external stream faults
+                except Exception:
                     retry += 1
                     logger.warning(
                         "Upstox stream interrupted; retrying",
@@ -251,7 +252,7 @@ def decode_upstox_v3_message(message: bytes) -> dict[str, Any]:
     try:
         decoded = MarketDataFeedV3_pb2.FeedResponse.FromString(message)
         result = MessageToDict(decoded)
-    except Exception as exc:  # noqa: BLE001 - protobuf decoder raises several concrete types
+    except Exception as exc:
         raise UpstoxStreamError("Unable to decode Upstox V3 protobuf message") from exc
     if not isinstance(result, dict):
         raise UpstoxStreamError("Decoded Upstox V3 feed was not an object")
