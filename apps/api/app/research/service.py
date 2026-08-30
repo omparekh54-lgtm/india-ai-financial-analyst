@@ -36,7 +36,7 @@ class ResearchService:
         self.settings = settings or get_settings()
         self.repository = ResearchRepository(engine)
         self.runtime = OrchestratorRuntime(
-            build_agent_registry(engine),
+            build_agent_registry(engine, self.settings),
             max_concurrency=max_concurrency,
             context_loader=UserAwareResearchContextLoader(engine, self.settings),
         )
