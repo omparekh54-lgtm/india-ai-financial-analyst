@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from statistics import mean
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
@@ -9,13 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.agents.contracts import EvidenceRef
 
+Row = Mapping[str, Any]
+
 
 class DatabaseResearchContextLoader:
-    """Hydrates the agent DAG from normalized database state.
-
-    No external APIs are called here. Live/provider ingestion writes into the same normalized
-    tables, so the research engine remains provider-agnostic.
-    """
+    """Hydrates the agent DAG from normalized, provenance-aware database state."""
 
     def __init__(self, engine: AsyncEngine) -> None:
         self.engine = engine
@@ -45,17 +45,23 @@ class DatabaseResearchContextLoader:
                     text(
                         """
                         with ranked as (
-                          select fact_name, value, unit, period_end, period_type, source_id,
+                          select ff.fact_name, ff.value, ff.unit, ff.period_end, ff.period_type,
+                                 ff.source_id,
                                  row_number() over (
-                                   partition by fact_name
-                                   order by period_end desc, created_at desc
+                                   partition by ff.fact_name
+                                   order by ff.period_end desc, ff.created_at desc
                                  ) as rn
-                          from financial_facts
-                          where security_id = :security_id
+                          from financial_facts ff
+                          where ff.security_id = :security_id
                         )
-                        select fact_name, value, unit, period_end, period_type, source_id, rn
-                        from ranked where rn <= 2
-                        order by fact_name, rn
+                        select r.fact_name, r.value, r.unit, r.period_end, r.period_type,
+                               r.source_id, r.rn,
+                               s.source_type, s.source_uri, s.title, s.published_at,
+                               s.retrieved_at, s.freshness, s.checksum
+                        from ranked r
+                        left join sources s on s.id = r.source_id
+                        where r.rn <= 2
+                        order by r.fact_name, r.rn
                         """
                     ),
                     {"security_id": security_id},
@@ -115,10 +121,7 @@ class DatabaseResearchContextLoader:
         financials = _financial_context(financial_rows)
         bars = _market_bars(bar_rows)
         context: dict[str, object] = {
-            "security": {
-                key: str(value) if key == "id" else value
-                for key, value in security.items()
-            },
+            "security": {key: str(value) if key == "id" else value for key, value in security.items()},
             "financials": financials,
             "market_bars": bars,
             "governance": _governance_context(event_rows),
@@ -143,10 +146,15 @@ class DatabaseResearchContextLoader:
                 "metadata": snapshot["metadata"],
             }
 
-        return context, _event_evidence(event_rows)
+        evidence = [
+            *_financial_evidence(financial_rows, security_id),
+            *_market_evidence(bar_rows, security_id),
+            *_event_evidence(event_rows),
+        ]
+        return context, _dedupe_evidence(evidence)
 
 
-def _financial_context(rows: list[object]) -> dict[str, object]:
+def _financial_context(rows: list[Row]) -> dict[str, object]:
     facts: dict[str, object] = {}
     for row in rows:
         name = str(row["fact_name"])
@@ -159,25 +167,57 @@ def _financial_context(rows: list[object]) -> dict[str, object]:
     return facts
 
 
-def _market_bars(rows: list[object]) -> list[dict[str, object]]:
-    bars = []
-    for row in reversed(rows):
-        bars.append(
-            {
-                "ts": row["ts"].isoformat(),
-                "open": _float(row["open"]),
-                "high": _float(row["high"]),
-                "low": _float(row["low"]),
-                "close": _float(row["close"]),
-                "volume": _float(row["volume"]),
-                "provider": row["provider"],
-                "is_adjusted": row["is_adjusted"],
-            }
+def _financial_evidence(rows: list[Row], security_id: UUID) -> list[EvidenceRef]:
+    grouped: dict[str, Row] = {}
+    for row in rows:
+        key = str(row.get("source_id") or f"db:{row['fact_name']}:{row['period_end']}")
+        grouped.setdefault(key, row)
+
+    evidence: list[EvidenceRef] = []
+    now = datetime.now(UTC).isoformat()
+    for row in grouped.values():
+        source_type = str(row.get("source_type") or "financial_fact")
+        source_uri = str(
+            row.get("source_uri")
+            or f"db://financial-facts/{security_id}/{row['fact_name']}/{row['period_end']}"
         )
-    return bars
+        freshness = _freshness(row.get("freshness"), fallback="periodic")
+        evidence.append(
+            EvidenceRef(
+                source_type=source_type,
+                source_uri=source_uri,
+                title=row.get("title") or f"Financial facts through {row['period_end']}",
+                published_at=_iso(row.get("published_at")),
+                retrieved_at=_iso(row.get("retrieved_at")) or now,
+                freshness=freshness,
+                excerpt=(
+                    f"Normalized {row['fact_name']}={row['value']} {row.get('unit') or ''} "
+                    f"for {row['period_type']} ending {row['period_end']}."
+                ),
+                checksum=row.get("checksum"),
+                source_priority=1 if source_type in {"exchange_filing", "company_filing"} else 2,
+            )
+        )
+    return evidence
 
 
-def _market_quote(rows: list[object]) -> dict[str, object] | None:
+def _market_bars(rows: list[Row]) -> list[dict[str, object]]:
+    return [
+        {
+            "ts": row["ts"].isoformat(),
+            "open": _float(row["open"]),
+            "high": _float(row["high"]),
+            "low": _float(row["low"]),
+            "close": _float(row["close"]),
+            "volume": _float(row["volume"]),
+            "provider": row["provider"],
+            "is_adjusted": row["is_adjusted"],
+        }
+        for row in reversed(rows)
+    ]
+
+
+def _market_quote(rows: list[Row]) -> dict[str, object] | None:
     if not rows:
         return None
     latest = rows[0]
@@ -195,7 +235,29 @@ def _market_quote(rows: list[object]) -> dict[str, object] | None:
     }
 
 
-def _event_context(rows: list[object]) -> list[dict[str, object]]:
+def _market_evidence(rows: list[Row], security_id: UUID) -> list[EvidenceRef]:
+    if not rows:
+        return []
+    latest = rows[0]
+    providers = sorted({str(row["provider"]) for row in rows})
+    return [
+        EvidenceRef(
+            source_type="market_data",
+            source_uri=f"db://market-bars/{security_id}",
+            title="Normalized market history",
+            published_at=latest["ts"].isoformat(),
+            retrieved_at=datetime.now(UTC).isoformat(),
+            freshness="historical",
+            excerpt=(
+                f"{len(rows)} daily bars through {latest['ts'].isoformat()} from "
+                f"providers: {', '.join(providers)}."
+            ),
+            source_priority=2,
+        )
+    ]
+
+
+def _event_context(rows: list[Row]) -> list[dict[str, object]]:
     return [
         {
             "title": row["headline"],
@@ -208,7 +270,7 @@ def _event_context(rows: list[object]) -> list[dict[str, object]]:
     ]
 
 
-def _governance_context(rows: list[object]) -> dict[str, object]:
+def _governance_context(rows: list[Row]) -> dict[str, object]:
     event_types = {str(row["event_type"]) for row in rows}
     governance: dict[str, object] = {
         "auditor_resignation_recent": "auditor_resignation" in event_types,
@@ -229,30 +291,19 @@ def _governance_context(rows: list[object]) -> dict[str, object]:
     return governance
 
 
-def _event_evidence(rows: list[object]) -> list[EvidenceRef]:
+def _event_evidence(rows: list[Row]) -> list[EvidenceRef]:
     evidence: list[EvidenceRef] = []
     for row in rows:
         uri = row["source_uri"] or f"db://corporate-events/{row['id']}"
         source_type = row["source_type"] or "normalized_event"
-        freshness = row["freshness"] or "unknown"
-        if freshness not in {"live", "near_live", "periodic", "historical", "unknown"}:
-            freshness = "unknown"
         evidence.append(
             EvidenceRef(
                 source_type=source_type,
                 source_uri=uri,
                 title=row["title"] or row["headline"],
-                published_at=(
-                    row["published_at"].isoformat()
-                    if row["published_at"]
-                    else row["event_at"].isoformat() if row["event_at"] else None
-                ),
-                retrieved_at=(
-                    row["retrieved_at"].isoformat()
-                    if row["retrieved_at"]
-                    else datetime.now(UTC).isoformat()
-                ),
-                freshness=freshness,
+                published_at=_iso(row["published_at"]) or _iso(row["event_at"]),
+                retrieved_at=_iso(row["retrieved_at"]) or datetime.now(UTC).isoformat(),
+                freshness=_freshness(row["freshness"]),
                 excerpt=row["headline"],
                 checksum=row["checksum"],
                 source_priority=1 if source_type in {"exchange_filing", "regulator"} else 3,
@@ -262,14 +313,11 @@ def _event_evidence(rows: list[object]) -> list[EvidenceRef]:
 
 
 def _valuation_factual_inputs(
-    security: object,
+    security: Row,
     financials: dict[str, object],
     quote: dict[str, object] | None,
 ) -> dict[str, object]:
-    data: dict[str, object] = {
-        "sector": security["sector"],
-        "industry": security["industry"],
-    }
+    data: dict[str, object] = {"sector": security["sector"], "industry": security["industry"]}
     if quote and quote.get("price") is not None:
         data["current_price"] = quote["price"]
     for source, target in (
@@ -288,16 +336,34 @@ def _valuation_factual_inputs(
     return data
 
 
-def _float(value: object) -> float | None:
+def _freshness(value: object, *, fallback: str = "unknown") -> str:
+    candidate = str(value or fallback)
+    if candidate not in {"live", "near_live", "periodic", "historical", "unknown"}:
+        return fallback
+    return candidate
+
+
+def _iso(value: object) -> str | None:
     if value is None:
         return None
-    return float(value)
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _dedupe_evidence(items: list[EvidenceRef]) -> list[EvidenceRef]:
+    seen: dict[tuple[str, str], EvidenceRef] = {}
+    for item in items:
+        seen.setdefault((item.source_type, item.source_uri), item)
+    return list(seen.values())
+
+
+def _float(value: object) -> float | None:
+    return None if value is None else float(value)
 
 
 def _number(value: object) -> float | None:
     try:
-        if value is None:
-            return None
-        return float(value)
+        return None if value is None else float(value)
     except (TypeError, ValueError):
         return None
