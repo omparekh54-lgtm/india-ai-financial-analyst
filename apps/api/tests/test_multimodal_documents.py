@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import fitz
@@ -110,6 +111,7 @@ async def test_ai_visual_evidence_cannot_be_verified_primary_fact() -> None:
         source_type="ai_extraction",
         source_uri="https://www.nseindia.com/example.pdf",
         title="Official filing",
+        retrieved_at=datetime.now(UTC).isoformat(),
         freshness="near_live",
         excerpt="AI-assisted visual interpretation of page 4.",
         page_number=4,
