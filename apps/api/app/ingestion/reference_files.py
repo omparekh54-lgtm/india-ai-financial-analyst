@@ -5,7 +5,7 @@ import io
 from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.ingestion.macro import MacroObservation
+from app.ingestion.macro import MacroObservation, normalize_macro_observation
 from app.ingestion.market import MarketBarInput, normalize_market_bar
 
 
@@ -19,6 +19,7 @@ def parse_benchmark_csv(
     provider: str,
     interval: str = "1d",
     timezone: str = "Asia/Kolkata",
+    min_rows: int = 1,
 ) -> list[MarketBarInput]:
     provider = provider.strip().lower()
     interval = interval.strip().lower()
@@ -26,6 +27,8 @@ def parse_benchmark_csv(
         raise ReferenceFileError("benchmark provider cannot be empty")
     if not interval:
         raise ReferenceFileError("benchmark interval cannot be empty")
+    if min_rows < 1:
+        raise ReferenceFileError("minimum benchmark rows must be >= 1")
     try:
         tz = ZoneInfo(timezone)
     except ZoneInfoNotFoundError as exc:
@@ -35,6 +38,7 @@ def parse_benchmark_csv(
     if reader.fieldnames is None:
         raise ReferenceFileError("benchmark CSV has no header")
     bars: list[MarketBarInput] = []
+    seen_timestamps: set[datetime] = set()
     for index, raw in enumerate(reader, start=2):
         row = _normalized_row(raw)
         try:
@@ -42,33 +46,42 @@ def parse_benchmark_csv(
                 row.get("timestamp") or row.get("datetime") or row.get("date") or "",
                 tz,
             )
-            bars.append(
-                normalize_market_bar(
-                    MarketBarInput(
-                        ts=ts,
-                        open=_required_number(row, "open"),
-                        high=_required_number(row, "high"),
-                        low=_required_number(row, "low"),
-                        close=_required_number(row, "close"),
-                        volume=_optional_number(row.get("volume")),
-                        provider=provider,
-                        interval=interval,
-                        is_adjusted=_bool_value(row.get("is_adjusted")),
-                    )
+            bar = normalize_market_bar(
+                MarketBarInput(
+                    ts=ts,
+                    open=_required_number(row, "open"),
+                    high=_required_number(row, "high"),
+                    low=_required_number(row, "low"),
+                    close=_required_number(row, "close"),
+                    volume=_optional_number(row.get("volume")),
+                    provider=provider,
+                    interval=interval,
+                    is_adjusted=_bool_value(row.get("is_adjusted")),
                 )
             )
         except (TypeError, ValueError) as exc:
             raise ReferenceFileError(f"invalid benchmark CSV row {index}: {exc}") from exc
-    if not bars:
-        raise ReferenceFileError("benchmark CSV contains no usable rows")
+        if bar.ts in seen_timestamps:
+            raise ReferenceFileError(
+                f"duplicate benchmark timestamp at row {index}: {bar.ts.isoformat()}"
+            )
+        seen_timestamps.add(bar.ts)
+        bars.append(bar)
+    if len(bars) < min_rows:
+        raise ReferenceFileError(
+            f"benchmark CSV contains only {len(bars)} rows; minimum expected is {min_rows}"
+        )
     return bars
 
 
-def parse_macro_csv(content: str) -> list[MacroObservation]:
+def parse_macro_csv(content: str, *, min_rows: int = 1) -> list[MacroObservation]:
+    if min_rows < 1:
+        raise ReferenceFileError("minimum macro rows must be >= 1")
     reader = csv.DictReader(io.StringIO(content.lstrip("\ufeff")))
     if reader.fieldnames is None:
         raise ReferenceFileError("macro CSV has no header")
     observations: list[MacroObservation] = []
+    seen_keys: set[tuple[str, date]] = set()
     for index, raw in enumerate(reader, start=2):
         row = _normalized_row(raw)
         series_key = (row.get("series_key") or row.get("series") or "").strip()
@@ -81,22 +94,33 @@ def parse_macro_csv(content: str) -> list[MacroObservation]:
         try:
             parsed_date = date.fromisoformat(observation_date[:10])
             released_at = _optional_datetime(row.get("released_at"))
+            observation = normalize_macro_observation(
+                MacroObservation(
+                    series_key=series_key,
+                    observation_date=parsed_date,
+                    value=value,
+                    unit=(row.get("unit") or "").strip() or None,
+                    released_at=released_at,
+                    metadata={
+                        "source_name": (row.get("source_name") or "").strip()
+                        or "approved_csv",
+                    },
+                )
+            )
         except ValueError as exc:
             raise ReferenceFileError(f"invalid macro CSV row {index}: {exc}") from exc
-        observations.append(
-            MacroObservation(
-                series_key=series_key,
-                observation_date=parsed_date,
-                value=value,
-                unit=(row.get("unit") or "").strip() or None,
-                released_at=released_at,
-                metadata={
-                    "source_name": (row.get("source_name") or "").strip() or "approved_csv",
-                },
+        natural_key = (observation.series_key, observation.observation_date)
+        if natural_key in seen_keys:
+            raise ReferenceFileError(
+                "duplicate macro observation at row "
+                f"{index}: {observation.series_key}/{observation.observation_date.isoformat()}"
             )
+        seen_keys.add(natural_key)
+        observations.append(observation)
+    if len(observations) < min_rows:
+        raise ReferenceFileError(
+            f"macro CSV contains only {len(observations)} rows; minimum expected is {min_rows}"
         )
-    if not observations:
-        raise ReferenceFileError("macro CSV contains no usable rows")
     return observations
 
 
