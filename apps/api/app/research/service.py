@@ -8,11 +8,12 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.agents.contracts import AgentInput, AgentName, AgentOutput
+from app.core.config import Settings, get_settings
 from app.orchestration.plan import AnalysisMode, build_research_plan
 from app.orchestration.registry import build_agent_registry
 from app.orchestration.runtime import OrchestratorRuntime
 from app.repositories.research import ResearchRepository
-from app.research.context import DatabaseResearchContextLoader
+from app.research.live_context import UserAwareResearchContextLoader
 
 
 @dataclass(frozen=True)
@@ -24,13 +25,20 @@ class ResearchExecution:
 
 
 class ResearchService:
-    def __init__(self, engine: AsyncEngine, *, max_concurrency: int = 6) -> None:
+    def __init__(
+        self,
+        engine: AsyncEngine,
+        *,
+        max_concurrency: int = 6,
+        settings: Settings | None = None,
+    ) -> None:
         self.engine = engine
+        self.settings = settings or get_settings()
         self.repository = ResearchRepository(engine)
         self.runtime = OrchestratorRuntime(
             build_agent_registry(engine),
             max_concurrency=max_concurrency,
-            context_loader=DatabaseResearchContextLoader(engine),
+            context_loader=UserAwareResearchContextLoader(engine, self.settings),
         )
 
     async def execute(
@@ -53,6 +61,7 @@ class ResearchService:
                 build_research_plan(mode),
                 AgentInput(
                     job_id=job_id,
+                    user_id=requested_by,
                     query=query,
                     context=dict(context or {}),
                 ),
