@@ -102,18 +102,19 @@ def parse_metrics_spec(value: str) -> MetricsBootstrapSpec:
 
 
 def parse_macro_spec(value: str) -> MacroBootstrapSpec:
-    raw_parts = [part.strip() for part in value.split(",")]
-    if not raw_parts or not raw_parts[0]:
+    provider_text, separator, remainder = value.partition(",")
+    provider = provider_text.strip().lower()
+    if not separator or not provider:
         raise ValueError(
             "macro must use RBI,SERIES_KEY,FILE,OFFICIAL_SOURCE_URL or "
             "NSDL,FILE,OFFICIAL_SOURCE_URL format"
         )
 
-    provider = raw_parts[0].lower()
     if provider == "rbi":
-        if len(raw_parts) != 4 or not all(raw_parts):
+        parts = [part.strip() for part in remainder.split(",", 2)]
+        if len(parts) != 3 or not all(parts):
             raise ValueError("RBI macro must use RBI,SERIES_KEY,FILE,OFFICIAL_SOURCE_URL format")
-        _, series_key, file_name, source_url = raw_parts
+        series_key, file_name, source_url = parts
         return MacroBootstrapSpec(
             provider="rbi",
             series_key=validate_rbi_series_key(series_key),
@@ -121,9 +122,10 @@ def parse_macro_spec(value: str) -> MacroBootstrapSpec:
             source_url=validate_official_source_url("RBI", source_url),
         )
     if provider == "nsdl":
-        if len(raw_parts) != 3 or not all(raw_parts):
+        parts = [part.strip() for part in remainder.split(",", 1)]
+        if len(parts) != 2 or not all(parts):
             raise ValueError("NSDL macro must use NSDL,FILE,OFFICIAL_SOURCE_URL format")
-        _, file_name, source_url = raw_parts
+        file_name, source_url = parts
         return MacroBootstrapSpec(
             provider="nsdl",
             file=Path(file_name),
