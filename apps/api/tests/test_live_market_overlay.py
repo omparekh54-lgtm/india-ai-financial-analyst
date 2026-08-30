@@ -11,13 +11,13 @@ from app.market.live_overlay import LiveMarketOverlayService, _fallback_instrume
 
 
 class FakeRepository:
-    async def provider_instrument(self, security_id, provider):  # noqa: ANN001, ANN201
+    async def provider_instrument(self, security_id, provider):
         assert provider == "upstox"
         return {"instrument_id": "NSE_EQ|INE002A01018"}
 
 
 class FakeOAuth:
-    async def access_token_for_user(self, user_id):  # noqa: ANN001, ANN201
+    async def access_token_for_user(self, user_id):
         return "runtime-token"
 
 
