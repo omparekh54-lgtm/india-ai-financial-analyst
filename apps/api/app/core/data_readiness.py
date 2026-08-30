@@ -1,0 +1,165 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date, datetime
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+
+@dataclass(frozen=True)
+class DataCoverage:
+    nse_eq_securities: int
+    provider_instruments: int
+    financial_facts: int
+    corporate_events: int
+    sources: int
+    evidence_chunks: int
+    embedded_evidence_chunks: int
+    market_bars: int
+    benchmark_bars: int
+    macro_observations: int
+    security_metrics: int
+    enabled_official_feeds: int
+    latest_financial_period: date | None = None
+    latest_corporate_event: datetime | None = None
+    latest_market_bar: datetime | None = None
+    latest_benchmark_bar: datetime | None = None
+    latest_macro_observation: date | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "nse_eq_securities": self.nse_eq_securities,
+            "provider_instruments": self.provider_instruments,
+            "financial_facts": self.financial_facts,
+            "corporate_events": self.corporate_events,
+            "sources": self.sources,
+            "evidence_chunks": self.evidence_chunks,
+            "embedded_evidence_chunks": self.embedded_evidence_chunks,
+            "market_bars": self.market_bars,
+            "benchmark_bars": self.benchmark_bars,
+            "macro_observations": self.macro_observations,
+            "security_metrics": self.security_metrics,
+            "enabled_official_feeds": self.enabled_official_feeds,
+            "latest_financial_period": _iso(self.latest_financial_period),
+            "latest_corporate_event": _iso(self.latest_corporate_event),
+            "latest_market_bar": _iso(self.latest_market_bar),
+            "latest_benchmark_bar": _iso(self.latest_benchmark_bar),
+            "latest_macro_observation": _iso(self.latest_macro_observation),
+        }
+
+
+@dataclass(frozen=True)
+class DataCoverageReport:
+    coverage: DataCoverage
+    errors: tuple[str, ...]
+    warnings: tuple[str, ...]
+
+    @property
+    def ready(self) -> bool:
+        return not self.errors
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "ready": self.ready,
+            "errors": list(self.errors),
+            "warnings": list(self.warnings),
+            "coverage": self.coverage.as_dict(),
+        }
+
+
+async def load_data_coverage(engine: AsyncEngine) -> DataCoverage:
+    statement = text(
+        """
+        select
+          (select count(*) from securities
+             where primary_exchange = 'NSE'
+               and coalesce(metadata->>'nse_series', 'EQ') = 'EQ') as nse_eq_securities,
+          (select count(*) from provider_instruments) as provider_instruments,
+          (select count(*) from financial_facts) as financial_facts,
+          (select count(*) from corporate_events) as corporate_events,
+          (select count(*) from sources) as sources,
+          (select count(*) from evidence_chunks) as evidence_chunks,
+          (select count(*) from evidence_chunks where embedding is not null) as embedded_evidence_chunks,
+          (select count(*) from market_bars) as market_bars,
+          (select count(*) from benchmark_bars) as benchmark_bars,
+          (select count(*) from macro_observations) as macro_observations,
+          (select count(*) from security_metrics) as security_metrics,
+          (select count(*) from official_data_feeds where enabled) as enabled_official_feeds,
+          (select max(period_end) from financial_facts) as latest_financial_period,
+          (select max(event_at) from corporate_events) as latest_corporate_event,
+          (select max(ts) from market_bars) as latest_market_bar,
+          (select max(ts) from benchmark_bars) as latest_benchmark_bar,
+          (select max(observation_date) from macro_observations) as latest_macro_observation
+        """
+    )
+    async with engine.connect() as connection:
+        row = (await connection.execute(statement)).mappings().one()
+    return DataCoverage(
+        nse_eq_securities=int(row["nse_eq_securities"] or 0),
+        provider_instruments=int(row["provider_instruments"] or 0),
+        financial_facts=int(row["financial_facts"] or 0),
+        corporate_events=int(row["corporate_events"] or 0),
+        sources=int(row["sources"] or 0),
+        evidence_chunks=int(row["evidence_chunks"] or 0),
+        embedded_evidence_chunks=int(row["embedded_evidence_chunks"] or 0),
+        market_bars=int(row["market_bars"] or 0),
+        benchmark_bars=int(row["benchmark_bars"] or 0),
+        macro_observations=int(row["macro_observations"] or 0),
+        security_metrics=int(row["security_metrics"] or 0),
+        enabled_official_feeds=int(row["enabled_official_feeds"] or 0),
+        latest_financial_period=row["latest_financial_period"],
+        latest_corporate_event=row["latest_corporate_event"],
+        latest_market_bar=row["latest_market_bar"],
+        latest_benchmark_bar=row["latest_benchmark_bar"],
+        latest_macro_observation=row["latest_macro_observation"],
+    )
+
+
+def evaluate_data_coverage(
+    coverage: DataCoverage,
+    *,
+    min_nse_eq_securities: int = 1000,
+) -> DataCoverageReport:
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if coverage.nse_eq_securities < min_nse_eq_securities:
+        errors.append(
+            "NSE EQ security master is below the production threshold: "
+            f"{coverage.nse_eq_securities} < {min_nse_eq_securities}."
+        )
+    if coverage.provider_instruments < coverage.nse_eq_securities:
+        warnings.append(
+            "Provider instrument coverage is lower than the NSE security universe; "
+            "some symbols may not resolve to market-data adapters."
+        )
+    if coverage.financial_facts == 0:
+        warnings.append("No normalized financial facts are populated.")
+    if coverage.corporate_events == 0 or coverage.evidence_chunks == 0:
+        warnings.append("No parsed corporate-event filing evidence is populated.")
+    if coverage.market_bars == 0:
+        warnings.append("No stored security market bars are populated.")
+    if coverage.benchmark_bars == 0:
+        warnings.append("No NIFTY/India VIX benchmark bars are populated.")
+    if coverage.macro_observations == 0:
+        warnings.append("No India/global macro observations are populated.")
+    if coverage.security_metrics == 0:
+        warnings.append("No comparable/security metrics are populated for peer analysis.")
+    if coverage.sources > 0 and coverage.evidence_chunks > 0 and coverage.embedded_evidence_chunks == 0:
+        warnings.append("Evidence exists but semantic embedding backfill has not populated vectors.")
+    if coverage.enabled_official_feeds == 0:
+        warnings.append(
+            "No official automated data feeds are enabled; this is expected until the approved "
+            "NSE/BSE production-data strategy is activated."
+        )
+
+    return DataCoverageReport(
+        coverage=coverage,
+        errors=tuple(errors),
+        warnings=tuple(warnings),
+    )
+
+
+def _iso(value: date | datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
