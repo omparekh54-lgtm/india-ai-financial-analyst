@@ -38,7 +38,7 @@ class TranscriptSegment(BaseModel):
     text: str = Field(min_length=1, max_length=12000)
 
     @model_validator(mode="after")
-    def validate_timing(self) -> "TranscriptSegment":
+    def validate_timing(self) -> TranscriptSegment:
         if (
             self.start_seconds is not None
             and self.end_seconds is not None
