@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from pydantic import BaseModel, Field
 
 
 class SecurityRecord(BaseModel):
+    id: UUID | None = None
     legal_name: str
     nse_symbol: str | None = None
     bse_code: str | None = None
