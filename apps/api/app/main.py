@@ -14,6 +14,7 @@ from app.auth import AuthenticatedUser, require_authenticated_user
 from app.brokers.repository import BrokerRepository
 from app.brokers.upstox_oauth import UpstoxOAuthError, UpstoxOAuthService
 from app.core.config import get_settings
+from app.core.readiness import assert_production_ready, audit_settings
 from app.db import create_database_engine, database_health
 from app.orchestration.plan import AnalysisMode, build_research_plan
 from app.providers.router import Capability, ProviderRouter
@@ -33,6 +34,7 @@ if settings.sentry_dsn:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    assert_production_ready(settings)
     yield
     if settings.database_url:
         await create_database_engine(settings.database_url).dispose()
@@ -40,7 +42,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.5.0",
+    version="0.6.0",
     default_response_class=ORJSONResponse,
     lifespan=lifespan,
 )
@@ -87,6 +89,26 @@ async def health() -> dict[str, object]:
         "external_llm_calls_enabled": settings.enable_external_llm_calls,
         "external_data_calls_enabled": settings.enable_external_data_calls,
     }
+
+
+@app.get("/ready", response_class=ORJSONResponse)
+async def readiness() -> ORJSONResponse:
+    config_report = audit_settings(settings)
+    db_ok = None
+    if settings.database_url:
+        db_ok = await database_health(create_database_engine(settings.database_url))
+    ready = config_report.ready and db_ok is not False
+    return ORJSONResponse(
+        status_code=200 if ready else 503,
+        content={
+            "status": "ready" if ready else "not_ready",
+            "service": settings.app_name,
+            "environment": settings.app_env,
+            "time": datetime.now(UTC).isoformat(),
+            "database_healthy": db_ok,
+            **config_report.as_dict(),
+        },
+    )
 
 
 @app.get("/v1/system/provider-routing")
