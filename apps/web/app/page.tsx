@@ -1,6 +1,12 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
+import type { FormEvent } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+import { getSupabaseBrowserClient } from "../lib/supabase";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 const agents = [
   "Market & Microstructure",
@@ -73,25 +79,132 @@ type ResearchResponse = {
   agents: AgentSummary[];
 };
 
+type ResearchJobSummary = {
+  id: string;
+  query: string;
+  status: string;
+  mode: string;
+  created_at: string;
+  completed_at?: string | null;
+  legal_name?: string | null;
+  nse_symbol?: string | null;
+  bse_code?: string | null;
+  data_confidence?: number | null;
+};
+
 export default function HomePage() {
+  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
+  const [session, setSession] = useState<Session | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [authMode, setAuthMode] = useState<"sign_in" | "sign_up">("sign_in");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState("full_analysis");
   const [result, setResult] = useState<ResearchResponse | null>(null);
+  const [history, setHistory] = useState<ResearchJobSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!supabase) {
+      setAuthReady(true);
+      return;
+    }
+
+    let active = true;
+    void supabase.auth.getSession().then(({ data }) => {
+      if (!active) return;
+      setSession(data.session);
+      setAuthReady(true);
+    });
+    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setAuthReady(true);
+    });
+
+    return () => {
+      active = false;
+      data.subscription.unsubscribe();
+    };
+  }, [supabase]);
+
+  useEffect(() => {
+    if (!session) {
+      setHistory([]);
+      return;
+    }
+    void loadHistory(session.access_token).then(setHistory).catch(() => setHistory([]));
+  }, [session]);
+
+  async function submitAuth(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase) {
+      setAuthMessage("Supabase browser authentication is not configured.");
+      return;
+    }
+    if (!email.trim() || !password) return;
+
+    setAuthLoading(true);
+    setAuthMessage(null);
+    setError(null);
+    try {
+      if (authMode === "sign_up") {
+        const { data, error: signUpError } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+        });
+        if (signUpError) throw signUpError;
+        if (data.session) {
+          setAuthMessage("Account created and signed in.");
+        } else {
+          setAuthMessage("Account created. Check your email to confirm the account, then sign in.");
+          setAuthMode("sign_in");
+        }
+      } else {
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        });
+        if (signInError) throw signInError;
+        setPassword("");
+        setAuthMessage("Signed in. Your research runs are private to this account.");
+      }
+    } catch (authError) {
+      setAuthMessage(authError instanceof Error ? authError.message : "Authentication failed");
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function signOut() {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setResult(null);
+    setHistory([]);
+    setAuthMessage("Signed out.");
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!query.trim()) return;
+    if (!session) {
+      setError("Sign in before starting a research run.");
+      return;
+    }
 
     setLoading(true);
     setError(null);
     setResult(null);
     try {
-      const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-      const response = await fetch(`${apiBase}/v1/research/run`, {
+      const response = await fetch(`${API_BASE}/v1/research/run`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({ query: query.trim(), mode }),
       });
       const body = await response.json();
@@ -99,6 +212,7 @@ export default function HomePage() {
         throw new Error(body?.detail ?? `API returned ${response.status}`);
       }
       setResult(body as ResearchResponse);
+      setHistory(await loadHistory(session.access_token));
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to run research");
     } finally {
@@ -125,6 +239,23 @@ export default function HomePage() {
           NSE/BSE market context, filings, fundamentals, governance, valuation, derivatives and
           source-linked research with an independent validation gate.
         </p>
+
+        <AuthPanel
+          ready={authReady}
+          configured={Boolean(supabase)}
+          session={session}
+          mode={authMode}
+          email={email}
+          password={password}
+          loading={authLoading}
+          message={authMessage}
+          onMode={setAuthMode}
+          onEmail={setEmail}
+          onPassword={setPassword}
+          onSubmit={submitAuth}
+          onSignOut={signOut}
+        />
+
         <form className="searchCard" onSubmit={submit}>
           <input
             aria-label="Company or ticker"
@@ -132,8 +263,8 @@ export default function HomePage() {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
-          <button type="submit" disabled={loading}>
-            {loading ? "Researching…" : "Analyze"}
+          <button type="submit" disabled={loading || !session}>
+            {loading ? "Researching…" : session ? "Analyze" : "Sign in to analyze"}
           </button>
         </form>
         <div className="quickModes">
@@ -149,22 +280,163 @@ export default function HomePage() {
           ))}
         </div>
         {loading ? (
-          <p className="runStatus">Resolving security → collecting evidence → analyzing → validating → composing report…</p>
+          <p className="runStatus">
+            Resolving security → collecting evidence → analyzing → validating → composing report…
+          </p>
         ) : null}
         {error ? <p className="errorText">{error}</p> : null}
       </section>
 
       {result ? <ResearchResult result={result} /> : <PipelineOverview />}
+      {session ? <RecentResearch jobs={history} /> : null}
 
       <section className="confidenceGrid">
         {confidenceCards.map(([label, value]) => (
           <article key={label} className="metricCard">
             <span>{label}</span>
-            <strong>{typeof value === "number" && value > 0 ? `${Math.round(value * 100)}%` : "—"}</strong>
+            <strong>
+              {typeof value === "number" && value > 0 ? `${Math.round(value * 100)}%` : "—"}
+            </strong>
           </article>
         ))}
       </section>
     </main>
+  );
+}
+
+function AuthPanel({
+  ready,
+  configured,
+  session,
+  mode,
+  email,
+  password,
+  loading,
+  message,
+  onMode,
+  onEmail,
+  onPassword,
+  onSubmit,
+  onSignOut,
+}: {
+  ready: boolean;
+  configured: boolean;
+  session: Session | null;
+  mode: "sign_in" | "sign_up";
+  email: string;
+  password: string;
+  loading: boolean;
+  message: string | null;
+  onMode: (mode: "sign_in" | "sign_up") => void;
+  onEmail: (value: string) => void;
+  onPassword: (value: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onSignOut: () => void | Promise<void>;
+}) {
+  if (!ready) {
+    return <div className="authCard"><span>Checking secure session…</span></div>;
+  }
+  if (!configured) {
+    return (
+      <div className="authCard authWarning">
+        <strong>Authentication configuration required</strong>
+        <span>Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY.</span>
+      </div>
+    );
+  }
+  if (session) {
+    return (
+      <div className="authCard signedInCard">
+        <div>
+          <span className="secureBadge">PRIVATE RESEARCH</span>
+          <strong>{session.user.email ?? "Authenticated analyst"}</strong>
+          <small>Runs and reports are isolated to your account.</small>
+        </div>
+        <button type="button" className="secondaryButton" onClick={() => void onSignOut()}>
+          Sign out
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <form className="authCard authForm" onSubmit={onSubmit}>
+      <div className="authTabs">
+        <button
+          type="button"
+          className={mode === "sign_in" ? "authTabActive" : undefined}
+          onClick={() => onMode("sign_in")}
+        >
+          Sign in
+        </button>
+        <button
+          type="button"
+          className={mode === "sign_up" ? "authTabActive" : undefined}
+          onClick={() => onMode("sign_up")}
+        >
+          Create account
+        </button>
+      </div>
+      <div className="authFields">
+        <input
+          aria-label="Email"
+          type="email"
+          autoComplete="email"
+          placeholder="analyst@example.com"
+          value={email}
+          onChange={(event) => onEmail(event.target.value)}
+          required
+        />
+        <input
+          aria-label="Password"
+          type="password"
+          autoComplete={mode === "sign_in" ? "current-password" : "new-password"}
+          placeholder="Password"
+          value={password}
+          onChange={(event) => onPassword(event.target.value)}
+          minLength={8}
+          required
+        />
+        <button type="submit" disabled={loading}>
+          {loading ? "Please wait…" : mode === "sign_in" ? "Sign in" : "Create account"}
+        </button>
+      </div>
+      {message ? <small className="authMessage">{message}</small> : null}
+    </form>
+  );
+}
+
+function RecentResearch({ jobs }: { jobs: ResearchJobSummary[] }) {
+  return (
+    <section className="panel historyPanel">
+      <div>
+        <p className="eyebrow">YOUR PRIVATE RESEARCH</p>
+        <h2>Recent runs</h2>
+      </div>
+      {jobs.length ? (
+        <div className="historyList">
+          {jobs.slice(0, 8).map((job) => (
+            <article className="historyRow" key={job.id}>
+              <div>
+                <strong>{job.legal_name ?? job.query}</strong>
+                <span>
+                  {job.nse_symbol ? `NSE: ${job.nse_symbol} · ` : ""}
+                  {humanize(job.mode)}
+                </span>
+              </div>
+              <div className="historyMeta">
+                <span className={`claimStatus ${job.status === "completed" ? "verified" : "pending"}`}>
+                  {job.status}
+                </span>
+                <small>{formatDate(job.completed_at ?? job.created_at)}</small>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="mutedText">No research runs yet for this account.</p>
+      )}
+    </section>
   );
 }
 
@@ -313,10 +585,24 @@ function PipelineOverview() {
   );
 }
 
+async function loadHistory(accessToken: string): Promise<ResearchJobSummary[]> {
+  const response = await fetch(`${API_BASE}/v1/research/jobs?limit=20`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) return [];
+  const body = await response.json();
+  return Array.isArray(body?.jobs) ? body.jobs as ResearchJobSummary[] : [];
+}
+
 function humanize(value: string) {
   return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function safeExternalHref(uri: string) {
   return uri.startsWith("https://") ? uri : "#";
+}
+
+function formatDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
