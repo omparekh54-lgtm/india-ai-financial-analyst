@@ -144,6 +144,20 @@ def test_partial_provenance_is_a_hard_readiness_failure() -> None:
     assert any("95/100 are source-linked" in error for error in report.errors)
 
 
+def test_unsourced_corporate_events_fail_even_before_document_parsing() -> None:
+    report = evaluate_data_coverage(
+        _coverage(
+            corporate_events=3,
+            sourced_corporate_events=2,
+            evidence_chunks=0,
+            embedded_evidence_chunks=0,
+        )
+    )
+    assert report.ready is False
+    assert any("2/3 are source-linked" in error for error in report.errors)
+    assert any("No parsed corporate-event filing evidence" in warning for warning in report.warnings)
+
+
 def test_fully_sourced_material_data_has_no_provenance_error() -> None:
     report = evaluate_data_coverage(_coverage())
     assert report.ready is True
