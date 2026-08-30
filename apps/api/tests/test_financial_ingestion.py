@@ -29,13 +29,13 @@ def test_financial_normalization_derives_free_cash_flow() -> None:
                 name="Capital Expenditure",
                 period_end=period_end,
                 period_type="annual",
-                value=Decimal("300"),
+                value=Decimal(300),
                 unit="INR cr",
             ),
         ]
     )
 
     by_name = {fact.fact_name: fact for fact in facts}
-    assert by_name["free_cash_flow"].value == Decimal("950")
+    assert by_name["free_cash_flow"].value == Decimal(950)
     assert by_name["free_cash_flow"].metadata["derived"] is True
     assert by_name["cfo"].period_type == "annual"
