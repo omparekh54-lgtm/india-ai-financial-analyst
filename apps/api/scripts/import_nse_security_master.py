@@ -7,7 +7,6 @@ import hashlib
 import io
 import json
 import re
-from collections.abc import Iterable
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -63,8 +62,8 @@ def validate_rows(rows: list[dict[str, str]], *, min_rows: int) -> dict[str, obj
             f"NSE security master contains only {len(rows)} rows; minimum expected is {min_rows}"
         )
 
-    duplicate_symbols = _duplicates(row["symbol"] for row in rows)
-    duplicate_isins = _duplicates(row["isin"] for row in rows)
+    duplicate_symbols = _duplicates([row["symbol"] for row in rows])
+    duplicate_isins = _duplicates([row["isin"] for row in rows])
     if duplicate_symbols or duplicate_isins:
         raise ValueError(
             "NSE security master contains duplicate identifiers: "
@@ -78,7 +77,7 @@ def validate_rows(rows: list[dict[str, str]], *, min_rows: int) -> dict[str, obj
     }
 
 
-def _duplicates(values: Iterable[str]) -> list[str]:
+def _duplicates(values: list[str]) -> list[str]:
     seen: set[str] = set()
     duplicates: set[str] = set()
     for value in values:
