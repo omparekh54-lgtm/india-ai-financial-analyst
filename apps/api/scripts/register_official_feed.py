@@ -47,7 +47,7 @@ async def _register(args: argparse.Namespace) -> str:
 
     parser_config = json.loads(args.parser_config)
     if not isinstance(parser_config, dict):
-        raise ValueError("--parser-config must be a JSON object")
+        raise TypeError("--parser-config must be a JSON object")
 
     parameters = {
         "name": args.name,
@@ -59,6 +59,7 @@ async def _register(args: argparse.Namespace) -> str:
         "title": args.title,
         "parser_config": json.dumps(parser_config),
         "poll_interval_seconds": max(300, min(args.poll_interval_seconds, 86400)),
+        "enabled": not args.disabled,
     }
     engine = create_database_engine(settings.database_url)
     try:
@@ -71,7 +72,8 @@ async def _register(args: argparse.Namespace) -> str:
                         title, parser_config, poll_interval_seconds, enabled, next_run_at
                     ) values (
                         :name, :provider, :feed_type, :source_url, :exchange, :identifier,
-                        :title, cast(:parser_config as jsonb), :poll_interval_seconds, true, now()
+                        :title, cast(:parser_config as jsonb), :poll_interval_seconds,
+                        :enabled, now()
                     )
                     on conflict do nothing
                     returning id
@@ -106,8 +108,12 @@ async def _register(args: argparse.Namespace) -> str:
                             title = :title,
                             parser_config = cast(:parser_config as jsonb),
                             poll_interval_seconds = :poll_interval_seconds,
-                            enabled = true,
-                            next_run_at = least(next_run_at, now()),
+                            enabled = :enabled,
+                            next_run_at = case
+                              when :enabled then least(next_run_at, now())
+                              else next_run_at
+                            end,
+                            lease_until = case when :enabled then lease_until else null end,
                             updated_at = now()
                         where id = :feed_id
                         """
@@ -130,6 +136,11 @@ def main() -> int:
     parser.add_argument("--title")
     parser.add_argument("--poll-interval-seconds", type=int, default=900)
     parser.add_argument("--parser-config", default="{}")
+    parser.add_argument(
+        "--disabled",
+        action="store_true",
+        help="Register/update the feed but keep it disabled until explicitly activated.",
+    )
     args = parser.parse_args()
     feed_id = asyncio.run(_register(args))
     print(feed_id)
