@@ -35,6 +35,9 @@ dependencies = [
 embeddings = [
   "sentence-transformers>=5,<6"
 ]
+live_market = [
+  "upstox-python-sdk>=2.23,<3"
+]
 dev = [
   "pytest>=8.4,<9",
   "pytest-asyncio>=1.1,<2",
