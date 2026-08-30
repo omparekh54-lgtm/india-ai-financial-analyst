@@ -103,6 +103,11 @@ type ResearchJobSummary = {
   data_confidence?: number | null;
 };
 
+type StoredResearchJob = ResearchJobSummary & {
+  security_id?: string | null;
+  report_json?: ResearchReport | null;
+};
+
 export default function HomePage() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const [session, setSession] = useState<Session | null>(null);
@@ -116,6 +121,7 @@ export default function HomePage() {
   const [mode, setMode] = useState("full_analysis");
   const [result, setResult] = useState<ResearchResponse | null>(null);
   const [history, setHistory] = useState<ResearchJobSummary[]>([]);
+  const [historyLoadingId, setHistoryLoadingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -195,6 +201,7 @@ export default function HomePage() {
     await supabase.auth.signOut();
     setResult(null);
     setHistory([]);
+    setHistoryLoadingId(null);
     setAuthMessage("Signed out.");
   }
 
@@ -228,6 +235,31 @@ export default function HomePage() {
       setError(requestError instanceof Error ? requestError.message : "Unable to run research");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function openSavedResearch(jobId: string) {
+    if (!session) return;
+    setHistoryLoadingId(jobId);
+    setError(null);
+    try {
+      const stored = await loadResearchJob(session.access_token, jobId);
+      if (!stored.report_json) {
+        throw new Error("This research run does not have a saved report yet.");
+      }
+      setResult({
+        job_id: stored.id,
+        security_id: stored.security_id ?? null,
+        report: stored.report_json,
+        agents: [],
+      });
+      setQuery(stored.query);
+      setMode(stored.mode);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to open saved research");
+    } finally {
+      setHistoryLoadingId(null);
     }
   }
 
@@ -299,7 +331,13 @@ export default function HomePage() {
       </section>
 
       {result ? <ResearchResult result={result} /> : <PipelineOverview />}
-      {session ? <RecentResearch jobs={history} /> : null}
+      {session ? (
+        <RecentResearch
+          jobs={history}
+          loadingId={historyLoadingId}
+          onOpen={(jobId) => void openSavedResearch(jobId)}
+        />
+      ) : null}
 
       <section className="confidenceGrid">
         {confidenceCards.map(([label, value]) => (
@@ -417,7 +455,15 @@ function AuthPanel({
   );
 }
 
-function RecentResearch({ jobs }: { jobs: ResearchJobSummary[] }) {
+function RecentResearch({
+  jobs,
+  loadingId,
+  onOpen,
+}: {
+  jobs: ResearchJobSummary[];
+  loadingId: string | null;
+  onOpen: (jobId: string) => void;
+}) {
   return (
     <section className="panel historyPanel">
       <div>
@@ -427,7 +473,13 @@ function RecentResearch({ jobs }: { jobs: ResearchJobSummary[] }) {
       {jobs.length ? (
         <div className="historyList">
           {jobs.slice(0, 8).map((job) => (
-            <article className="historyRow" key={job.id}>
+            <button
+              type="button"
+              className="historyRow"
+              key={job.id}
+              disabled={job.status !== "completed" || Boolean(loadingId)}
+              onClick={() => onOpen(job.id)}
+            >
               <div>
                 <strong>{job.legal_name ?? job.query}</strong>
                 <span>
@@ -437,11 +489,11 @@ function RecentResearch({ jobs }: { jobs: ResearchJobSummary[] }) {
               </div>
               <div className="historyMeta">
                 <span className={`claimStatus ${job.status === "completed" ? "verified" : "pending"}`}>
-                  {job.status}
+                  {loadingId === job.id ? "opening" : job.status}
                 </span>
                 <small>{formatDate(job.completed_at ?? job.created_at)}</small>
               </div>
-            </article>
+            </button>
           ))}
         </div>
       ) : (
@@ -502,18 +554,20 @@ function ResearchResult({ result }: { result: ResearchResponse }) {
         ))}
       </section>
 
-      <section className="panel agentRunPanel">
-        <p className="eyebrow">AGENT EXECUTION</p>
-        <div className="agentGrid">
-          {result.agents.map((agent) => (
-            <article key={agent.agent} className="agentCard">
-              <span className={agent.ok ? "statusDot" : "statusDot warningDot"} />
-              <strong>{humanize(agent.agent)}</strong>
-              <small>{agent.claim_count} claims · {agent.evidence_count} evidence refs</small>
-            </article>
-          ))}
-        </div>
-      </section>
+      {result.agents.length ? (
+        <section className="panel agentRunPanel">
+          <p className="eyebrow">AGENT EXECUTION</p>
+          <div className="agentGrid">
+            {result.agents.map((agent) => (
+              <article key={agent.agent} className="agentCard">
+                <span className={agent.ok ? "statusDot" : "statusDot warningDot"} />
+                <strong>{humanize(agent.agent)}</strong>
+                <small>{agent.claim_count} claims · {agent.evidence_count} evidence refs</small>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {report.research_disclaimer ? <p className="disclaimer">{report.research_disclaimer}</p> : null}
     </>
@@ -659,6 +713,17 @@ async function loadHistory(accessToken: string): Promise<ResearchJobSummary[]> {
   if (!response.ok) return [];
   const body = await response.json();
   return Array.isArray(body?.jobs) ? body.jobs as ResearchJobSummary[] : [];
+}
+
+async function loadResearchJob(accessToken: string, jobId: string): Promise<StoredResearchJob> {
+  const response = await fetch(`${API_BASE}/v1/research/jobs/${encodeURIComponent(jobId)}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const body = await response.json();
+  if (!response.ok) {
+    throw new Error(body?.detail ?? `API returned ${response.status}`);
+  }
+  return body as StoredResearchJob;
 }
 
 function humanize(value: string) {
