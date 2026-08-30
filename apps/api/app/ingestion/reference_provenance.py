@@ -103,7 +103,7 @@ def parse_optional_datetime(value: str | None) -> datetime | None:
 async def upsert_reference_source(
     engine: AsyncEngine,
     *,
-    security_id: UUID,
+    security_id: UUID | None,
     source_type: str,
     source_uri: str,
     title: str,
@@ -146,7 +146,7 @@ async def upsert_reference_source(
                     """
                     select id
                     from sources
-                    where security_id = :security_id
+                    where security_id is not distinct from :security_id
                       and source_uri = :source_uri
                       and coalesce(published_at, '1970-01-01 00:00:00+00'::timestamptz)
                           = coalesce(
