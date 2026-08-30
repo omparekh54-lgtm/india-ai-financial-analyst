@@ -105,17 +105,14 @@ async def test_upstox_rejects_expired_token_response() -> None:
         await adapter.quote("NSE_EQ|INE848E01016")
 
 
-def test_upstox_rejects_unsupported_history_interval() -> None:
+@pytest.mark.asyncio
+async def test_upstox_rejects_unsupported_history_interval() -> None:
     adapter = UpstoxMarketDataAdapter("test-token")
 
     with pytest.raises(ValueError, match="Unsupported Upstox interval"):
-        import asyncio
-
-        asyncio.run(
-            adapter.history(
-                "NSE_EQ|INE848E01016",
-                interval="6h",
-                start=datetime(2026, 8, 29, tzinfo=UTC),
-                end=datetime(2026, 8, 30, tzinfo=UTC),
-            )
+        await adapter.history(
+            "NSE_EQ|INE848E01016",
+            interval="6h",
+            start=datetime(2026, 8, 29, tzinfo=UTC),
+            end=datetime(2026, 8, 30, tzinfo=UTC),
         )
