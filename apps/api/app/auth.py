@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Annotated
 from uuid import UUID
 
 import httpx
@@ -10,6 +11,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.core.config import Settings, get_settings
 
 _bearer = HTTPBearer(auto_error=False)
+BearerCredentials = Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)]
+SettingsDependency = Annotated[Settings, Depends(get_settings)]
 
 
 @dataclass(frozen=True)
@@ -90,8 +93,8 @@ def authenticated_user_from_payload(payload: object) -> AuthenticatedUser:
 
 
 async def require_authenticated_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
-    settings: Settings = Depends(get_settings),
+    credentials: BearerCredentials,
+    settings: SettingsDependency,
 ) -> AuthenticatedUser:
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise _unauthorized("Bearer authentication is required")
