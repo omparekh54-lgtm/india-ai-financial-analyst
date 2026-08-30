@@ -22,10 +22,26 @@ type BrokerStatusResponse = {
   connections: BrokerConnection[];
 };
 
+type DataReadinessResponse = {
+  ready: boolean;
+  errors: string[];
+  warnings: string[];
+  coverage: {
+    nse_eq_securities: number;
+    provider_instruments: number;
+    financial_facts: number;
+    evidence_chunks: number;
+    market_bars: number;
+    benchmark_bars: number;
+    macro_observations: number;
+  };
+};
+
 export function BrokerConnectionBar() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const [session, setSession] = useState<Session | null>(null);
   const [status, setStatus] = useState<BrokerStatusResponse | null>(null);
+  const [dataReadiness, setDataReadiness] = useState<DataReadinessResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -47,11 +63,15 @@ export function BrokerConnectionBar() {
   useEffect(() => {
     if (!session) {
       setStatus(null);
+      setDataReadiness(null);
       return;
     }
     void loadBrokerStatus(session.access_token)
       .then(setStatus)
       .catch(() => setStatus(null));
+    void loadDataReadiness(session.access_token)
+      .then(setDataReadiness)
+      .catch(() => setDataReadiness(null));
   }, [session]);
 
   useEffect(() => {
@@ -59,14 +79,20 @@ export function BrokerConnectionBar() {
     if (params.get("broker") !== "upstox") return;
     const callbackStatus = params.get("status");
     if (callbackStatus === "connected") {
-      setMessage("Upstox connected securely. Fresh market snapshots can be used when live market is enabled.");
+      setMessage(
+        "Upstox connected securely. Fresh market snapshots can be used when live market is enabled.",
+      );
     } else if (callbackStatus === "error") {
       setMessage("Upstox connection was not completed. You can retry the secure login flow.");
     }
     params.delete("broker");
     params.delete("status");
     const query = params.toString();
-    window.history.replaceState({}, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
+    window.history.replaceState(
+      {},
+      "",
+      `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`,
+    );
   }, []);
 
   useEffect(() => {
@@ -80,6 +106,19 @@ export function BrokerConnectionBar() {
 
   const upstox = status?.connections.find((item) => item.provider === "upstox") ?? null;
   const connected = Boolean(upstox?.connected);
+  const corpusComplete = Boolean(dataReadiness?.ready && dataReadiness.warnings.length === 0);
+  const corpusDetail = dataReadiness
+    ? dataReadiness.ready
+      ? dataReadiness.warnings[0] ?? "Coverage and freshness checks passed"
+      : dataReadiness.errors[0] ?? "Production data bootstrap is required"
+    : "Checking security universe, evidence and market coverage…";
+  const corpusBadge = dataReadiness
+    ? corpusComplete
+      ? "CORPUS READY"
+      : dataReadiness.ready
+        ? "COVERAGE INCOMPLETE"
+        : "BOOTSTRAP REQUIRED"
+    : "CHECKING CORPUS";
 
   async function connect() {
     if (!session) return;
@@ -124,7 +163,7 @@ export function BrokerConnectionBar() {
   }
 
   return (
-    <aside className="brokerBar" aria-label="Live market connection">
+    <aside className="brokerBar" aria-label="Research and market data status">
       <div className="brokerBarInner">
         <div className="brokerIdentity">
           <span className={connected ? "statusDot" : "statusDot warningDot"} />
@@ -137,7 +176,15 @@ export function BrokerConnectionBar() {
             </small>
           </div>
         </div>
+        <div className="brokerIdentity">
+          <span className={corpusComplete ? "statusDot" : "statusDot warningDot"} />
+          <div>
+            <strong>Research corpus</strong>
+            <small>{corpusDetail}</small>
+          </div>
+        </div>
         <div className="brokerControls">
+          <span className={corpusComplete ? "liveBadge" : "safeBadge"}>{corpusBadge}</span>
           <span className={status?.live_market_enabled ? "liveBadge" : "safeBadge"}>
             {status?.live_market_enabled ? "LIVE OVERLAY ON" : "LIVE OVERLAY OFF"}
           </span>
@@ -165,6 +212,17 @@ async function loadBrokerStatus(accessToken: string): Promise<BrokerStatusRespon
     throw new Error(body?.detail ?? "Unable to load broker status");
   }
   return body as BrokerStatusResponse;
+}
+
+async function loadDataReadiness(accessToken: string): Promise<DataReadinessResponse> {
+  const response = await fetch(`${API_BASE}/v1/system/data-readiness`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const body = await response.json();
+  if (!response.ok) {
+    throw new Error(body?.detail ?? "Unable to load research data readiness");
+  }
+  return body as DataReadinessResponse;
 }
 
 function formatDate(value: string) {
