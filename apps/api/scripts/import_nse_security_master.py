@@ -12,7 +12,6 @@ from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import text
-
 from app.core.config import get_settings
 from app.db import create_database_engine
 
