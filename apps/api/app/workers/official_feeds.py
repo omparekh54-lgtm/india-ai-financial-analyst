@@ -5,8 +5,9 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from app.connectors.http_fetcher import SafeHttpFetcher
+from app.connectors.http_fetcher import FetchedDocument, SafeHttpFetcher
 from app.connectors.india_official import MacroSeriesSpec
+from app.connectors.nse_public import NsePublicAnnouncementsFetcher
 from app.ingestion.exchange_documents import ExchangeDocumentIngestor
 from app.ingestion.india_official import OfficialIndiaIngestionService
 from app.ingestion.official_pipeline import OFFICIAL_INDIA_DOMAINS
@@ -27,6 +28,7 @@ class OfficialFeedWorker:
         self.external_data_enabled = external_data_enabled
         self.repository = OfficialFeedRepository(engine)
         self.fetcher = SafeHttpFetcher(allowed_domains=OFFICIAL_INDIA_DOMAINS)
+        self.nse_public = NsePublicAnnouncementsFetcher()
         self.ingestion = OfficialIndiaIngestionService(engine)
         self.documents = ExchangeDocumentIngestor(engine)
 
@@ -75,7 +77,7 @@ class OfficialFeedWorker:
 
     async def _run_claim(self, claim: ClaimedFeed) -> dict[str, object]:
         headers = _conditional_headers(claim)
-        document = await self.fetcher.fetch(claim.feed.source_url, headers=headers or None)
+        document = await self._fetch_claim_source(claim, headers=headers or None)
 
         if document.not_modified:
             await self.repository.complete(
@@ -105,6 +107,17 @@ class OfficialFeedWorker:
             "status": "success",
             "result": result,
         }
+
+    async def _fetch_claim_source(
+        self,
+        claim: ClaimedFeed,
+        *,
+        headers: dict[str, str] | None,
+    ) -> FetchedDocument:
+        fetch_mode = str(claim.feed.parser_config.get("fetch_mode") or "").strip()
+        if claim.feed.provider == "NSE" and fetch_mode == "nse_public_session":
+            return await self.nse_public.fetch(claim.feed.source_url, headers=headers)
+        return await self.fetcher.fetch(claim.feed.source_url, headers=headers)
 
     async def _dispatch(
         self,
