@@ -13,7 +13,11 @@ from app.connectors.india_official import (
     parse_nsdl_flows,
     parse_rbi_macro_series,
 )
-from app.ingestion.exchange import ExchangeDisclosure, ExchangeDisclosureIngestor
+from app.ingestion.exchange import (
+    ExchangeDisclosure,
+    ExchangeDisclosureIngestor,
+    should_follow_exchange_document,
+)
 from app.ingestion.financials import FinancialFactIngestor
 from app.ingestion.macro import MacroObservationIngestor
 from app.ingestion.xbrl_financials import parse_financial_xbrl
@@ -59,6 +63,7 @@ class OfficialIndiaIngestionService:
         ingested = 0
         unmatched: list[str] = []
         event_types: dict[str, int] = {}
+        document_candidates: list[dict[str, object]] = []
         for record in records:
             identifier = record.nse_symbol if record.exchange == "NSE" else record.bse_code
             security_id = (
@@ -93,6 +98,27 @@ class OfficialIndiaIngestionService:
             ingested += 1
             event_types[result.event_type] = event_types.get(result.event_type, 0) + 1
 
+            if should_follow_exchange_document(result.event_type) and (
+                record.attachment_url or record.xbrl_url
+            ):
+                document_candidates.append(
+                    {
+                        "event_id": str(result.event_id),
+                        "source_id": str(result.source_id),
+                        "security_id": str(security_id),
+                        "exchange": record.exchange,
+                        "identifier": identifier,
+                        "company_name": record.company_name,
+                        "headline": record.headline,
+                        "event_type": result.event_type,
+                        "published_at": record.published_at.isoformat()
+                        if record.published_at
+                        else None,
+                        "attachment_url": record.attachment_url,
+                        "xbrl_url": record.xbrl_url,
+                    }
+                )
+
         return {
             "exchange": exchange.strip().upper(),
             "parsed_count": len(records),
@@ -100,6 +126,7 @@ class OfficialIndiaIngestionService:
             "unmatched_count": len(records) - ingested,
             "unmatched_identifiers": sorted(set(unmatched)),
             "event_types": event_types,
+            "document_candidates": document_candidates,
         }
 
     async def ingest_financial_xbrl(
