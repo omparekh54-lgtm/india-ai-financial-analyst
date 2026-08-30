@@ -7,7 +7,7 @@ from app.calculations.technicals import atr, macd, realized_volatility, rsi
 
 
 class TechnicalDerivativesAgent:
-    """Deterministic technical layer; derivatives fields are added when live broker data exists."""
+    """Deterministic technical layer; derivatives fields are added with broker data."""
 
     async def run(self, agent_input: AgentInput) -> AgentOutput:
         bars = agent_input.context.get("market_bars") or []
@@ -39,19 +39,26 @@ class TechnicalDerivativesAgent:
             "atr_14": _last_valid(atr(high, low, close)),
             "realized_volatility_20d": _last_valid(realized_volatility(close)),
         }
+        evidence_ids = [item.evidence_id for item in agent_input.evidence]
         claims = [
             Claim(
                 agent=AgentName.TECHNICAL,
                 statement=f"{name} calculated as {value:.4f}",
                 claim_type="calculation",
-                confidence=1.0,
-                status="verified",
+                confidence=0.99,
+                evidence_ids=evidence_ids,
+                status="pending",
                 data={"metric": name, "value": value},
             )
             for name, value in metrics.items()
             if value is not None
         ]
-        return AgentOutput(agent=AgentName.TECHNICAL, claims=claims, metrics=metrics)
+        return AgentOutput(
+            agent=AgentName.TECHNICAL,
+            claims=claims,
+            evidence=agent_input.evidence,
+            metrics=metrics,
+        )
 
 
 def _last_valid(series: pd.Series) -> float | None:
