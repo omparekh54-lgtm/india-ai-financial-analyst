@@ -27,7 +27,46 @@ def _methods(websocket: FakeWebSocket) -> list[str]:
     return [str(message["method"]) for message in websocket.messages]
 
 
-def test_accumulate_quotes_extracts_ltpc_depth_volume_and_status() -> None:
+def test_accumulate_quotes_extracts_default_ltpc_feed() -> None:
+    security_id = uuid4()
+    now = datetime.now(UTC)
+    millis = int(now.timestamp() * 1000)
+    pending: dict[str, dict[str, object]] = {}
+    _accumulate_quotes(
+        {
+            "type": "live_feed",
+            "currentTs": str(millis),
+            "feeds": {
+                "NSE_EQ|INE002A01018": {
+                    "ltpc": {
+                        "ltp": 3005.75,
+                        "ltt": str(millis),
+                        "ltq": "50",
+                        "cp": 2999.10,
+                    }
+                }
+            },
+        },
+        {
+            "NSE_EQ|INE002A01018": {
+                "security_id": security_id,
+                "mode": "ltpc",
+            }
+        },
+        {"NSE_EQ": "NORMAL_OPEN"},
+        pending,
+    )
+
+    quote = pending["NSE_EQ|INE002A01018"]
+    assert quote["security_id"] == security_id
+    assert quote["last_price"] == 3005.75
+    assert quote["close_price"] == 2999.10
+    assert quote["market_status"] == "NORMAL_OPEN"
+    assert quote["bid"] is None
+    assert quote["ask"] is None
+
+
+def test_accumulate_quotes_extracts_full_depth_volume_and_status() -> None:
     security_id = uuid4()
     now = datetime.now(UTC)
     millis = int(now.timestamp() * 1000)
