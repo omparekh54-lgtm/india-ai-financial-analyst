@@ -19,6 +19,14 @@ class FinancialBootstrapSpec:
 
 
 @dataclass(frozen=True)
+class MarketBootstrapSpec:
+    security: str
+    provider: str
+    file: Path
+    source_uri: str
+
+
+@dataclass(frozen=True)
 class BootstrapStage:
     name: str
     command: tuple[str, ...]
@@ -48,6 +56,19 @@ def parse_financial_spec(value: str) -> FinancialBootstrapSpec:
     )
 
 
+def parse_market_spec(value: str) -> MarketBootstrapSpec:
+    parts = [part.strip() for part in value.split(",", 3)]
+    if len(parts) != 4 or not all(parts):
+        raise ValueError("market must use SECURITY,PROVIDER,FILE,SOURCE_URI format")
+    security, provider, file_name, source_uri = parts
+    return MarketBootstrapSpec(
+        security=security,
+        provider=provider.lower(),
+        file=Path(file_name),
+        source_uri=source_uri,
+    )
+
+
 def build_bootstrap_plan(
     *,
     python_executable: str,
@@ -58,6 +79,10 @@ def build_bootstrap_plan(
     nse_min_rows: int,
     financials: tuple[FinancialBootstrapSpec, ...],
     financial_min_rows: int,
+    markets: tuple[MarketBootstrapSpec, ...],
+    market_interval: str,
+    market_timezone: str,
+    market_min_rows: int,
     benchmarks: tuple[BenchmarkBootstrapSpec, ...],
     benchmark_interval: str,
     benchmark_timezone: str,
@@ -74,6 +99,8 @@ def build_bootstrap_plan(
         raise ValueError("nse_min_rows must be >= 1")
     if financial_min_rows < 1:
         raise ValueError("financial_min_rows must be >= 1")
+    if market_min_rows < 1:
+        raise ValueError("market_min_rows must be >= 1")
     if benchmark_min_rows < 1:
         raise ValueError("benchmark_min_rows must be >= 1")
     if macro_min_rows < 1:
@@ -121,6 +148,34 @@ def build_bootstrap_plan(
         stages.append(
             BootstrapStage(
                 name=f"financial_{index}_{spec.security.upper()}",
+                command=tuple(command),
+            )
+        )
+
+    for index, spec in enumerate(markets, start=1):
+        command = [
+            python_executable,
+            str(scripts_dir / "import_market_csv.py"),
+            "--file",
+            str(spec.file),
+            "--security",
+            spec.security,
+            "--source-uri",
+            spec.source_uri,
+            "--provider",
+            spec.provider,
+            "--interval",
+            market_interval,
+            "--timezone",
+            market_timezone,
+            "--min-rows",
+            str(market_min_rows),
+        ]
+        if dry_run:
+            command.append("--dry-run")
+        stages.append(
+            BootstrapStage(
+                name=f"market_{index}_{spec.security.upper()}",
                 command=tuple(command),
             )
         )
