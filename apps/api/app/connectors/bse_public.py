@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from urllib.parse import urlencode, urlparse
 from zoneinfo import ZoneInfo
 
@@ -103,19 +103,17 @@ def _parse_bse_page(data: bytes) -> tuple[list[dict[str, object]], int]:
     return rows, total
 
 
-def _build_page_url(url: str, *, page: int, start: object, end: object) -> str:
-    # ``url`` is validated by the caller; keeping it in the signature makes tests and
-    # future licensed-route replacement explicit even though the current public route is fixed.
+def _build_page_url(url: str, *, page: int, start: date, end: date) -> str:
     _validate_bse_api_url(url)
     base = f"https://{_BSE_HOST}{_BSE_API_PATH}"
     query = urlencode(
         {
             "pageno": page,
             "strCat": "-1",
-            "strPrevDate": start.strftime("%d%m%Y"),  # type: ignore[attr-defined]
+            "strPrevDate": start.strftime("%d%m%Y"),
             "strScrip": "",
             "strSearch": "P",
-            "strToDate": end.strftime("%d%m%Y"),  # type: ignore[attr-defined]
+            "strToDate": end.strftime("%d%m%Y"),
             "strType": "C",
             "subcategory": "-1",
         }
