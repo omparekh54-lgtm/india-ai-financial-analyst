@@ -39,7 +39,8 @@ class TechnicalDerivativesAgent:
             "atr_14": _last_valid(atr(high, low, close)),
             "realized_volatility_20d": _last_valid(realized_volatility(close)),
         }
-        evidence_ids = [item.evidence_id for item in agent_input.evidence]
+        evidence = [item for item in agent_input.evidence if item.source_type == "market_data"]
+        evidence_ids = [item.evidence_id for item in evidence]
         claims = [
             Claim(
                 agent=AgentName.TECHNICAL,
@@ -53,11 +54,13 @@ class TechnicalDerivativesAgent:
             for name, value in metrics.items()
             if value is not None
         ]
+        warnings = [] if evidence_ids else ["Technical calculations lack market-data provenance"]
         return AgentOutput(
             agent=AgentName.TECHNICAL,
             claims=claims,
-            evidence=agent_input.evidence,
+            evidence=evidence,
             metrics=metrics,
+            warnings=warnings,
         )
 
 
