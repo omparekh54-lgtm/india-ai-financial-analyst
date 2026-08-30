@@ -6,7 +6,7 @@ import sentry_sdk
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.auth import AuthenticatedUser, require_authenticated_user
 from app.core.config import get_settings
@@ -49,6 +49,8 @@ app.add_middleware(
 
 
 class ResearchPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     query: str = Field(min_length=1, max_length=200)
     mode: AnalysisMode = AnalysisMode.FULL
 
