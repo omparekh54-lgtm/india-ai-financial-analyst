@@ -4,13 +4,7 @@ from app.agents.contracts import AgentInput, AgentName, AgentOutput, Claim
 
 
 class LiveMarketAgent:
-    """Code-first market context agent.
-
-    Expected context keys:
-    - market_quote: {price, previous_close, volume, average_volume, provider, is_delayed}
-    - benchmark: {name, change_pct}
-    - sector_benchmark: {name, change_pct}
-    """
+    """Code-first market context agent with explicit live/delayed semantics."""
 
     async def run(self, agent_input: AgentInput) -> AgentOutput:
         quote = agent_input.context.get("market_quote") or {}
@@ -21,6 +15,8 @@ class LiveMarketAgent:
                 warnings=["No market quote supplied"],
             )
 
+        market_evidence = [item for item in agent_input.evidence if item.source_type == "market_data"]
+        evidence_ids = [item.evidence_id for item in market_evidence]
         price = _number(quote.get("price"))
         previous_close = _number(quote.get("previous_close"))
         volume = _number(quote.get("volume"))
@@ -31,6 +27,7 @@ class LiveMarketAgent:
         sector = agent_input.context.get("sector_benchmark") or {}
         benchmark_change = _number(benchmark.get("change_pct"))
         sector_change = _number(sector.get("change_pct"))
+        delayed = bool(quote.get("is_delayed", True))
 
         metrics = {
             "price": price,
@@ -41,46 +38,61 @@ class LiveMarketAgent:
             "relative_to_sector_pct": _subtract(change_pct, sector_change),
             "volume_ratio": _divide(volume, average_volume),
             "provider": quote.get("provider"),
-            "is_delayed": bool(quote.get("is_delayed", True)),
+            "is_delayed": delayed,
             "as_of": quote.get("as_of"),
         }
 
-        confidence = 0.99 if not metrics["is_delayed"] else 0.90
+        confidence = 0.99 if not delayed else 0.90
         claims: list[Claim] = []
         if price is not None:
+            label = "Latest stored market close" if delayed else "Live market price"
             claims.append(
                 Claim(
                     agent=AgentName.MARKET,
-                    statement=f"Market price observed at {price:.4f}",
+                    statement=f"{label} observed at {price:.4f}",
                     claim_type="fact",
                     confidence=confidence,
-                    status="verified",
-                    data={"metric": "price", "value": price, "as_of": metrics["as_of"]},
+                    evidence_ids=evidence_ids,
+                    status="pending",
+                    data={
+                        "metric": "price",
+                        "value": price,
+                        "as_of": metrics["as_of"],
+                        "is_delayed": delayed,
+                        "requires_current_data": not delayed,
+                    },
                 )
             )
         if change_pct is not None:
             claims.append(
                 Claim(
                     agent=AgentName.MARKET,
-                    statement=f"Price change versus previous close is {change_pct:.2f}%",
+                    statement=f"Price change versus previous stored close is {change_pct:.2f}%",
                     claim_type="calculation",
-                    confidence=1.0,
-                    status="verified",
-                    data={"metric": "change_pct", "value": change_pct},
+                    confidence=0.99,
+                    evidence_ids=evidence_ids,
+                    status="pending",
+                    data={"metric": "change_pct", "value": change_pct, "is_delayed": delayed},
                 )
             )
 
         warnings = []
-        if metrics["is_delayed"]:
-            warnings.append("Market quote is delayed; do not label it real-time")
-        return AgentOutput(agent=AgentName.MARKET, claims=claims, metrics=metrics, warnings=warnings)
+        if delayed:
+            warnings.append("Market quote is delayed; it is not labeled real-time")
+        if not evidence_ids:
+            warnings.append("No market-data evidence reference was available")
+        return AgentOutput(
+            agent=AgentName.MARKET,
+            claims=claims,
+            evidence=market_evidence,
+            metrics=metrics,
+            warnings=warnings,
+        )
 
 
 def _number(value: object) -> float | None:
     try:
-        if value is None:
-            return None
-        return float(value)
+        return None if value is None else float(value)
     except (TypeError, ValueError):
         return None
 
@@ -92,12 +104,8 @@ def _pct_change(current: float | None, previous: float | None) -> float | None:
 
 
 def _subtract(left: float | None, right: float | None) -> float | None:
-    if left is None or right is None:
-        return None
-    return left - right
+    return None if left is None or right is None else left - right
 
 
 def _divide(left: float | None, right: float | None) -> float | None:
-    if left is None or right in {None, 0}:
-        return None
-    return left / right
+    return None if left is None or right in {None, 0} else left / right
