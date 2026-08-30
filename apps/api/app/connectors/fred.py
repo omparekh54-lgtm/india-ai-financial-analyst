@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import httpx
 
@@ -12,7 +12,12 @@ class FredConnector:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
-    async def series_observations(self, series_id: str) -> SourceEnvelope:
+    async def series_observations(
+        self,
+        series_id: str,
+        *,
+        observation_start: date | None = None,
+    ) -> SourceEnvelope:
         if not self.settings.enable_external_data_calls:
             raise RuntimeError("External data calls are disabled")
         if not self.settings.fred_api_key:
@@ -23,6 +28,9 @@ class FredConnector:
             "api_key": self.settings.fred_api_key,
             "file_type": "json",
         }
+        if observation_start is not None:
+            params["observation_start"] = observation_start.isoformat()
+
         endpoint = f"{self.settings.fred_base_url}/series/observations"
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(endpoint, params=params)
