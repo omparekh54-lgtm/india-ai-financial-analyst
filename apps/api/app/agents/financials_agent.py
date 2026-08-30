@@ -13,11 +13,7 @@ from app.calculations.financials import (
 
 
 class FinancialForensicAgent:
-    """Code-first financial analysis agent.
-
-    The ingestion layer supplies normalized financial facts in ``context['financials']``.
-    This agent performs deterministic calculations before any LLM interpretation.
-    """
+    """Code-first financial analysis agent over normalized sourced facts."""
 
     async def run(self, agent_input: AgentInput) -> AgentOutput:
         facts = agent_input.context.get("financials") or {}
@@ -58,13 +54,15 @@ class FinancialForensicAgent:
             )
         )
 
+        evidence_ids = [item.evidence_id for item in agent_input.evidence]
         claims = [
             Claim(
                 agent=AgentName.FINANCIALS,
                 statement=f"{name} calculated as {value:.4f}",
                 claim_type="calculation",
-                confidence=1.0,
-                status="verified",
+                confidence=0.99,
+                evidence_ids=evidence_ids,
+                status="pending",
                 data={"metric": name, "value": value},
             )
             for name, value in metrics.items()
@@ -74,5 +72,6 @@ class FinancialForensicAgent:
         return AgentOutput(
             agent=AgentName.FINANCIALS,
             claims=claims,
+            evidence=agent_input.evidence,
             metrics=metrics,
         )
