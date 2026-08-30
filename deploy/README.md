@@ -9,6 +9,12 @@ The production system is intentionally split into four runtime surfaces:
 
 Supabase provides PostgreSQL, pgvector and Auth. Background workers must never run inside the browser/frontend deployment.
 
+## Production data policy: real data only
+
+The production research corpus must never be filled with generated, synthetic, mock, fake, dummy, fixture, sample, placeholder or otherwise fabricated market/research data merely to make a demo or readiness check pass. If a real source is unavailable, leave that dataset missing and keep the readiness warning visible.
+
+Material production data must be traceable to NSE/BSE or an approved/licensed exchange product, SEBI/RBI/NSDL or another authoritative institution, an issuer's official material, an authenticated broker/market-data provider, or an approved/licensed data vendor. Where the schema supports `source_id`, populated material rows must be source-linked. See `docs/DATA_PROVENANCE_POLICY.md` for the complete contract.
+
 ## Web environment
 
 Set these on the Next.js deployment only:
@@ -49,7 +55,7 @@ The API distinguishes liveness, runtime readiness and corpus readiness:
 
 - `GET /health` checks whether the process is alive and reports basic database/configuration state.
 - `GET /ready` is the traffic-admission check. It audits feature dependencies and database reachability and returns HTTP `503` when the runtime is unsafe to serve production traffic.
-- `GET /v1/system/data-readiness` is authenticated and reports the research-corpus gate separately, including NSE-universe coverage, missing datasets and stale-data warnings.
+- `GET /v1/system/data-readiness` is authenticated and reports the research-corpus gate separately, including NSE-universe coverage, missing datasets, provenance failures and stale-data warnings.
 
 When `APP_ENV=production`, critical configuration errors also fail application startup. Examples include missing database/Auth configuration, non-HTTPS production origins, enabled LLM features without their providers, semantic retrieval without its local runtime, or live market without encrypted broker OAuth configuration.
 
@@ -69,7 +75,7 @@ After reference/data bootstrap, run the data coverage audit:
 python scripts/run_data_coverage_audit.py
 ```
 
-The data audit treats a full NSE EQ security universe as a hard production prerequisite and reports missing fundamentals, filings/evidence, market bars, benchmark bars, macro observations, peer metrics, embeddings and enabled official feeds explicitly. A structurally healthy but empty database must not be mistaken for a production-ready research dataset.
+The data audit treats a full NSE EQ security universe as a hard production prerequisite. If financial facts, corporate events, security market bars, benchmark bars, macro observations or comparable/security metrics are populated, **all of those rows must carry source provenance** or corpus readiness fails. Missing datasets remain visible as coverage warnings; they must not be filled with fabricated values.
 
 ## NSE security-master bootstrap
 
@@ -85,63 +91,61 @@ The importer validates the expected CSV header, rejects suspiciously small unive
 python scripts/import_nse_security_master.py
 ```
 
-Do not substitute an unofficial mirror merely to make the coverage gate pass.
+Do not substitute an unofficial mirror or generated security list merely to make the coverage gate pass.
 
 ## Approved financial-facts CSVs
 
 `import_financial_csv.py` provides a guarded path for approved/licensed one-security financial exports while automated exchange ingestion remains source-governed. Expected columns are `fact_name`, `period_end`, `period_type`, `value`, with optional `unit`, `period_start` and `metadata_json`.
 
-Validate first:
+Validate first, replacing `LICENSED_FINANCIAL_SOURCE_URI` with the actual source URI for the export:
 
 ```bash
 python scripts/import_financial_csv.py \
   --file /data/reliance_financials.csv \
   --security RELIANCE \
-  --source-uri https://licensed-source.example/reliance/fy26 \
+  --source-uri "$LICENSED_FINANCIAL_SOURCE_URI" \
   --dry-run
 ```
 
-The target security must already exist in the canonical NSE/BSE master. Canonical alias collisions such as `PAT` versus `Profit After Tax` for the same period are rejected. Successful writes create/update a checksum-backed `reference_financials` source record and then use the canonical financial normalizer, including safe derived EBITDA/free-cash-flow calculations when their components exist.
+The target security must already exist in the canonical NSE/BSE master. Canonical alias collisions such as `PAT` versus `Profit After Tax` for the same period are rejected. Successful writes create/update a checksum-backed `reference_financials` source record and then use the canonical financial normalizer, including deterministic derived EBITDA/free-cash-flow calculations only when their real sourced components exist.
 
 ## Guarded one-command corpus bootstrap
 
-`bootstrap_research_data.py` orchestrates the already-validated importers in deterministic order: NSE security master, approved financial facts, approved benchmark CSVs, approved macro CSVs, optional explicitly enabled official feeds, optional evidence embeddings, then the canonical data-readiness audit.
+`bootstrap_research_data.py` orchestrates validated importers in deterministic order: official NSE security master, approved financial facts, approved security market history, approved comparable metrics, official benchmark history, official RBI/NSDL macro/flow data, optional explicitly enabled official feeds, optional evidence embeddings, then the canonical data-readiness audit.
 
-Validate file inputs before writing anything:
+Production bootstrap provenance formats are:
+
+```text
+--financial SECURITY,FILE,SOURCE_URI
+--market SECURITY,PROVIDER,FILE,SOURCE_URI
+--metrics SECURITY,FILE,SOURCE_URI
+--benchmark CODE,FILE,OFFICIAL_SOURCE_URL
+--macro RBI,SERIES_KEY,FILE,OFFICIAL_SOURCE_URL
+--macro NSDL,FILE,OFFICIAL_SOURCE_URL
+```
+
+Benchmark source URLs must be on approved official NSE/NSE Indices HTTPS domains. RBI and NSDL macro/flow source URLs must be on the corresponding approved official domains. Financial, market and comparable-metric exports require an explicit real source URI and reject source/provider identifiers marked as synthetic/mock/fake/dummy/fixture/sample/generated/placeholder.
+
+Validate all files before writing anything. The following URLs are provenance pages on official domains; use the exact official source/artifact applicable to the file you obtained:
 
 ```bash
 python scripts/bootstrap_research_data.py \
   --nse-file /data/EQUITY_L.csv \
-  --financial RELIANCE,/data/reliance_financials.csv,https://licensed-source.example/reliance/fy26 \
-  --benchmark NIFTY50,nse,/data/nifty50.csv \
-  --benchmark INDIAVIX,nse,/data/india_vix.csv \
-  --macro-file /data/rbi_macro.csv \
+  --financial "RELIANCE,/data/reliance_financials.csv,$LICENSED_FINANCIAL_SOURCE_URI" \
+  --market "RELIANCE,nse,/data/reliance_prices.csv,$LICENSED_MARKET_SOURCE_URI" \
+  --metrics "RELIANCE,/data/reliance_metrics.csv,$LICENSED_METRICS_SOURCE_URI" \
+  --benchmark "NIFTY50,/data/nifty50.csv,https://www.niftyindices.com/reports/historical-data" \
+  --benchmark "INDIAVIX,/data/india_vix.csv,https://www.nseindia.com/market-data/india-vix" \
+  --macro "RBI,repo_rate,/data/rbi_repo.csv,https://rbi.org.in/Scripts/Statistics.aspx" \
+  --macro "NSDL,/data/fpi_flows.csv,https://fpi.nsdl.co.in/web/Reports/Latest.aspx" \
   --dry-run
 ```
 
-For the first write pass, remove `--dry-run` and add `--require-ready` when the deployment must fail unless the hard corpus gate is satisfied:
+For the first write pass, remove `--dry-run`. Add `--require-ready` only when the deployment must fail unless the hard corpus gate is satisfied. It is expected to fail until the real NSE universe and required real datasets have actually been populated.
 
-```bash
-python scripts/bootstrap_research_data.py \
-  --nse-file /data/EQUITY_L.csv \
-  --financial RELIANCE,/data/reliance_financials.csv,https://licensed-source.example/reliance/fy26 \
-  --benchmark NIFTY50,nse,/data/nifty50.csv \
-  --benchmark INDIAVIX,nse,/data/india_vix.csv \
-  --macro-file /data/rbi_macro.csv \
-  --require-ready
-```
+If the NSE universe is already populated, later imports can resume with `--skip-nse`. The command is fail-fast and emits a machine-readable JSON summary with coverage before/after and the failed stage, if any. `--run-official-feeds` and `--embed-evidence` are explicit write-capable stages and cannot be combined with `--dry-run`. The bootstrap command never enables disabled feed templates; production feed activation remains a separate licensing/source-governance decision.
 
-If the NSE universe is already populated, resume later stages without re-downloading it:
-
-```bash
-python scripts/bootstrap_research_data.py \
-  --skip-nse \
-  --financial RELIANCE,/data/reliance_financials.csv,https://licensed-source.example/reliance/fy26 \
-  --benchmark NIFTY50,nse,/data/nifty50.csv \
-  --macro-file /data/rbi_macro.csv
-```
-
-The command is fail-fast and emits a machine-readable JSON summary with coverage before/after and the failed stage, if any. `--run-official-feeds` and `--embed-evidence` are explicit write-capable stages and cannot be combined with `--dry-run`. The bootstrap command never enables disabled feed templates; production feed activation remains a separate licensing/source-governance decision.
+`import_reference_csv.py` remains available for approved/licensed provider-neutral benchmark or macro exports outside the official bootstrap flow, but it now also requires `--source-uri`, creates a checksum-backed global source record and writes that `source_id` onto every imported row. It is not an anonymous-data backdoor.
 
 ## Worker environment
 
@@ -163,7 +167,7 @@ Safe activation order:
 1. Apply `0013_semantic_evidence.sql` so the HNSW cosine index exists.
 2. Start the API with `ENABLE_SEMANTIC_RETRIEVAL=false` and verify ordinary research still works.
 3. Enable semantic retrieval on one backend instance and confirm the local embedding model loads successfully.
-4. Backfill existing filing chunks in bounded batches:
+4. Backfill existing real filing chunks in bounded batches:
 
 ```bash
 ENABLE_SEMANTIC_RETRIEVAL=true \
@@ -239,13 +243,13 @@ The API image healthcheck uses `/ready`; worker HTTP healthchecks are disabled b
 
 1. Apply all database migrations and run `python scripts/run_production_preflight.py`.
 2. Configure Supabase Auth URLs/email settings.
-3. Dry-run `bootstrap_research_data.py` against the official NSE security master plus approved financial/benchmark/macro files, inspect checksums/counts, then execute the write pass.
-4. Bootstrap approved filing/evidence sources, then rerun `python scripts/run_data_coverage_audit.py` and check `/v1/system/data-readiness` from an authenticated session.
+3. Dry-run `bootstrap_research_data.py` against the official NSE security master plus real provenance-backed financial/market/metrics/benchmark/macro files, inspect checksums/counts, then execute the write pass.
+4. Bootstrap approved real filing/evidence sources, then rerun `python scripts/run_data_coverage_audit.py` and check `/v1/system/data-readiness` from an authenticated session.
 5. Deploy API with every external-call/optional-intelligence switch **off**; verify `/health` and `/ready`.
 6. Deploy web and test account creation/sign-in; verify one user's research is invisible to a second account.
 7. Start approved/licensed official-data ingestion only after the production data-source decision is complete.
 8. Enable semantic retrieval/backfill, then Tavily and LLM providers one at a time; verify provenance, fallback and quotas.
-9. Enable multimodal filing analysis and audio transcription on small known samples; verify their evidence remains non-primary.
+9. Enable multimodal filing analysis and audio transcription on a small set of known real-source documents/audio; verify their evidence remains non-primary.
 10. Configure broker OAuth/live-market last; never expose broker tokens or secrets to the frontend.
 11. Enable PostHog/Sentry after privacy and secret configuration are confirmed.
 12. Run load, provider-failure, security, auth-isolation and data-freshness tests before public launch.
