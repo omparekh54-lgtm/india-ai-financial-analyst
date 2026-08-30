@@ -63,6 +63,7 @@ class TavilyConnector:
                     source_type="web_search",
                     source_uri=url,
                     title=result.get("title"),
+                    published_at=_published_at(result.get("published_date")),
                     retrieved_at=retrieved_at,
                     freshness=Freshness.NEAR_LIVE,
                     payload={
@@ -73,3 +74,20 @@ class TavilyConnector:
                 )
             )
         return envelopes
+
+
+def _published_at(value: object) -> datetime | None:
+    if value is None:
+        return None
+    candidate = str(value).strip()
+    if not candidate:
+        return None
+    if candidate.endswith("Z"):
+        candidate = candidate[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
