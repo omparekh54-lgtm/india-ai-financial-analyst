@@ -1,0 +1,46 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+import pytest
+
+from app.ingestion.reference_provenance import parse_optional_datetime, validate_source_uri
+
+
+def test_source_uri_requires_absolute_scheme() -> None:
+    with pytest.raises(ValueError, match="absolute URI"):
+        validate_source_uri("licensed/reliance/fy26")
+
+
+def test_source_uri_rejects_embedded_credentials() -> None:
+    with pytest.raises(ValueError, match="embedded credentials"):
+        validate_source_uri("https://user:secret@licensed.example/reliance/fy26")
+
+
+def test_source_uri_accepts_https_and_file_provenance() -> None:
+    assert (
+        validate_source_uri("https://licensed.example/reliance/fy26")
+        == "https://licensed.example/reliance/fy26"
+    )
+    assert validate_source_uri("file:///approved/reliance.csv") == "file:///approved/reliance.csv"
+
+
+def test_optional_datetime_normalizes_to_utc() -> None:
+    assert parse_optional_datetime(None) is None
+    assert parse_optional_datetime("") is None
+    assert parse_optional_datetime("2026-08-30T12:30:00") == datetime(
+        2026,
+        8,
+        30,
+        12,
+        30,
+        tzinfo=UTC,
+    )
+    assert parse_optional_datetime("2026-08-30T18:00:00+05:30") == datetime(
+        2026,
+        8,
+        30,
+        12,
+        30,
+        tzinfo=UTC,
+    )
