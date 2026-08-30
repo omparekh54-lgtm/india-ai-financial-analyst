@@ -9,6 +9,13 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import get_settings
+from app.documents.audio import (
+    SUPPORTED_AUDIO_TYPES,
+    AudioTranscriptionError,
+    GeminiAudioTranscriber,
+    chunk_transcript,
+    normalize_audio_media_type,
+)
 from app.documents.parser import DocumentParseError, chunk_document, parse_document
 from app.documents.visual import (
     GeminiDocumentVisualAnalyzer,
@@ -26,7 +33,7 @@ _VISUAL_EVENT_TYPES = {"financial_results", "investor_presentation", "annual_rep
 
 
 class ExchangeDocumentIngestor:
-    """Persists an exchange attachment and page-aware evidence chunks for a corporate event."""
+    """Persists official event attachments as page-, transcript-, and provenance-aware evidence."""
 
     def __init__(
         self,
@@ -34,11 +41,13 @@ class ExchangeDocumentIngestor:
         *,
         embedder: EmbeddingProvider | None = None,
         visual_analyzer: GeminiDocumentVisualAnalyzer | None = None,
+        audio_transcriber: GeminiAudioTranscriber | None = None,
     ) -> None:
         self.engine = engine
-        settings = get_settings()
-        self.embedder = embedder or build_embedding_provider(settings)
-        self.visual_analyzer = visual_analyzer or GeminiDocumentVisualAnalyzer(settings)
+        self.settings = get_settings()
+        self.embedder = embedder or build_embedding_provider(self.settings)
+        self.visual_analyzer = visual_analyzer or GeminiDocumentVisualAnalyzer(self.settings)
+        self.audio_transcriber = audio_transcriber or GeminiAudioTranscriber(self.settings)
 
     async def ingest(
         self,
@@ -56,16 +65,20 @@ class ExchangeDocumentIngestor:
         if not source_uri.startswith("https://"):
             raise ValueError("Exchange document source_uri must use HTTPS")
 
+        normalized_media = media_type.split(";", 1)[0].strip().lower()
+        audio_media = normalize_audio_media_type(normalized_media)
+        is_audio = audio_media in SUPPORTED_AUDIO_TYPES
         checksum = hashlib.sha256(content).hexdigest()
         retrieved_at = datetime.now(UTC)
         source_metadata = {
             "document_role": document_role,
-            "media_type": media_type,
+            "media_type": audio_media if is_audio else normalized_media,
             **(metadata or {}),
         }
 
         source_id = await self._ensure_source(
             security_id=security_id,
+            source_type="earnings_audio" if is_audio else "exchange_filing",
             source_uri=source_uri,
             title=title,
             published_at=published_at,
@@ -74,12 +87,24 @@ class ExchangeDocumentIngestor:
             metadata=source_metadata,
         )
 
-        if media_type in {"application/xbrl+xml", "application/xml", "text/xml"}:
+        if is_audio:
+            return await self._ingest_audio(
+                event_id=event_id,
+                source_id=source_id,
+                media_type=audio_media,
+                content=content,
+                title=title,
+                document_role=document_role,
+                source_metadata=source_metadata,
+                checksum=checksum,
+            )
+
+        if normalized_media in {"application/xbrl+xml", "application/xml", "text/xml"}:
             await self._link_event(
                 event_id=event_id,
                 source_id=source_id,
                 document_role="xbrl" if document_role == "attachment" else document_role,
-                media_type=media_type,
+                media_type=normalized_media,
                 parse_status="unsupported",
                 metadata={"reason": "handled_by_financial_xbrl_parser", **source_metadata},
             )
@@ -94,14 +119,14 @@ class ExchangeDocumentIngestor:
             }
 
         try:
-            parsed = parse_document(content, media_type, title=title)
+            parsed = parse_document(content, normalized_media, title=title)
             chunks = chunk_document(parsed, max_chars=3500, overlap_chars=300)
         except DocumentParseError:
             await self._link_event(
                 event_id=event_id,
                 source_id=source_id,
                 document_role=document_role,
-                media_type=media_type,
+                media_type=normalized_media,
                 parse_status="failed",
                 metadata=source_metadata,
             )
@@ -114,7 +139,7 @@ class ExchangeDocumentIngestor:
         section = str(source_metadata.get("event_type") or document_role)
         visual_result, multimodal_status = await self._analyze_visuals(
             content=content,
-            media_type=media_type,
+            media_type=normalized_media,
             title=title,
             page_text=[page.text for page in parsed.pages],
             event_type=section,
@@ -148,7 +173,7 @@ class ExchangeDocumentIngestor:
                         "metadata": json.dumps(
                             {
                                 "document_role": document_role,
-                                "media_type": media_type,
+                                "media_type": normalized_media,
                                 "content_checksum": hashlib.sha256(
                                     chunk.content.encode("utf-8")
                                 ).hexdigest(),
@@ -210,7 +235,7 @@ class ExchangeDocumentIngestor:
             event_id=event_id,
             source_id=source_id,
             document_role=document_role,
-            media_type=media_type,
+            media_type=normalized_media,
             parse_status="parsed",
             metadata=link_metadata,
         )
@@ -224,6 +249,149 @@ class ExchangeDocumentIngestor:
             "embedded_chunk_count": sum(value is not None for value in embedding_values),
             "multimodal_status": multimodal_status,
             "multimodal_finding_count": len(visual_result.findings) if visual_result else 0,
+            "checksum": checksum,
+        }
+
+    async def _ingest_audio(
+        self,
+        *,
+        event_id: UUID,
+        source_id: UUID,
+        media_type: str,
+        content: bytes,
+        title: str,
+        document_role: str,
+        source_metadata: dict[str, object],
+        checksum: str,
+    ) -> dict[str, object]:
+        if not self.audio_transcriber.enabled:
+            await self._link_event(
+                event_id=event_id,
+                source_id=source_id,
+                document_role="transcript" if document_role == "attachment" else document_role,
+                media_type=media_type,
+                parse_status="unsupported",
+                metadata={"reason": "audio_transcription_disabled", **source_metadata},
+            )
+            return {
+                "source_id": str(source_id),
+                "event_id": str(event_id),
+                "chunk_count": 0,
+                "parse_status": "unsupported",
+                "transcription_status": "disabled",
+                "checksum": checksum,
+            }
+
+        try:
+            result = await self.audio_transcriber.transcribe(
+                content,
+                media_type=media_type,
+                title=title,
+            )
+        except AudioTranscriptionError:
+            await self._link_event(
+                event_id=event_id,
+                source_id=source_id,
+                document_role="transcript" if document_role == "attachment" else document_role,
+                media_type=media_type,
+                parse_status="failed",
+                metadata={"reason": "audio_transcription_failed", **source_metadata},
+            )
+            return {
+                "source_id": str(source_id),
+                "event_id": str(event_id),
+                "chunk_count": 0,
+                "parse_status": "failed",
+                "transcription_status": "failed",
+                "checksum": checksum,
+            }
+        if result is None:
+            return {
+                "source_id": str(source_id),
+                "event_id": str(event_id),
+                "chunk_count": 0,
+                "parse_status": "unsupported",
+                "transcription_status": "disabled",
+                "checksum": checksum,
+            }
+
+        transcript_chunks = chunk_transcript(
+            result.segments,
+            max_chars=self.settings.audio_transcript_chunk_chars,
+        )
+        embedding_values, embedding_status = await self._embed_chunks(
+            [chunk.content for chunk in transcript_chunks]
+        )
+        embedding_model = self.embedder.model_name if self.embedder is not None else None
+
+        async with self.engine.begin() as connection:
+            await connection.execute(
+                text("delete from evidence_chunks where source_id = :source_id"),
+                {"source_id": source_id},
+            )
+            for chunk, embedding in zip(transcript_chunks, embedding_values, strict=True):
+                await connection.execute(
+                    text(
+                        """
+                        insert into evidence_chunks (
+                            source_id, chunk_index, page_number, section, content, embedding, metadata
+                        ) values (
+                            :source_id, :chunk_index, null, 'earnings_transcript', :content,
+                            case when :embedding is null then null else cast(:embedding as vector) end,
+                            cast(:metadata as jsonb)
+                        )
+                        """
+                    ),
+                    {
+                        "source_id": source_id,
+                        "chunk_index": chunk.chunk_index,
+                        "content": chunk.content,
+                        "embedding": embedding,
+                        "metadata": json.dumps(
+                            {
+                                "ai_assisted_transcription": True,
+                                "provider": result.provider,
+                                "model": result.model,
+                                "language": result.language,
+                                "start_seconds": chunk.start_seconds,
+                                "end_seconds": chunk.end_seconds,
+                                "embedding_status": embedding_status,
+                                "embedding_model": embedding_model,
+                                "raw_audio_retained": False,
+                            }
+                        ),
+                    },
+                )
+
+        link_metadata = {
+            **source_metadata,
+            "transcription_status": "transcribed",
+            "transcription_provider": result.provider,
+            "transcription_model": result.model,
+            "transcript_language": result.language,
+            "transcript_segment_count": len(result.segments),
+            "transcript_chunk_count": len(transcript_chunks),
+            "embedding_status": embedding_status,
+            "embedding_model": embedding_model,
+            "raw_audio_retained": False,
+        }
+        await self._link_event(
+            event_id=event_id,
+            source_id=source_id,
+            document_role="transcript" if document_role == "attachment" else document_role,
+            media_type=media_type,
+            parse_status="parsed",
+            metadata=link_metadata,
+        )
+        return {
+            "source_id": str(source_id),
+            "event_id": str(event_id),
+            "chunk_count": len(transcript_chunks),
+            "parse_status": "parsed",
+            "transcription_status": "transcribed",
+            "transcript_segment_count": len(result.segments),
+            "transcript_chunk_count": len(transcript_chunks),
+            "embedded_chunk_count": sum(value is not None for value in embedding_values),
             "checksum": checksum,
         }
 
@@ -291,6 +459,7 @@ class ExchangeDocumentIngestor:
         self,
         *,
         security_id: UUID,
+        source_type: str,
         source_uri: str,
         title: str,
         published_at: datetime | None,
@@ -306,7 +475,7 @@ class ExchangeDocumentIngestor:
                         security_id, source_type, source_uri, title, published_at,
                         retrieved_at, freshness, checksum, metadata
                     ) values (
-                        :security_id, 'exchange_filing', :source_uri, :title, :published_at,
+                        :security_id, :source_type, :source_uri, :title, :published_at,
                         :retrieved_at, 'near_live', :checksum, cast(:metadata as jsonb)
                     )
                     on conflict do nothing
@@ -315,6 +484,7 @@ class ExchangeDocumentIngestor:
                 ),
                 {
                     "security_id": security_id,
+                    "source_type": source_type,
                     "source_uri": source_uri,
                     "title": title,
                     "published_at": published_at,
