@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     cerebras_model: str = "gpt-oss-120b"
     gemini_model: str = "gemini-2.5-flash"
     gemini_multimodal_model: str | None = None
+    gemini_audio_model: str = "gemini-3.7-flash"
 
     tavily_api_key: str | None = None
     fred_api_key: str | None = None
@@ -69,6 +70,7 @@ class Settings(BaseSettings):
     enable_external_data_calls: bool = False
     enable_semantic_retrieval: bool = False
     enable_multimodal_document_analysis: bool = False
+    enable_audio_transcription: bool = False
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_dimensions: int = Field(default=384, ge=384, le=384)
     semantic_evidence_min_similarity: float = Field(default=0.30, ge=-1.0, le=1.0)
@@ -76,6 +78,13 @@ class Settings(BaseSettings):
     semantic_evidence_per_query: int = Field(default=6, ge=1, le=12)
     multimodal_max_pages_per_document: int = Field(default=4, ge=1, le=8)
     multimodal_max_inline_bytes: int = Field(default=12_000_000, ge=1_000_000, le=18_000_000)
+    audio_transcription_max_inline_bytes: int = Field(
+        default=12_000_000,
+        ge=500_000,
+        le=18_000_000,
+    )
+    audio_transcription_max_output_tokens: int = Field(default=16000, ge=2000, le=32000)
+    audio_transcript_chunk_chars: int = Field(default=3200, ge=800, le=6000)
 
     # Quota-aware fresh web/news acquisition. Results are cached in `sources` and reused.
     web_research_cache_seconds: int = Field(default=900, ge=60, le=86400)
