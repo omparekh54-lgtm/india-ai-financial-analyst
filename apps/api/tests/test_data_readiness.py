@@ -4,7 +4,6 @@ from datetime import UTC, date, datetime
 
 from app.core.data_readiness import DataCoverage, evaluate_data_coverage
 
-
 AS_OF = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
 
 
@@ -99,8 +98,9 @@ def test_fresh_populated_datasets_do_not_emit_staleness_warnings() -> None:
 
 
 def test_naive_freshness_timestamp_is_treated_as_utc() -> None:
+    naive_market_bar = datetime(2026, 8, 29, 12, 0, tzinfo=UTC).replace(tzinfo=None)
     report = evaluate_data_coverage(
-        _coverage(latest_market_bar=datetime(2026, 8, 29, 12, 0)),
+        _coverage(latest_market_bar=naive_market_bar),
         as_of=AS_OF,
     )
     assert not any("market bars appear stale" in warning for warning in report.warnings)
