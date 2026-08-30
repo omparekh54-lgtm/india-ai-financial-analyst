@@ -30,6 +30,7 @@ APP_ENV=production
 DATABASE_URL=<supabase-postgres-connection>
 SUPABASE_URL=https://<project-ref>.supabase.co
 SUPABASE_PUBLISHABLE_KEY=<publishable-key>
+WEB_APP_URL=https://<web-host>
 CORS_ORIGINS=https://<web-host>
 ENABLE_EXTERNAL_LLM_CALLS=false
 ENABLE_EXTERNAL_DATA_CALLS=false
@@ -37,9 +38,31 @@ ENABLE_LIVE_MARKET=false
 ENABLE_SEMANTIC_RETRIEVAL=false
 ENABLE_MULTIMODAL_DOCUMENT_ANALYSIS=false
 ENABLE_AUDIO_TRANSCRIPTION=false
+ENABLE_PRODUCT_TELEMETRY=false
 ```
 
 Add provider secrets only to the API/worker secret store. Enable each feature only after the corresponding credentials, quota controls and data-quality checks are ready.
+
+## Production readiness and fail-closed startup
+
+The API distinguishes liveness from readiness:
+
+- `GET /health` checks whether the process is alive and reports basic database/configuration state.
+- `GET /ready` is the traffic-admission check. It audits feature dependencies and database reachability and returns HTTP `503` when the runtime is unsafe to serve production traffic.
+
+When `APP_ENV=production`, critical configuration errors also fail application startup. Examples include:
+
+- missing `DATABASE_URL` or Supabase Auth configuration,
+- non-HTTPS production web/CORS URLs,
+- external LLM calls enabled without any provider key,
+- Gemini multimodal/audio features enabled without Gemini + the external-LLM switch,
+- semantic retrieval enabled without the Sentence-Transformers runtime,
+- live market enabled without Upstox OAuth credentials and a valid Fernet broker-token encryption key,
+- product telemetry enabled without a PostHog key.
+
+Warnings such as a missing Sentry DSN do not block startup but appear in `/ready` so production gaps remain visible.
+
+Configure the API host/load balancer to use `/ready` for readiness and `/health` only for liveness. Do not weaken the readiness checks to make a deployment turn green; fix the missing production configuration instead.
 
 ## Worker environment
 
@@ -100,19 +123,18 @@ Turn this on only after ordinary text/XBRL filing ingestion is healthy and after
 
 ## Earnings-call audio transcription
 
-Official-event audio attachments can use the same evidence pipeline as filing PDFs. Audio transcription is separately gated:
+Audio transcription is separately opt-in:
 
 ```text
 ENABLE_AUDIO_TRANSCRIPTION=false
-GEMINI_AUDIO_MODEL=gemini-3.7-flash
 AUDIO_TRANSCRIPTION_MAX_INLINE_BYTES=12000000
 AUDIO_TRANSCRIPTION_MAX_OUTPUT_TOKENS=16000
 AUDIO_TRANSCRIPT_CHUNK_CHARS=3200
 ```
 
-It additionally requires `ENABLE_EXTERNAL_LLM_CALLS=true` and a configured Gemini key. Only allowlisted official-source URLs are fetched by the official-feed worker. Oversized inline audio is rejected rather than truncated. Transcript chunks retain source provenance and timestamps when available, but are exposed to research agents as secondary `audio_transcript` evidence and cannot independently become verified primary facts.
+It requires `ENABLE_EXTERNAL_LLM_CALLS=true` and a configured Gemini key. Raw audio bytes are not retained in the evidence database; only source provenance and timestamp-aware transcript chunks are persisted. Oversized audio is rejected instead of silently truncated. Transcript evidence can support management-commentary claims but cannot independently verify primary numeric filing facts.
 
-Raw audio bytes are not retained in the evidence database after transcription; the source URL, checksum, transcript chunks and transcription metadata are retained. Enable this only after a small known earnings-call sample has been checked for terminology, numbers, timestamps and quota usage.
+Enable only after validating one small, known earnings-call sample and confirming quota/latency behavior.
 
 ## Supabase Auth
 
@@ -158,13 +180,14 @@ docker run --env-file .env \
 
 1. Apply all database migrations.
 2. Configure Supabase Auth URLs and email settings.
-3. Deploy API with every external-call and optional-intelligence switch **off** and confirm `/health` reports database/auth configured.
+3. Deploy API with every external-call and optional-intelligence switch **off** and confirm `/health` is alive and `/ready` returns HTTP 200.
 4. Deploy web with API + Supabase public variables and test account creation/sign-in.
 5. Verify one authenticated research job is written with the correct `requested_by` UUID and is invisible to a second account.
 6. Start the official-feed worker with external data enabled only after approved/licensed feed records are registered.
 7. Enable semantic retrieval and backfill filing embeddings; verify fallback behavior and query latency.
 8. Enable Tavily and LLM providers one at a time; verify provenance, fallback and quota usage.
 9. Enable multimodal filing analysis on a small filing sample and verify that its evidence remains `ai_extraction` rather than primary evidence.
-10. Enable audio transcription on a small known call and verify transcript/timestamp quality plus `audio_transcript` evidence status.
+10. Enable audio transcription on a small known earnings-call sample and verify transcript evidence remains non-primary.
 11. Configure broker OAuth/live-market adapters last; never store user broker tokens in the frontend bundle.
-12. Run load, failure, security and data-freshness tests before public launch.
+12. Enable PostHog/Sentry only after confirming privacy and secret configuration.
+13. Run load, failure, security and data-freshness tests before public launch.
