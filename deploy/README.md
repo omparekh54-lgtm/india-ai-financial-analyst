@@ -87,15 +87,32 @@ python scripts/import_nse_security_master.py
 
 Do not substitute an unofficial mirror merely to make the coverage gate pass.
 
+## Approved financial-facts CSVs
+
+`import_financial_csv.py` provides a guarded path for approved/licensed one-security financial exports while automated exchange ingestion remains source-governed. Expected columns are `fact_name`, `period_end`, `period_type`, `value`, with optional `unit`, `period_start` and `metadata_json`.
+
+Validate first:
+
+```bash
+python scripts/import_financial_csv.py \
+  --file /data/reliance_financials.csv \
+  --security RELIANCE \
+  --source-uri https://licensed-source.example/reliance/fy26 \
+  --dry-run
+```
+
+The target security must already exist in the canonical NSE/BSE master. Canonical alias collisions such as `PAT` versus `Profit After Tax` for the same period are rejected. Successful writes create/update a checksum-backed `reference_financials` source record and then use the canonical financial normalizer, including safe derived EBITDA/free-cash-flow calculations when their components exist.
+
 ## Guarded one-command corpus bootstrap
 
-`bootstrap_research_data.py` orchestrates the already-validated importers in deterministic order: NSE security master, approved benchmark CSVs, approved macro CSVs, optional explicitly enabled official feeds, optional evidence embeddings, then the canonical data-readiness audit.
+`bootstrap_research_data.py` orchestrates the already-validated importers in deterministic order: NSE security master, approved financial facts, approved benchmark CSVs, approved macro CSVs, optional explicitly enabled official feeds, optional evidence embeddings, then the canonical data-readiness audit.
 
 Validate file inputs before writing anything:
 
 ```bash
 python scripts/bootstrap_research_data.py \
   --nse-file /data/EQUITY_L.csv \
+  --financial RELIANCE,/data/reliance_financials.csv,https://licensed-source.example/reliance/fy26 \
   --benchmark NIFTY50,nse,/data/nifty50.csv \
   --benchmark INDIAVIX,nse,/data/india_vix.csv \
   --macro-file /data/rbi_macro.csv \
@@ -107,6 +124,7 @@ For the first write pass, remove `--dry-run` and add `--require-ready` when the 
 ```bash
 python scripts/bootstrap_research_data.py \
   --nse-file /data/EQUITY_L.csv \
+  --financial RELIANCE,/data/reliance_financials.csv,https://licensed-source.example/reliance/fy26 \
   --benchmark NIFTY50,nse,/data/nifty50.csv \
   --benchmark INDIAVIX,nse,/data/india_vix.csv \
   --macro-file /data/rbi_macro.csv \
@@ -118,6 +136,7 @@ If the NSE universe is already populated, resume later stages without re-downloa
 ```bash
 python scripts/bootstrap_research_data.py \
   --skip-nse \
+  --financial RELIANCE,/data/reliance_financials.csv,https://licensed-source.example/reliance/fy26 \
   --benchmark NIFTY50,nse,/data/nifty50.csv \
   --macro-file /data/rbi_macro.csv
 ```
@@ -220,8 +239,8 @@ The API image healthcheck uses `/ready`; worker HTTP healthchecks are disabled b
 
 1. Apply all database migrations and run `python scripts/run_production_preflight.py`.
 2. Configure Supabase Auth URLs/email settings.
-3. Dry-run `bootstrap_research_data.py` against the official NSE security master plus approved benchmark/macro files, inspect checksums/counts, then execute the write pass.
-4. Bootstrap approved fundamentals and filing/evidence sources, then rerun `python scripts/run_data_coverage_audit.py` and check `/v1/system/data-readiness` from an authenticated session.
+3. Dry-run `bootstrap_research_data.py` against the official NSE security master plus approved financial/benchmark/macro files, inspect checksums/counts, then execute the write pass.
+4. Bootstrap approved filing/evidence sources, then rerun `python scripts/run_data_coverage_audit.py` and check `/v1/system/data-readiness` from an authenticated session.
 5. Deploy API with every external-call/optional-intelligence switch **off**; verify `/health` and `/ready`.
 6. Deploy web and test account creation/sign-in; verify one user's research is invisible to a second account.
 7. Start approved/licensed official-data ingestion only after the production data-source decision is complete.
