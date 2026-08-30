@@ -5,6 +5,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.connectors.bse_public import BsePublicAnnouncementsFetcher
 from app.connectors.http_fetcher import FetchedDocument, SafeHttpFetcher
 from app.connectors.india_official import MacroSeriesSpec
 from app.connectors.nse_public import NsePublicAnnouncementsFetcher
@@ -29,6 +30,7 @@ class OfficialFeedWorker:
         self.repository = OfficialFeedRepository(engine)
         self.fetcher = SafeHttpFetcher(allowed_domains=OFFICIAL_INDIA_DOMAINS)
         self.nse_public = NsePublicAnnouncementsFetcher()
+        self.bse_public = BsePublicAnnouncementsFetcher()
         self.ingestion = OfficialIndiaIngestionService(engine)
         self.documents = ExchangeDocumentIngestor(engine)
 
@@ -117,6 +119,17 @@ class OfficialFeedWorker:
         fetch_mode = str(claim.feed.parser_config.get("fetch_mode") or "").strip()
         if claim.feed.provider == "NSE" and fetch_mode == "nse_public_session":
             return await self.nse_public.fetch(claim.feed.source_url, headers=headers)
+        if claim.feed.provider == "BSE" and fetch_mode == "bse_public_api":
+            return await self.bse_public.fetch(
+                claim.feed.source_url,
+                headers=headers,
+                lookback_days=_bounded_int(
+                    claim.feed.parser_config.get("lookback_days"), default=1, minimum=0, maximum=7
+                ),
+                max_pages=_bounded_int(
+                    claim.feed.parser_config.get("max_pages"), default=4, minimum=1, maximum=8
+                ),
+            )
         return await self.fetcher.fetch(claim.feed.source_url, headers=headers)
 
     async def _dispatch(
@@ -324,3 +337,11 @@ def _document_role(event_type: object) -> str:
         "investor_presentation": "presentation",
         "annual_report": "annual_report",
     }.get(value, "attachment")
+
+
+def _bounded_int(value: object, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        candidate = int(value) if value is not None else default
+    except (TypeError, ValueError):
+        candidate = default
+    return max(minimum, min(candidate, maximum))
