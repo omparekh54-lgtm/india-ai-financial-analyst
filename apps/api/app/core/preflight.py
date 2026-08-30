@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 _REQUIRED_TABLES = (
     "securities",
@@ -128,10 +128,9 @@ async def database_preflight(engine: AsyncEngine) -> DatabasePreflight:
     )
 
 
-async def _missing_tables(connection: object) -> tuple[str, ...]:
-    execute = getattr(connection, "execute")
+async def _missing_tables(connection: AsyncConnection) -> tuple[str, ...]:
     rows = (
-        await execute(
+        await connection.execute(
             text(
                 """
                 with required(name) as (
@@ -149,10 +148,9 @@ async def _missing_tables(connection: object) -> tuple[str, ...]:
     return tuple(str(row) for row in rows)
 
 
-async def _rls_disabled_tables(connection: object) -> tuple[str, ...]:
-    execute = getattr(connection, "execute")
+async def _rls_disabled_tables(connection: AsyncConnection) -> tuple[str, ...]:
     rows = (
-        await execute(
+        await connection.execute(
             text(
                 """
                 select c.relname
