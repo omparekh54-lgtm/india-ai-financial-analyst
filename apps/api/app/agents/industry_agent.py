@@ -18,6 +18,19 @@ class IndustryPeerAgent:
                 warnings=["No peer set supplied"],
             )
 
+        peer_evidence = [
+            item
+            for item in agent_input.evidence
+            if item.source_type
+            in {
+                "peer_metric",
+                "security_metric",
+                "financial_fact",
+                "exchange_filing",
+                "company_filing",
+            }
+        ]
+        evidence_ids = [item.evidence_id for item in peer_evidence]
         metric_names = ("revenue_growth", "ebitda_margin", "roce", "pe", "pb", "ev_ebitda")
         peer_medians: dict[str, float] = {}
         for metric in metric_names:
@@ -39,25 +52,32 @@ class IndustryPeerAgent:
                     agent=AgentName.INDUSTRY,
                     statement=f"{metric} differs from peer median by {delta:.4f}",
                     claim_type="calculation",
-                    confidence=1.0,
-                    status="verified",
+                    confidence=0.99 if evidence_ids else 0.45,
+                    evidence_ids=evidence_ids,
+                    status="pending",
                     data={
                         "metric": metric,
                         "company_value": company_value,
                         "peer_median": peer_median,
                         "difference": delta,
+                        "peer_count": sum(_number(peer.get(metric)) is not None for peer in peers),
                     },
                 )
             )
 
+        warnings = []
+        if claims and not evidence_ids:
+            warnings.append("Peer calculations are available but source evidence is unavailable")
         return AgentOutput(
             agent=AgentName.INDUSTRY,
             claims=claims,
+            evidence=peer_evidence,
             metrics={
                 "peer_count": len(peers),
                 "peer_medians": peer_medians,
                 "relative_to_peer_median": relative,
             },
+            warnings=warnings,
         )
 
 
