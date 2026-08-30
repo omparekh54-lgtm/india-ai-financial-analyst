@@ -1,3 +1,4 @@
+import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Annotated
@@ -7,7 +8,7 @@ from uuid import UUID
 import sentry_sdk
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import ORJSONResponse, RedirectResponse
+from fastapi.responses import ORJSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.auth import AuthenticatedUser, require_authenticated_user
@@ -20,6 +21,7 @@ from app.db import create_database_engine, database_health
 from app.orchestration.plan import AnalysisMode, build_research_plan
 from app.providers.router import Capability, ProviderRouter
 from app.repositories.research import ResearchRepository
+from app.research.export import render_research_markdown, research_export_payload
 from app.research.service import ResearchService
 
 settings = get_settings()
@@ -231,6 +233,45 @@ async def research_job(
     if job is None:
         raise HTTPException(status_code=404, detail="Research job not found")
     return job
+
+
+@app.get("/v1/research/jobs/{job_id}/export")
+async def research_job_export(
+    job_id: UUID,
+    user: CurrentUser,
+    export_format: str = Query(default="markdown", alias="format", pattern="^(markdown|json)$"),
+) -> Response:
+    """Download only the authenticated user's persisted report; no new research is generated."""
+    if not settings.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
+    repository = ResearchRepository(create_database_engine(settings.database_url))
+    job = await repository.get_user_job(user.id, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Research job not found")
+    if not isinstance(job.get("report_json"), dict):
+        raise HTTPException(status_code=409, detail="Research report is not completed")
+
+    stem = f"india-equity-research-{job_id}"
+    headers = {"Content-Disposition": f'attachment; filename="{stem}"'}
+    if export_format == "json":
+        headers["Content-Disposition"] = f'attachment; filename="{stem}.json"'
+        return Response(
+            content=json.dumps(
+                research_export_payload(job),
+                indent=2,
+                ensure_ascii=False,
+                default=str,
+            ),
+            media_type="application/json",
+            headers=headers,
+        )
+
+    headers["Content-Disposition"] = f'attachment; filename="{stem}.md"'
+    return Response(
+        content=render_research_markdown(job),
+        media_type="text/markdown",
+        headers=headers,
+    )
 
 
 @app.post("/v1/research/run")
