@@ -8,8 +8,14 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.core.config import get_settings
 from app.documents.parser import DocumentParseError, chunk_document, parse_document
-from app.evidence.embeddings import EmbeddingError, EmbeddingProvider, vector_literal
+from app.evidence.embeddings import (
+    EmbeddingError,
+    EmbeddingProvider,
+    build_embedding_provider,
+    vector_literal,
+)
 
 
 class ExchangeDocumentIngestor:
@@ -22,7 +28,7 @@ class ExchangeDocumentIngestor:
         embedder: EmbeddingProvider | None = None,
     ) -> None:
         self.engine = engine
-        self.embedder = embedder
+        self.embedder = embedder or build_embedding_provider(get_settings())
 
     async def ingest(
         self,
