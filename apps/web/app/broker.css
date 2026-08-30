@@ -1,0 +1,88 @@
+.brokerBar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  border-bottom: 1px solid #202a36;
+  background: rgba(8, 11, 16, .94);
+  backdrop-filter: blur(16px);
+}
+
+.brokerBarInner {
+  width: min(1180px, calc(100% - 40px));
+  min-height: 66px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.brokerIdentity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brokerIdentity > div {
+  display: grid;
+  gap: 3px;
+}
+
+.brokerIdentity strong {
+  font-size: 13px;
+}
+
+.brokerIdentity small {
+  color: #81909f;
+  font-size: 11px;
+}
+
+.brokerControls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.liveBadge,
+.safeBadge {
+  border: 1px solid #315d45;
+  border-radius: 999px;
+  padding: 6px 9px;
+  color: #7ce2aa;
+  background: rgba(124, 226, 170, .07);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .1em;
+}
+
+.safeBadge {
+  color: #e6c780;
+  border-color: #62563a;
+  background: rgba(230, 199, 128, .06);
+}
+
+.brokerMessage {
+  width: min(1180px, calc(100% - 40px));
+  margin: -5px auto 0;
+  padding: 0 0 10px 20px;
+  color: #9aa8b8;
+  font-size: 11px;
+}
+
+@media (max-width: 680px) {
+  .brokerBarInner {
+    width: min(100% - 24px, 1180px);
+    align-items: stretch;
+    flex-direction: column;
+    padding: 10px 0;
+  }
+
+  .brokerControls {
+    justify-content: space-between;
+  }
+
+  .brokerMessage {
+    width: min(100% - 24px, 1180px);
+    padding-left: 0;
+  }
+}
