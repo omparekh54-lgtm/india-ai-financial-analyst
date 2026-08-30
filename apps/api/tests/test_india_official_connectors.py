@@ -5,18 +5,18 @@ from app.connectors.india_official import (
     BSE_CORPORATES_PAGE,
     MacroSeriesSpec,
     parse_bse_disclosures,
-    parse_nse_disclosures,
     parse_nsdl_flows,
+    parse_nse_disclosures,
     parse_rbi_macro_series,
 )
 
 
 def test_nse_csv_announcement_is_normalized_with_ist_timestamp() -> None:
     payload = (
-        "SYMBOL,COMPANY NAME,SUBJECT,DETAILS,ATTACHMENT,BROADCAST DATE/TIME\n"
-        "INFY,Infosys Limited,Investor Presentation,Presentation filed,"
-        "https://nsearchives.nseindia.com/corporate/INFY_TEST.pdf,30-Aug-2026 18:00:00\n"
-    ).encode()
+        b"SYMBOL,COMPANY NAME,SUBJECT,DETAILS,ATTACHMENT,BROADCAST DATE/TIME\n"
+        b"INFY,Infosys Limited,Investor Presentation,Presentation filed,"
+        b"https://nsearchives.nseindia.com/corporate/INFY_TEST.pdf,30-Aug-2026 18:00:00\n"
+    )
 
     records = parse_nse_disclosures(payload, "text/csv")
 
@@ -84,15 +84,9 @@ def test_rbi_series_parser_uses_explicit_series_spec() -> None:
 
 def test_nsdl_flow_parser_handles_parenthesized_negative_values() -> None:
     payload = (
-        "Date,FPI Net Equity (Rs. Cr),DII Net Equity (Rs. Cr)\n"
-        "30-08-2026,(1,250.50),2,100.25\n"
-    ).encode()
-
-    # Quote values with commas as they appear in downloadable tables.
-    payload = (
-        'Date,FPI Net Equity (Rs. Cr),DII Net Equity (Rs. Cr)\n'
-        '30-08-2026,"(1,250.50)","2,100.25"\n'
-    ).encode()
+        b"Date,FPI Net Equity (Rs. Cr),DII Net Equity (Rs. Cr)\n"
+        b'30-08-2026,"(1,250.50)","2,100.25"\n'
+    )
     observations = parse_nsdl_flows(payload, "text/csv")
 
     values = {item.series_key: Decimal(str(item.value)) for item in observations}
