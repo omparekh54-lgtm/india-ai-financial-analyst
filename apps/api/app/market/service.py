@@ -27,7 +27,7 @@ class MarketDataService:
                 continue
             try:
                 return await adapter.quote(instrument_id)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - provider failover must isolate adapter faults
                 errors.append(f"{adapter.name}: {type(exc).__name__}")
         raise MarketDataUnavailable("No market provider succeeded: " + "; ".join(errors))
 
@@ -53,6 +53,6 @@ class MarketDataService:
                 )
                 if bars:
                     return bars
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - provider failover must isolate adapter faults
                 errors.append(f"{adapter.name}: {type(exc).__name__}")
         raise MarketDataUnavailable("No history provider succeeded: " + "; ".join(errors))
