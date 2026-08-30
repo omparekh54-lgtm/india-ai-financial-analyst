@@ -15,6 +15,7 @@ from app.ingestion.bootstrap import (
     build_bootstrap_plan,
     parse_benchmark_spec,
     parse_financial_spec,
+    parse_macro_spec,
     parse_market_spec,
     parse_metrics_spec,
 )
@@ -81,8 +82,8 @@ async def _coverage_report() -> dict[str, object]:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Bootstrap approved research data in deterministic order. Existing importers remain "
-            "the source of validation and database writes."
+            "Bootstrap approved real research data in deterministic order. Production bootstrap "
+            "requires explicit provenance and does not accept synthetic/mock/sample sources."
         )
     )
     parser.add_argument("--skip-nse", action="store_true")
@@ -120,13 +121,25 @@ def main() -> int:
         "--benchmark",
         action="append",
         default=[],
-        metavar="CODE,PROVIDER,FILE",
-        help="Repeat for each approved benchmark CSV export.",
+        metavar="CODE,FILE,OFFICIAL_SOURCE_URL",
+        help=(
+            "Repeat for official NSE/NSE Indices benchmark exports. The source URL must be on an "
+            "approved official domain."
+        ),
     )
     parser.add_argument("--benchmark-interval", default="1d")
     parser.add_argument("--benchmark-timezone", default="Asia/Kolkata")
     parser.add_argument("--benchmark-min-rows", type=int, default=30)
-    parser.add_argument("--macro-file", action="append", default=[])
+    parser.add_argument(
+        "--macro",
+        action="append",
+        default=[],
+        metavar="PROVIDER,...",
+        help=(
+            "Official macro export. Use RBI,SERIES_KEY,FILE,OFFICIAL_SOURCE_URL or "
+            "NSDL,FILE,OFFICIAL_SOURCE_URL."
+        ),
+    )
     parser.add_argument("--macro-min-rows", type=int, default=1)
     parser.add_argument("--run-official-feeds", action="store_true")
     parser.add_argument("--official-feed-limit", type=int, default=4)
@@ -145,6 +158,7 @@ def main() -> int:
         markets = tuple(parse_market_spec(value) for value in args.market)
         metrics = tuple(parse_metrics_spec(value) for value in args.metrics)
         benchmarks = tuple(parse_benchmark_spec(value) for value in args.benchmark)
+        macros = tuple(parse_macro_spec(value) for value in args.macro)
         plan = build_bootstrap_plan(
             python_executable=sys.executable,
             scripts_dir=SCRIPTS_DIR,
@@ -164,7 +178,7 @@ def main() -> int:
             benchmark_interval=args.benchmark_interval,
             benchmark_timezone=args.benchmark_timezone,
             benchmark_min_rows=args.benchmark_min_rows,
-            macro_files=tuple(Path(value) for value in args.macro_file),
+            macros=macros,
             macro_min_rows=args.macro_min_rows,
             dry_run=args.dry_run,
             run_official_feeds=args.run_official_feeds,
@@ -180,6 +194,7 @@ def main() -> int:
         parser.error("DATABASE_URL must be configured unless --dry-run is used")
 
     summary: dict[str, object] = {
+        "data_policy": "real_provenance_required",
         "dry_run": args.dry_run,
         "stage_count": len(plan),
         "stages": [],
