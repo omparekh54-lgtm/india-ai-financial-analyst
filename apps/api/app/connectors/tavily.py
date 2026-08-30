@@ -18,13 +18,15 @@ class TavilyConnector:
         *,
         max_results: int = 5,
         topic: str = "general",
+        include_domains: list[str] | None = None,
+        exclude_domains: list[str] | None = None,
     ) -> list[SourceEnvelope]:
         if not self.settings.enable_external_data_calls:
             raise RuntimeError("External data calls are disabled")
         if not self.settings.tavily_api_key:
             raise RuntimeError("Tavily is not configured")
 
-        payload = {
+        payload: dict[str, object] = {
             "query": query,
             "topic": topic,
             "search_depth": "basic",
@@ -32,6 +34,11 @@ class TavilyConnector:
             "include_answer": False,
             "include_raw_content": False,
         }
+        if include_domains:
+            payload["include_domains"] = include_domains[:20]
+        if exclude_domains:
+            payload["exclude_domains"] = exclude_domains[:20]
+
         headers = {
             "Authorization": f"Bearer {self.settings.tavily_api_key}",
             "Content-Type": "application/json",
