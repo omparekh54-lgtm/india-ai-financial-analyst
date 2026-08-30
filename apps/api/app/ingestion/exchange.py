@@ -32,21 +32,53 @@ class IngestedDisclosure:
 
 
 _EVENT_PATTERNS: tuple[tuple[str, re.Pattern[str], float], ...] = (
-    ("auditor_resignation", re.compile(r"auditor.{0,50}resign", re.I), 0.95),
-    ("promoter_pledge", re.compile(r"promoter.{0,80}(pledge|encumbrance)", re.I), 0.90),
-    ("credit_rating", re.compile(r"credit rating|rating (upgrade|downgrade|reaffirm)", re.I), 0.85),
-    ("financial_results", re.compile(r"financial results|quarterly results|regulation 33", re.I), 0.95),
-    ("earnings_call", re.compile(r"earnings call|conference call|concall", re.I), 0.80),
-    ("investor_presentation", re.compile(r"investor presentation", re.I), 0.75),
-    ("buyback", re.compile(r"buy[- ]?back", re.I), 0.90),
-    ("bonus", re.compile(r"bonus (issue|share)", re.I), 0.85),
-    ("split", re.compile(r"stock split|sub[- ]?division of.*share", re.I), 0.85),
-    ("qip", re.compile(r"qualified institutional placement|\bqip\b", re.I), 0.85),
-    ("preferential_issue", re.compile(r"preferential (issue|allotment)", re.I), 0.85),
-    ("related_party", re.compile(r"related party transaction", re.I), 0.80),
-    ("merger_demerger", re.compile(r"merger|demerger|scheme of arrangement", re.I), 0.90),
-    ("order_win", re.compile(r"award of order|receipt of order|order win", re.I), 0.75),
-    ("dividend", re.compile(r"dividend|record date", re.I), 0.75),
+    ("auditor_resignation", re.compile(r"auditor.{0,50}resign", re.IGNORECASE), 0.95),
+    (
+        "promoter_pledge",
+        re.compile(r"promoter.{0,80}(pledge|encumbrance)", re.IGNORECASE),
+        0.90,
+    ),
+    (
+        "credit_rating",
+        re.compile(r"credit rating|rating (upgrade|downgrade|reaffirm)", re.IGNORECASE),
+        0.85,
+    ),
+    (
+        "financial_results",
+        re.compile(r"financial results|quarterly results|regulation 33", re.IGNORECASE),
+        0.95,
+    ),
+    (
+        "earnings_call",
+        re.compile(r"earnings call|conference call|concall", re.IGNORECASE),
+        0.80,
+    ),
+    ("investor_presentation", re.compile(r"investor presentation", re.IGNORECASE), 0.75),
+    ("buyback", re.compile(r"buy[- ]?back", re.IGNORECASE), 0.90),
+    ("bonus", re.compile(r"bonus (issue|share)", re.IGNORECASE), 0.85),
+    ("split", re.compile(r"stock split|sub[- ]?division of.*share", re.IGNORECASE), 0.85),
+    (
+        "qip",
+        re.compile(r"qualified institutional placement|\bqip\b", re.IGNORECASE),
+        0.85,
+    ),
+    (
+        "preferential_issue",
+        re.compile(r"preferential (issue|allotment)", re.IGNORECASE),
+        0.85,
+    ),
+    ("related_party", re.compile(r"related party transaction", re.IGNORECASE), 0.80),
+    (
+        "merger_demerger",
+        re.compile(r"merger|demerger|scheme of arrangement", re.IGNORECASE),
+        0.90,
+    ),
+    (
+        "order_win",
+        re.compile(r"award of order|receipt of order|order win", re.IGNORECASE),
+        0.75,
+    ),
+    ("dividend", re.compile(r"dividend|record date", re.IGNORECASE), 0.75),
 )
 
 
