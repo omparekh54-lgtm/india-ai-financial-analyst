@@ -1,17 +1,19 @@
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Any
+from uuid import UUID
 
 import sentry_sdk
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel, Field
 
+from app.auth import AuthenticatedUser, require_authenticated_user
 from app.core.config import get_settings
 from app.db import create_database_engine, database_health
 from app.orchestration.plan import AnalysisMode, build_research_plan
 from app.providers.router import Capability, ProviderRouter
+from app.repositories.research import ResearchRepository
 from app.research.service import ResearchService
 
 settings = get_settings()
@@ -33,7 +35,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.3.0",
+    version="0.4.0",
     default_response_class=ORJSONResponse,
     lifespan=lifespan,
 )
@@ -52,7 +54,7 @@ class ResearchPlanRequest(BaseModel):
 
 
 class ResearchRunRequest(ResearchPlanRequest):
-    context: dict[str, Any] = Field(default_factory=dict)
+    """Public research request. Evidence/context injection is intentionally not accepted."""
 
 
 @app.get("/health")
@@ -67,6 +69,7 @@ async def health() -> dict[str, object]:
         "time": datetime.now(UTC).isoformat(),
         "database_configured": bool(settings.database_url),
         "database_healthy": db_ok,
+        "auth_configured": bool(settings.supabase_url and settings.supabase_publishable_key),
         "live_market_enabled": settings.enable_live_market,
         "external_llm_calls_enabled": settings.enable_external_llm_calls,
         "external_data_calls_enabled": settings.enable_external_data_calls,
@@ -89,6 +92,13 @@ async def agents() -> dict[str, object]:
     return {"count": len(AgentName), "agents": [agent.value for agent in AgentName]}
 
 
+@app.get("/v1/auth/me")
+async def auth_me(
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> dict[str, object]:
+    return {"id": str(user.id), "email": user.email}
+
+
 @app.post("/v1/research/plan")
 async def research_plan(request: ResearchPlanRequest) -> dict[str, object]:
     """Build the deterministic execution plan without calling any external API."""
@@ -100,14 +110,38 @@ async def research_plan(request: ResearchPlanRequest) -> dict[str, object]:
     }
 
 
-@app.post("/v1/research/run")
-async def run_research(request: ResearchRunRequest) -> dict[str, object]:
-    """Execute the DB-backed 16-role research pipeline.
+@app.get("/v1/research/jobs")
+async def research_jobs(
+    limit: int = Query(default=25, ge=1, le=100),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> dict[str, object]:
+    if not settings.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
+    repository = ResearchRepository(create_database_engine(settings.database_url))
+    jobs = await repository.list_user_jobs(user.id, limit=limit)
+    return {"count": len(jobs), "jobs": jobs}
 
-    Provider/network access remains governed by runtime kill switches. Request context is
-    intended for trusted internal/testing use until authentication and per-user authorization
-    are added.
-    """
+
+@app.get("/v1/research/jobs/{job_id}")
+async def research_job(
+    job_id: UUID,
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> dict[str, object]:
+    if not settings.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
+    repository = ResearchRepository(create_database_engine(settings.database_url))
+    job = await repository.get_user_job(user.id, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Research job not found")
+    return job
+
+
+@app.post("/v1/research/run")
+async def run_research(
+    request: ResearchRunRequest,
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> dict[str, object]:
+    """Execute the authenticated DB-backed 16-role research pipeline."""
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
 
@@ -117,7 +151,7 @@ async def run_research(request: ResearchRunRequest) -> dict[str, object]:
         execution = await service.execute(
             query=request.query,
             mode=request.mode,
-            context=request.context,
+            requested_by=user.id,
         )
     except Exception as exc:
         raise HTTPException(
