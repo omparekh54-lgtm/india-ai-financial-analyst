@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import io
 from datetime import UTC, date, datetime
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.ingestion.macro import MacroObservation
 from app.ingestion.market import MarketBarInput, normalize_market_bar
@@ -28,7 +28,7 @@ def parse_benchmark_csv(
         raise ReferenceFileError("benchmark interval cannot be empty")
     try:
         tz = ZoneInfo(timezone)
-    except Exception as exc:  # noqa: BLE001 - ZoneInfo raises implementation-specific lookup errors
+    except ZoneInfoNotFoundError as exc:
         raise ReferenceFileError(f"unknown timezone: {timezone}") from exc
 
     reader = csv.DictReader(io.StringIO(content.lstrip("\ufeff")))
@@ -114,7 +114,7 @@ def _parse_timestamp(value: str, timezone: ZoneInfo) -> datetime:
     if len(cleaned) == 10:
         parsed = datetime.combine(date.fromisoformat(cleaned), datetime.min.time(), timezone)
     else:
-        parsed = datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(cleaned)
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone)
     return parsed.astimezone(UTC)
@@ -124,7 +124,7 @@ def _optional_datetime(value: str | None) -> datetime | None:
     cleaned = (value or "").strip()
     if not cleaned:
         return None
-    parsed = datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(cleaned)
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
