@@ -44,7 +44,7 @@ class SentenceTransformerEmbeddingProvider:
                 convert_to_numpy=True,
                 show_progress_bar=False,
             )
-        except Exception as exc:  # noqa: BLE001 - third-party model errors become typed failures
+        except Exception as exc:
             raise EmbeddingError("Local embedding generation failed") from exc
 
         rows = values.tolist()
@@ -71,7 +71,7 @@ class SentenceTransformerEmbeddingProvider:
             ) from exc
         try:
             self._model = SentenceTransformer(self.model_name)
-        except Exception as exc:  # noqa: BLE001 - model loading/downloading is third-party behavior
+        except Exception as exc:
             raise EmbeddingError("Unable to load local embedding model") from exc
         return self._model
 
