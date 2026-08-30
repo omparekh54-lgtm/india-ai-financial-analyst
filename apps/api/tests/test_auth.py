@@ -3,9 +3,11 @@ from uuid import UUID
 import httpx
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.auth import SupabaseAuthVerifier, authenticated_user_from_payload
 from app.core.config import Settings
+from app.main import ResearchRunRequest
 
 
 @pytest.mark.asyncio
@@ -57,3 +59,14 @@ def test_authenticated_user_payload_requires_uuid_identity() -> None:
         authenticated_user_from_payload({"id": "not-a-uuid"})
 
     assert exc_info.value.status_code == 401
+
+
+def test_public_research_request_rejects_injected_context() -> None:
+    with pytest.raises(ValidationError):
+        ResearchRunRequest.model_validate(
+            {
+                "query": "TCS",
+                "mode": "full_analysis",
+                "context": {"financials": {"revenue": 999999999}},
+            }
+        )
