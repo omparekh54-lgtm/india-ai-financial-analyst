@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import Annotated
 from uuid import UUID
 
 import sentry_sdk
@@ -17,6 +18,7 @@ from app.repositories.research import ResearchRepository
 from app.research.service import ResearchService
 
 settings = get_settings()
+CurrentUser = Annotated[AuthenticatedUser, Depends(require_authenticated_user)]
 
 if settings.sentry_dsn:
     sentry_sdk.init(
@@ -95,9 +97,7 @@ async def agents() -> dict[str, object]:
 
 
 @app.get("/v1/auth/me")
-async def auth_me(
-    user: AuthenticatedUser = Depends(require_authenticated_user),
-) -> dict[str, object]:
+async def auth_me(user: CurrentUser) -> dict[str, object]:
     return {"id": str(user.id), "email": user.email}
 
 
@@ -114,8 +114,8 @@ async def research_plan(request: ResearchPlanRequest) -> dict[str, object]:
 
 @app.get("/v1/research/jobs")
 async def research_jobs(
+    user: CurrentUser,
     limit: int = Query(default=25, ge=1, le=100),
-    user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> dict[str, object]:
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
@@ -127,7 +127,7 @@ async def research_jobs(
 @app.get("/v1/research/jobs/{job_id}")
 async def research_job(
     job_id: UUID,
-    user: AuthenticatedUser = Depends(require_authenticated_user),
+    user: CurrentUser,
 ) -> dict[str, object]:
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
@@ -141,7 +141,7 @@ async def research_job(
 @app.post("/v1/research/run")
 async def run_research(
     request: ResearchRunRequest,
-    user: AuthenticatedUser = Depends(require_authenticated_user),
+    user: CurrentUser,
 ) -> dict[str, object]:
     """Execute the authenticated DB-backed 16-role research pipeline."""
     if not settings.database_url:
