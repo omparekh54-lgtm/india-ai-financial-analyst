@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     enable_live_market: bool = False
     enable_external_llm_calls: bool = False
     enable_external_data_calls: bool = False
+    enable_semantic_retrieval: bool = False
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_dimensions: int = Field(default=384, ge=384, le=384)
+    semantic_evidence_min_similarity: float = Field(default=0.30, ge=-1.0, le=1.0)
+    semantic_evidence_max_chunks: int = Field(default=24, ge=4, le=48)
+    semantic_evidence_per_query: int = Field(default=6, ge=1, le=12)
+
     max_agent_concurrency: int = Field(default=6, ge=1, le=16)
     max_research_job_seconds: int = Field(default=240, ge=30, le=1800)
     official_feed_poll_seconds: int = Field(default=60, ge=30, le=3600)
