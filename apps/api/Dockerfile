@@ -14,7 +14,7 @@ COPY app ./app
 COPY scripts ./scripts
 
 RUN python -m pip install --upgrade pip \
-    && python -m pip install .
+    && python -m pip install ".[live_market]"
 
 USER app
 
