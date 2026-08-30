@@ -14,6 +14,7 @@ from app.auth import AuthenticatedUser, require_authenticated_user
 from app.brokers.repository import BrokerRepository
 from app.brokers.upstox_oauth import UpstoxOAuthError, UpstoxOAuthService
 from app.core.config import get_settings
+from app.core.data_readiness import evaluate_data_coverage, load_data_coverage
 from app.core.readiness import assert_production_ready, audit_settings
 from app.db import create_database_engine, database_health
 from app.orchestration.plan import AnalysisMode, build_research_plan
@@ -125,6 +126,19 @@ async def agents() -> dict[str, object]:
     from app.agents.contracts import AgentName
 
     return {"count": len(AgentName), "agents": [agent.value for agent in AgentName]}
+
+
+@app.get("/v1/system/data-readiness")
+async def data_readiness(_user: CurrentUser) -> dict[str, object]:
+    """Report corpus coverage separately from service/deployment readiness."""
+    if not settings.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
+    engine = create_database_engine(settings.database_url)
+    try:
+        coverage = await load_data_coverage(engine)
+    finally:
+        await engine.dispose()
+    return evaluate_data_coverage(coverage).as_dict()
 
 
 @app.get("/v1/auth/me")
