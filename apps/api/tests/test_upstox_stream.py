@@ -11,6 +11,7 @@ from app.market.upstox_stream import (
     _reconcile_subscriptions,
     _send_subscription_set,
     _timestamp_from_millis,
+    decode_upstox_v3_message,
 )
 
 
@@ -150,3 +151,10 @@ def test_timestamp_from_millis_accepts_upstox_string_timestamp() -> None:
     parsed = _timestamp_from_millis("1788091200000")
     assert parsed is not None
     assert parsed.tzinfo == UTC
+
+
+def test_protobuf_runtime_decodes_empty_feed_response() -> None:
+    from upstox_client.feeder.proto import MarketDataFeedV3_pb2
+
+    payload = MarketDataFeedV3_pb2.FeedResponse().SerializeToString()
+    assert decode_upstox_v3_message(payload) == {}
