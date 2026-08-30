@@ -1,0 +1,23 @@
+services:
+  api:
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      APP_ENV: production
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  official-feed-worker:
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      APP_ENV: production
+    command: ["python", "scripts/run_official_feed_daemon.py"]
+    restart: unless-stopped
