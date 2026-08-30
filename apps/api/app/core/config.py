@@ -63,6 +63,8 @@ class Settings(BaseSettings):
     enable_external_data_calls: bool = False
     max_agent_concurrency: int = Field(default=6, ge=1, le=16)
     max_research_job_seconds: int = Field(default=240, ge=30, le=1800)
+    official_feed_poll_seconds: int = Field(default=60, ge=30, le=3600)
+    official_feed_batch_size: int = Field(default=4, ge=1, le=20)
 
     @property
     def cors_origin_list(self) -> list[str]:
