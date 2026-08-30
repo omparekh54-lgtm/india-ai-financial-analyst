@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.agents.contracts import EvidenceRef
+from app.research.context_enrichment import load_context_enrichment
 
 Row = Mapping[str, Any]
 
@@ -118,7 +119,14 @@ class DatabaseResearchContextLoader:
                     )
                 ).mappings().first()
 
-        financials = _financial_context(financial_rows)
+            financials = _financial_context(financial_rows)
+            enrichment_context, enrichment_evidence = await load_context_enrichment(
+                connection,
+                security_id=security_id,
+                security=security,
+                financials=financials,
+            )
+
         bars = _market_bars(bar_rows)
         context: dict[str, object] = {
             "security": {key: str(value) if key == "id" else value for key, value in security.items()},
@@ -128,6 +136,7 @@ class DatabaseResearchContextLoader:
             "news_events": _event_context(event_rows),
             "narratives": [row["headline"] for row in event_rows if row["headline"]],
         }
+        context.update(enrichment_context)
 
         quote = _market_quote(bar_rows)
         if quote:
@@ -150,6 +159,7 @@ class DatabaseResearchContextLoader:
             *_financial_evidence(financial_rows, security_id),
             *_market_evidence(bar_rows, security_id),
             *_event_evidence(event_rows),
+            *enrichment_evidence,
         ]
         return context, _dedupe_evidence(evidence)
 
