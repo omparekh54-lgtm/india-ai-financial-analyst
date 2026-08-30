@@ -7,7 +7,6 @@ import hashlib
 import io
 import json
 import re
-import sys
 from collections.abc import Iterable
 from pathlib import Path
 from urllib.parse import urlparse
@@ -15,10 +14,8 @@ from urllib.parse import urlparse
 import httpx
 from sqlalchemy import text
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from app.core.config import get_settings  # noqa: E402
-from app.db import create_database_engine  # noqa: E402
+from app.core.config import get_settings
+from app.db import create_database_engine
 
 
 DEFAULT_URL = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
