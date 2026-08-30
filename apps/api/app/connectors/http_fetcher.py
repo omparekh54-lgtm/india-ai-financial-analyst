@@ -25,6 +25,7 @@ class FetchedDocument:
     content: bytes
     etag: str | None = None
     last_modified: str | None = None
+    not_modified: bool = False
 
 
 class SafeHttpFetcher:
@@ -65,6 +66,16 @@ class SafeHttpFetcher:
                             raise SourceFetchError("Redirect response did not include a location")
                         current_url = urljoin(current_url, location)
                         continue
+
+                    if response.status_code == 304:
+                        return FetchedDocument(
+                            final_url=current_url,
+                            media_type="application/octet-stream",
+                            content=b"",
+                            etag=response.headers.get("etag"),
+                            last_modified=response.headers.get("last-modified"),
+                            not_modified=True,
+                        )
 
                     response.raise_for_status()
                     media_type = response.headers.get("content-type", "application/octet-stream")
