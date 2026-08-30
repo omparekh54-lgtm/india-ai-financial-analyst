@@ -53,6 +53,7 @@ class SecurityMasterRepository:
             security_id = str(row["id"])
             records.append(
                 SecurityRecord(
+                    id=row["id"],
                     legal_name=row["legal_name"],
                     nse_symbol=row["nse_symbol"],
                     bse_code=row["bse_code"],
