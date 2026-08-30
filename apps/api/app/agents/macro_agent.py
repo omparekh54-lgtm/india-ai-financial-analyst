@@ -15,6 +15,12 @@ class IndiaMacroPolicyFlowAgent:
                 warnings=["No macro payload supplied"],
             )
 
+        macro_evidence = [
+            item
+            for item in agent_input.evidence
+            if item.source_type in {"official_macro", "official_flow", "macro", "macro_observation"}
+        ]
+        evidence_ids = [item.evidence_id for item in macro_evidence]
         metrics = {
             key: macro.get(key)
             for key in (
@@ -71,15 +77,29 @@ class IndiaMacroPolicyFlowAgent:
             Claim(
                 agent=AgentName.MACRO,
                 statement=f"Macro factor {flag['factor']} registered a material move",
-                claim_type="risk" if flag.get("direction") in {"INR weakness", "higher crude", "net selling"} else "catalyst",
-                confidence=0.95,
-                status="supported",
+                claim_type=(
+                    "risk"
+                    if flag.get("direction") in {"INR weakness", "higher crude", "net selling"}
+                    else "catalyst"
+                ),
+                confidence=0.95 if evidence_ids else 0.45,
+                evidence_ids=evidence_ids,
+                status="pending",
                 data=flag,
             )
             for flag in flags
         ]
         metrics["material_macro_flags"] = flags
-        return AgentOutput(agent=AgentName.MACRO, claims=claims, metrics=metrics)
+        warnings = []
+        if flags and not evidence_ids:
+            warnings.append("Material macro flags are present but source evidence is unavailable")
+        return AgentOutput(
+            agent=AgentName.MACRO,
+            claims=claims,
+            evidence=macro_evidence,
+            metrics=metrics,
+            warnings=warnings,
+        )
 
 
 def _number(value: object) -> float | None:
