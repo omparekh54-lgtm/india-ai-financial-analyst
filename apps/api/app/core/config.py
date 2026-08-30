@@ -5,7 +5,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     app_env: str = "development"
     app_name: str = "India AI Financial Analyst"
@@ -21,9 +25,22 @@ class Settings(BaseSettings):
     nvidia_api_key: str | None = None
     cerebras_api_key: str | None = None
 
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
+    cerebras_base_url: str = "https://api.cerebras.ai/v1"
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+
+    groq_model: str = "llama-3.3-70b-versatile"
+    nvidia_model: str = "deepseek-ai/deepseek-v4-pro-0813"
+    cerebras_model: str = "gpt-oss-120b"
+    gemini_model: str = "gemini-2.5-flash"
+
     tavily_api_key: str | None = None
     fred_api_key: str | None = None
     alpha_vantage_api_key: str | None = None
+
+    fred_base_url: str = "https://api.stlouisfed.org/fred"
+    alpha_vantage_base_url: str = "https://www.alphavantage.co/query"
 
     fyers_client_id: str | None = None
     fyers_secret_key: str | None = None
@@ -41,6 +58,7 @@ class Settings(BaseSettings):
 
     enable_live_market: bool = False
     enable_external_llm_calls: bool = False
+    enable_external_data_calls: bool = False
     max_agent_concurrency: int = Field(default=6, ge=1, le=16)
     max_research_job_seconds: int = Field(default=240, ge=30, le=1800)
 
