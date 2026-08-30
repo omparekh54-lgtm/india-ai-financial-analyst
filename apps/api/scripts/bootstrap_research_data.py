@@ -11,7 +11,11 @@ from typing import Any
 from app.core.config import get_settings
 from app.core.data_readiness import evaluate_data_coverage, load_data_coverage
 from app.db import create_database_engine
-from app.ingestion.bootstrap import build_bootstrap_plan, parse_benchmark_spec
+from app.ingestion.bootstrap import (
+    build_bootstrap_plan,
+    parse_benchmark_spec,
+    parse_financial_spec,
+)
 
 API_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -85,6 +89,14 @@ def main() -> int:
     nse_source.add_argument("--nse-url")
     parser.add_argument("--nse-min-rows", type=int, default=1000)
     parser.add_argument(
+        "--financial",
+        action="append",
+        default=[],
+        metavar="SECURITY,FILE,SOURCE_URI",
+        help="Repeat for each approved/licensed one-security financial CSV export.",
+    )
+    parser.add_argument("--financial-min-rows", type=int, default=5)
+    parser.add_argument(
         "--benchmark",
         action="append",
         default=[],
@@ -109,6 +121,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        financials = tuple(parse_financial_spec(value) for value in args.financial)
         benchmarks = tuple(parse_benchmark_spec(value) for value in args.benchmark)
         plan = build_bootstrap_plan(
             python_executable=sys.executable,
@@ -117,6 +130,8 @@ def main() -> int:
             nse_file=Path(args.nse_file) if args.nse_file else None,
             nse_url=args.nse_url,
             nse_min_rows=args.nse_min_rows,
+            financials=financials,
+            financial_min_rows=args.financial_min_rows,
             benchmarks=benchmarks,
             benchmark_interval=args.benchmark_interval,
             benchmark_timezone=args.benchmark_timezone,
