@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 
 @dataclass(frozen=True)
@@ -222,7 +222,7 @@ def canonical_period_type(value: str) -> str:
 
 
 async def _upsert_financial_fact(
-    connection: object,
+    connection: AsyncConnection,
     *,
     security_id: UUID,
     source_id: UUID,
@@ -282,7 +282,7 @@ def _normalize_label(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", value.strip().lower()).strip()
 
 
-def _decimal(value: int | float | Decimal | str) -> Decimal:
+def _decimal(value: float | Decimal | str) -> Decimal:
     try:
         result = Decimal(str(value).replace(",", "").strip())
     except (InvalidOperation, AttributeError) as exc:
