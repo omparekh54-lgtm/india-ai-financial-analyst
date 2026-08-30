@@ -1,3 +1,7 @@
+"use client";
+
+import { FormEvent, useState } from "react";
+
 const agents = [
   "Market & Microstructure",
   "Financial & Forensics",
@@ -13,7 +17,53 @@ const agents = [
   "Risk & Red Flags",
 ];
 
+const modes = [
+  ["Full Analysis", "full_analysis"],
+  ["What Changed?", "what_changed"],
+  ["Why Did It Move?", "why_did_it_move"],
+] as const;
+
+type PlanStage = {
+  name: string;
+  agents: string[];
+  parallel: boolean;
+};
+
+type PlanResponse = {
+  query: string;
+  mode: string;
+  stages: PlanStage[];
+};
+
 export default function HomePage() {
+  const [query, setQuery] = useState("");
+  const [mode, setMode] = useState("full_analysis");
+  const [plan, setPlan] = useState<PlanResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!query.trim()) return;
+
+    setLoading(true);
+    setError(null);
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+      const response = await fetch(`${apiBase}/v1/research/plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: query.trim(), mode }),
+      });
+      if (!response.ok) throw new Error(`API returned ${response.status}`);
+      setPlan((await response.json()) as PlanResponse);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to reach research API");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <main className="shell">
       <section className="hero">
@@ -23,16 +73,52 @@ export default function HomePage() {
           Live market context, filings, fundamentals, governance, valuation, derivatives and
           source-linked AI research for NSE/BSE companies.
         </p>
-        <form className="searchCard">
-          <input aria-label="Company or ticker" placeholder="Try RELIANCE, HDFCBANK, TCS…" />
-          <button type="button">Analyze</button>
+        <form className="searchCard" onSubmit={submit}>
+          <input
+            aria-label="Company or ticker"
+            placeholder="Try RELIANCE, HDFCBANK, TCS…"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <button type="submit" disabled={loading}>
+            {loading ? "Planning…" : "Analyze"}
+          </button>
         </form>
         <div className="quickModes">
-          <button type="button">Full Analysis</button>
-          <button type="button">What Changed?</button>
-          <button type="button">Why Did It Move?</button>
+          {modes.map(([label, value]) => (
+            <button
+              key={value}
+              type="button"
+              className={mode === value ? "modeActive" : undefined}
+              onClick={() => setMode(value)}
+            >
+              {label}
+            </button>
+          ))}
         </div>
+        {error ? <p className="errorText">{error}</p> : null}
       </section>
+
+      {plan ? (
+        <section className="panel planPanel">
+          <div>
+            <p className="eyebrow">LIVE EXECUTION PLAN</p>
+            <h2>{plan.query}</h2>
+          </div>
+          <div className="planGrid">
+            {plan.stages.map((stage, index) => (
+              <article className="planStage" key={stage.name}>
+                <span className="stageNumber">{String(index + 1).padStart(2, "0")}</span>
+                <div>
+                  <strong>{stage.name}</strong>
+                  <p>{stage.parallel ? "Parallel" : "Sequential"}</p>
+                  <small>{stage.agents.join(" · ")}</small>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="panel">
         <div>
