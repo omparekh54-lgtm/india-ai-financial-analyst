@@ -42,6 +42,17 @@ h2 { max-width: 760px; font-size: clamp(28px, 4vw, 48px); line-height: 1.05; let
 .validationBadge { min-width: 150px; border: 1px solid #2f5340; background: rgba(124,226,170,.07); border-radius: 16px; padding: 16px; display: grid; gap: 7px; }
 .validationBadge span { color: #91a0af; font-size: 13px; }
 .validationBadge strong { font-size: 22px; }
+.narrativePanel { margin-top: 14px; background: linear-gradient(145deg, rgba(20,31,39,.92), rgba(13,18,24,.88)); }
+.narrativeSummary { max-width: 980px; margin: 16px 0 24px; color: #e6ebf0; font-size: 18px; line-height: 1.7; }
+.narrativeGrid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; }
+.narrativeCard { border: 1px solid #283746; border-radius: 16px; padding: 18px; background: rgba(9,14,20,.58); }
+.narrativeCard > strong { display: block; margin-bottom: 12px; }
+.narrativeCard ul { margin: 0; padding-left: 20px; color: #b7c0cc; }
+.narrativeCard li { margin: 9px 0; line-height: 1.5; }
+.narrativeCard small { color: #7f8c99; }
+.confidenceNote { margin: 18px 0 0; color: #a9b5c1; line-height: 1.55; }
+.validationWarnings { display: grid; gap: 7px; margin-top: 18px; padding: 14px 16px; border: 1px solid #5a4731; border-radius: 14px; background: rgba(87,60,27,.12); color: #dbc18f; }
+.validationWarnings span { font-size: 13px; line-height: 1.45; }
 .reportGrid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; margin-top: 14px; }
 .reportSection { border: 1px solid #202a36; border-radius: 20px; padding: 24px; background: rgba(13,18,24,.8); }
 .claimList { display: grid; gap: 10px; margin-top: 16px; }
@@ -91,7 +102,8 @@ h2 { max-width: 760px; font-size: clamp(28px, 4vw, 48px); line-height: 1.05; let
 .historyMeta { display: flex; align-items: center; gap: 10px; text-align: right; }
 @media (max-width: 860px) {
   .agentGrid { grid-template-columns: repeat(2,1fr); }
-  .confidenceGrid, .reportGrid, .changeGrid { grid-template-columns: repeat(2,1fr); }
+  .confidenceGrid, .reportGrid, .changeGrid, .narrativeGrid { grid-template-columns: repeat(2,1fr); }
+  .narrativeCard:last-child { grid-column: 1 / -1; }
   .resultHeader { align-items: start; flex-direction: column; }
   .authFields { grid-template-columns: 1fr 1fr; }
   .authFields button { grid-column: 1 / -1; }
@@ -99,7 +111,8 @@ h2 { max-width: 760px; font-size: clamp(28px, 4vw, 48px); line-height: 1.05; let
 @media (max-width: 560px) {
   .shell { width: min(100% - 24px,1180px); padding-top: 24px; }
   .searchCard { flex-direction: column; }
-  .agentGrid, .confidenceGrid, .reportGrid, .changeGrid { grid-template-columns: 1fr; }
+  .agentGrid, .confidenceGrid, .reportGrid, .changeGrid, .narrativeGrid { grid-template-columns: 1fr; }
+  .narrativeCard:last-child { grid-column: auto; }
   .signedInCard, .historyRow { align-items: stretch; flex-direction: column; }
   .authFields { grid-template-columns: 1fr; }
   .authFields button { grid-column: auto; }
