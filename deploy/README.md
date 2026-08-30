@@ -50,19 +50,41 @@ The API distinguishes liveness from readiness:
 - `GET /health` checks whether the process is alive and reports basic database/configuration state.
 - `GET /ready` is the traffic-admission check. It audits feature dependencies and database reachability and returns HTTP `503` when the runtime is unsafe to serve production traffic.
 
-When `APP_ENV=production`, critical configuration errors also fail application startup. Examples include:
+When `APP_ENV=production`, critical configuration errors also fail application startup. Examples include missing database/Auth configuration, non-HTTPS production origins, enabled LLM features without their providers, semantic retrieval without its local runtime, or live market without encrypted broker OAuth configuration.
 
-- missing `DATABASE_URL` or Supabase Auth configuration,
-- non-HTTPS production web/CORS URLs,
-- external LLM calls enabled without any provider key,
-- Gemini multimodal/audio features enabled without Gemini + the external-LLM switch,
-- semantic retrieval enabled without the Sentence-Transformers runtime,
-- live market enabled without Upstox OAuth credentials and a valid Fernet broker-token encryption key,
-- product telemetry enabled without a PostHog key.
+Warnings such as a missing Sentry DSN do not block startup but appear in `/ready`. Configure the API host/load balancer to use `/ready` for readiness and `/health` only for liveness. Do not weaken readiness checks to make a deployment green; fix the production configuration instead.
 
-Warnings such as a missing Sentry DSN do not block startup but appear in `/ready` so production gaps remain visible.
+Before rollout, run the zero-external-call structural preflight:
 
-Configure the API host/load balancer to use `/ready` for readiness and `/health` only for liveness. Do not weaken the readiness checks to make a deployment turn green; fix the missing production configuration instead.
+```bash
+python scripts/run_production_preflight.py
+```
+
+This verifies configuration, database connectivity, pgvector, the semantic HNSW index, required tables, research ownership and RLS. It does not call an LLM, broker, exchange or market-data API.
+
+After reference/data bootstrap, run the data coverage audit:
+
+```bash
+python scripts/run_data_coverage_audit.py
+```
+
+The data audit treats a full NSE EQ security universe as a hard production prerequisite and reports missing fundamentals, filings/evidence, market bars, benchmark bars, macro observations, peer metrics, embeddings and enabled official feeds explicitly. A structurally healthy but empty database must not be mistaken for a production-ready research dataset.
+
+## NSE security-master bootstrap
+
+Use only the official NSE security-master importer. Run a dry-run first:
+
+```bash
+python scripts/import_nse_security_master.py --dry-run
+```
+
+The importer validates the expected CSV header, rejects suspiciously small universes and duplicate symbol/ISIN identifiers, records a SHA-256 source checksum, and restricts remote downloads to official NSE hosts. After validating the dry-run row count/checksum, run the actual import with `DATABASE_URL` configured:
+
+```bash
+python scripts/import_nse_security_master.py
+```
+
+Do not substitute an unofficial mirror merely to make the coverage gate pass.
 
 ## Worker environment
 
@@ -109,7 +131,7 @@ Repeated research reuses recent `web_search` rows. `why_did_it_move` uses a shor
 
 ## Multimodal filing analysis
 
-Page-level Gemini visual analysis is a separate opt-in capability. It analyzes only visually rich pages from selected filing types such as financial results, investor presentations and annual reports.
+Page-level Gemini visual analysis is separately opt-in:
 
 ```text
 ENABLE_MULTIMODAL_DOCUMENT_ANALYSIS=false
@@ -117,9 +139,7 @@ MULTIMODAL_MAX_PAGES_PER_DOCUMENT=4
 MULTIMODAL_MAX_INLINE_BYTES=12000000
 ```
 
-It additionally requires `ENABLE_EXTERNAL_LLM_CALLS=true` and a configured Gemini key. Visual findings are stored as `ai_extraction` evidence with exact filing page numbers. They are deliberately excluded from primary pgvector filing ranking and cannot independently become `verified` claims in Agent 15.
-
-Turn this on only after ordinary text/XBRL filing ingestion is healthy and after testing Gemini quota/latency on a small filing sample.
+It additionally requires `ENABLE_EXTERNAL_LLM_CALLS=true` and a configured Gemini key. Visual findings are stored as `ai_extraction` evidence with exact filing page numbers. They are excluded from primary pgvector filing ranking and cannot independently become `verified` claims in Agent 15.
 
 ## Earnings-call audio transcription
 
@@ -134,60 +154,41 @@ AUDIO_TRANSCRIPT_CHUNK_CHARS=3200
 
 It requires `ENABLE_EXTERNAL_LLM_CALLS=true` and a configured Gemini key. Raw audio bytes are not retained in the evidence database; only source provenance and timestamp-aware transcript chunks are persisted. Oversized audio is rejected instead of silently truncated. Transcript evidence can support management-commentary claims but cannot independently verify primary numeric filing facts.
 
-Enable only after validating one small, known earnings-call sample and confirming quota/latency behavior.
-
 ## Supabase Auth
 
 The browser signs in with the publishable key and sends the resulting access token to FastAPI as `Authorization: Bearer <token>`. FastAPI verifies the token against Supabase Auth and persists the Supabase user UUID in `research_jobs.requested_by`.
 
-Configure the Supabase Auth **Site URL** to the production web origin and add preview/local redirect URLs deliberately. Do not use wildcard redirects broader than required for the environments you control.
-
-The user-facing RLS policies are read-only and ownership-scoped. Raw ingestion/source tables remain backend-only.
+Configure the Supabase Auth **Site URL** to the production web origin and add preview/local redirect URLs deliberately. Do not use wildcard redirects broader than required for the environments you control. User-facing RLS policies are read-only and ownership-scoped; raw ingestion/source tables remain backend-only.
 
 ## Container commands
 
-Build the API image:
+Build and run the API:
 
 ```bash
 docker build -t india-ai-financial-analyst-api ./apps/api
-```
-
-Run API:
-
-```bash
 docker run --env-file .env -p 8000:8000 india-ai-financial-analyst-api
 ```
 
-Run official feed worker from the same image:
+Run workers from the same image:
 
 ```bash
-docker run --env-file .env \
-  india-ai-financial-analyst-api \
-  python scripts/run_official_feed_daemon.py
+docker run --env-file .env india-ai-financial-analyst-api python scripts/run_official_feed_daemon.py
+docker run --env-file .env india-ai-financial-analyst-api python scripts/run_live_market_worker.py
 ```
 
-Run live-market worker only after broker OAuth/live data is configured:
-
-```bash
-docker run --env-file .env \
-  india-ai-financial-analyst-api \
-  python scripts/run_live_market_worker.py
-```
-
-`deploy/docker-compose.production.yml` expresses the API/worker process split.
+The API image healthcheck uses `/ready`; worker HTTP healthchecks are disabled because workers do not serve port 8000. `deploy/docker-compose.production.yml` expresses the process split.
 
 ## Go-live order
 
-1. Apply all database migrations.
-2. Configure Supabase Auth URLs and email settings.
-3. Deploy API with every external-call and optional-intelligence switch **off** and confirm `/health` is alive and `/ready` returns HTTP 200.
-4. Deploy web with API + Supabase public variables and test account creation/sign-in.
-5. Verify one authenticated research job is written with the correct `requested_by` UUID and is invisible to a second account.
-6. Start the official-feed worker with external data enabled only after approved/licensed feed records are registered.
-7. Enable semantic retrieval and backfill filing embeddings; verify fallback behavior and query latency.
-8. Enable Tavily and LLM providers one at a time; verify provenance, fallback and quota usage.
-9. Enable multimodal filing analysis on a small filing sample and verify that its evidence remains `ai_extraction` rather than primary evidence.
-10. Enable audio transcription on a small known earnings-call sample and verify transcript evidence remains non-primary.
-11. Configure broker OAuth/live-market adapters last; never store user broker tokens in the frontend bundle.
-12. Enable PostHog/Sentry only after confirming privacy and secret configuration.
-13. Run load, failure, security and data-freshness tests before public launch.
+1. Apply all database migrations and run `python scripts/run_production_preflight.py`.
+2. Configure Supabase Auth URLs/email settings.
+3. Run the official NSE security-master dry-run, verify count/checksum, then import the universe.
+4. Bootstrap approved benchmark, macro, fundamentals and filing/evidence datasets and run `python scripts/run_data_coverage_audit.py`.
+5. Deploy API with every external-call/optional-intelligence switch **off**; verify `/health` and `/ready`.
+6. Deploy web and test account creation/sign-in; verify one user's research is invisible to a second account.
+7. Start approved/licensed official-data ingestion only after the production data-source decision is complete.
+8. Enable semantic retrieval/backfill, then Tavily and LLM providers one at a time; verify provenance, fallback and quotas.
+9. Enable multimodal filing analysis and audio transcription on small known samples; verify their evidence remains non-primary.
+10. Configure broker OAuth/live-market last; never expose broker tokens or secrets to the frontend.
+11. Enable PostHog/Sentry after privacy and secret configuration are confirmed.
+12. Run load, provider-failure, security, auth-isolation and data-freshness tests before public launch.
