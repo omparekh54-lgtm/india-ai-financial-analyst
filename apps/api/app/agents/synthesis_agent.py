@@ -36,6 +36,10 @@ class ChiefAnalystAgent:
         confidence = _confidence_framework(claims)
         mode = str(agent_input.context.get("analysis_mode") or "full_analysis")
         special = special_mode_insights(mode, agent_input.context, dict(grouped))
+        evidence_catalog = {
+            str(item.evidence_id): item.model_dump(mode="json")
+            for item in agent_input.evidence
+        }
         report = {
             "query": agent_input.query,
             "mode": mode,
@@ -43,6 +47,7 @@ class ChiefAnalystAgent:
             "claim_count": len(claims),
             "sections": dict(grouped),
             "special_mode": special,
+            "evidence_catalog": evidence_catalog,
             "confidence": confidence,
             "validation": agent_input.context.get("validation_metrics", {}),
             "warnings": agent_input.context.get("validation_warnings", []),
