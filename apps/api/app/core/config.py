@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     app_name: str = "India AI Financial Analyst"
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:3000"
+    web_app_url: str = "http://localhost:3000"
 
     database_url: str | None = None
     supabase_url: str | None = None
@@ -53,6 +54,10 @@ class Settings(BaseSettings):
     upstox_client_id: str | None = None
     upstox_client_secret: str | None = None
     upstox_redirect_uri: str | None = None
+
+    # URL-safe base64 Fernet key. Generate once per environment and store only as a secret.
+    broker_token_encryption_key: str | None = None
+    broker_oauth_state_ttl_seconds: int = Field(default=600, ge=120, le=1800)
 
     sentry_dsn: str | None = None
     posthog_key: str | None = None
