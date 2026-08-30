@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_name: str = "India AI Financial Analyst"
     log_level: str = "INFO"
+    cors_origins: str = "http://localhost:3000"
 
     database_url: str | None = None
     supabase_url: str | None = None
@@ -62,6 +63,10 @@ class Settings(BaseSettings):
     enable_external_data_calls: bool = False
     max_agent_concurrency: int = Field(default=6, ge=1, le=16)
     max_research_job_seconds: int = Field(default=240, ge=30, le=1800)
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
 
 @lru_cache
