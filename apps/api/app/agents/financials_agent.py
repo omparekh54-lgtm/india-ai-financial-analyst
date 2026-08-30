@@ -11,6 +11,13 @@ from app.calculations.financials import (
     working_capital_days,
 )
 
+FINANCIAL_SOURCE_TYPES = {
+    "financial_fact",
+    "exchange_filing",
+    "company_filing",
+    "regulator",
+}
+
 
 class FinancialForensicAgent:
     """Code-first financial analysis agent over normalized sourced facts."""
@@ -30,18 +37,13 @@ class FinancialForensicAgent:
             "net_margin": margin(facts.get("pat"), facts.get("revenue")),
             "cfo_to_pat": cfo_to_pat(facts.get("cfo"), facts.get("pat")),
             "net_debt_to_ebitda": net_debt_to_ebitda(
-                facts.get("total_debt"),
-                facts.get("cash"),
-                facts.get("ebitda"),
+                facts.get("total_debt"), facts.get("cash"), facts.get("ebitda")
             ),
             "interest_coverage": interest_coverage(
-                facts.get("ebit"),
-                facts.get("interest_expense"),
+                facts.get("ebit"), facts.get("interest_expense")
             ),
             "roce": roce(
-                facts.get("ebit"),
-                facts.get("total_assets"),
-                facts.get("current_liabilities"),
+                facts.get("ebit"), facts.get("total_assets"), facts.get("current_liabilities")
             ),
         }
         metrics.update(
@@ -54,7 +56,8 @@ class FinancialForensicAgent:
             )
         )
 
-        evidence_ids = [item.evidence_id for item in agent_input.evidence]
+        evidence = [item for item in agent_input.evidence if item.source_type in FINANCIAL_SOURCE_TYPES]
+        evidence_ids = [item.evidence_id for item in evidence]
         claims = [
             Claim(
                 agent=AgentName.FINANCIALS,
@@ -68,10 +71,11 @@ class FinancialForensicAgent:
             for name, value in metrics.items()
             if value is not None
         ]
-
+        warnings = [] if evidence_ids else ["Financial calculations lack source-linked evidence"]
         return AgentOutput(
             agent=AgentName.FINANCIALS,
             claims=claims,
-            evidence=agent_input.evidence,
+            evidence=evidence,
             metrics=metrics,
+            warnings=warnings,
         )
