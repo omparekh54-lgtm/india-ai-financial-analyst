@@ -56,6 +56,7 @@ class DatabasePreflight:
     vector_extension: bool
     semantic_index: bool
     research_ownership_column: bool
+    benchmark_source_column: bool
     missing_tables: tuple[str, ...]
     rls_disabled_tables: tuple[str, ...]
     missing_owner_policies: tuple[str, ...]
@@ -68,6 +69,7 @@ class DatabasePreflight:
             and self.vector_extension
             and self.semantic_index
             and self.research_ownership_column
+            and self.benchmark_source_column
             and not self.missing_tables
             and not self.rls_disabled_tables
             and not self.missing_owner_policies
@@ -81,6 +83,7 @@ class DatabasePreflight:
             "vector_extension": self.vector_extension,
             "semantic_index": self.semantic_index,
             "research_ownership_column": self.research_ownership_column,
+            "benchmark_source_column": self.benchmark_source_column,
             "missing_tables": list(self.missing_tables),
             "rls_disabled_tables": list(self.rls_disabled_tables),
             "missing_owner_policies": list(self.missing_owner_policies),
@@ -103,20 +106,15 @@ async def database_preflight(engine: AsyncEngine) -> DatabasePreflight:
                     )
                 )
             )
-            research_ownership_column = bool(
-                await connection.scalar(
-                    text(
-                        """
-                        select exists(
-                          select 1
-                          from information_schema.columns
-                          where table_schema = 'public'
-                            and table_name = 'research_jobs'
-                            and column_name = 'requested_by'
-                        )
-                        """
-                    )
-                )
+            research_ownership_column = await _column_exists(
+                connection,
+                table_name="research_jobs",
+                column_name="requested_by",
+            )
+            benchmark_source_column = await _column_exists(
+                connection,
+                table_name="benchmark_bars",
+                column_name="source_id",
             )
             missing_tables = await _missing_tables(connection)
             rls_disabled_tables = await _rls_disabled_tables(connection)
@@ -127,6 +125,7 @@ async def database_preflight(engine: AsyncEngine) -> DatabasePreflight:
             vector_extension=False,
             semantic_index=False,
             research_ownership_column=False,
+            benchmark_source_column=False,
             missing_tables=(),
             rls_disabled_tables=(),
             missing_owner_policies=(),
@@ -138,9 +137,34 @@ async def database_preflight(engine: AsyncEngine) -> DatabasePreflight:
         vector_extension=vector_extension,
         semantic_index=semantic_index,
         research_ownership_column=research_ownership_column,
+        benchmark_source_column=benchmark_source_column,
         missing_tables=missing_tables,
         rls_disabled_tables=rls_disabled_tables,
         missing_owner_policies=missing_owner_policies,
+    )
+
+
+async def _column_exists(
+    connection: AsyncConnection,
+    *,
+    table_name: str,
+    column_name: str,
+) -> bool:
+    return bool(
+        await connection.scalar(
+            text(
+                """
+                select exists(
+                  select 1
+                  from information_schema.columns
+                  where table_schema = 'public'
+                    and table_name = :table_name
+                    and column_name = :column_name
+                )
+                """
+            ),
+            {"table_name": table_name, "column_name": column_name},
+        )
     )
 
 
