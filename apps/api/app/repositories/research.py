@@ -5,13 +5,13 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncConnection
 
-from app.agents.contracts import AgentOutput
+from app.agents.contracts import AgentOutput, EvidenceRef
 
 
 class ResearchRepository:
-    """Persists research jobs, agent runs, claims and final reports transactionally."""
+    """Persists research jobs, evidence, agent runs, claims and final reports transactionally."""
 
     def __init__(self, engine: AsyncEngine) -> None:
         self.engine = engine
@@ -100,6 +100,9 @@ class ResearchRepository:
         )
 
         async with self.engine.begin() as connection:
+            for evidence in output.evidence:
+                await self._save_evidence(connection, job_id, evidence)
+
             result = await connection.execute(
                 run_statement,
                 {
@@ -129,12 +132,78 @@ class ResearchRepository:
                     },
                 )
                 for evidence_id in claim.evidence_ids:
-                    await connection.execute(
-                        link_statement,
-                        {"claim_id": claim.claim_id, "evidence_chunk_id": evidence_id},
+                    exists = await connection.scalar(
+                        text("select exists(select 1 from evidence_chunks where id = :id)"),
+                        {"id": evidence_id},
                     )
+                    if exists:
+                        await connection.execute(
+                            link_statement,
+                            {"claim_id": claim.claim_id, "evidence_chunk_id": evidence_id},
+                        )
 
             return agent_run_id
+
+    async def _save_evidence(
+        self,
+        connection: AsyncConnection,
+        job_id: UUID,
+        evidence: EvidenceRef,
+    ) -> None:
+        exists = await connection.scalar(
+            text("select exists(select 1 from evidence_chunks where id = :id)"),
+            {"id": evidence.evidence_id},
+        )
+        if exists:
+            return
+
+        source_statement = text(
+            """
+            insert into sources (
+                security_id, source_type, source_uri, title, published_at,
+                retrieved_at, freshness, checksum, metadata
+            )
+            select
+                security_id, :source_type, :source_uri, :title,
+                cast(:published_at as timestamptz), cast(:retrieved_at as timestamptz),
+                :freshness, :checksum, '{}'::jsonb
+            from research_jobs
+            where id = :job_id
+            returning id
+            """
+        )
+        result = await connection.execute(
+            source_statement,
+            {
+                "job_id": job_id,
+                "source_type": evidence.source_type,
+                "source_uri": evidence.source_uri,
+                "title": evidence.title,
+                "published_at": evidence.published_at,
+                "retrieved_at": evidence.retrieved_at,
+                "freshness": evidence.freshness,
+                "checksum": evidence.checksum,
+            },
+        )
+        source_id = result.scalar_one()
+        await connection.execute(
+            text(
+                """
+                insert into evidence_chunks (
+                    id, source_id, chunk_index, content, metadata
+                ) values (
+                    :id, :source_id, 0, :content, cast(:metadata as jsonb)
+                )
+                on conflict (id) do nothing
+                """
+            ),
+            {
+                "id": evidence.evidence_id,
+                "source_id": source_id,
+                "content": evidence.excerpt or evidence.title or "Evidence reference",
+                "metadata": json.dumps({"reference_only": True}),
+            },
+        )
 
     async def save_report(self, job_id: UUID, report: dict[str, object]) -> None:
         confidence = report.get("confidence") or {}
