@@ -71,6 +71,17 @@ class Settings(BaseSettings):
     official_feed_poll_seconds: int = Field(default=60, ge=30, le=3600)
     official_feed_batch_size: int = Field(default=4, ge=1, le=20)
 
+    # User-authorized realtime market stream lifecycle. These defaults intentionally keep
+    # subscriptions short-lived and the number of simultaneous broker sockets conservative.
+    live_market_subscription_ttl_seconds: int = Field(default=1200, ge=300, le=86400)
+    live_market_quote_fresh_seconds: int = Field(default=15, ge=2, le=120)
+    live_market_worker_poll_seconds: int = Field(default=5, ge=2, le=60)
+    live_market_stream_lease_seconds: int = Field(default=45, ge=20, le=300)
+    live_market_stream_heartbeat_seconds: int = Field(default=15, ge=5, le=60)
+    live_market_subscription_refresh_seconds: int = Field(default=10, ge=5, le=120)
+    live_market_max_user_streams: int = Field(default=10, ge=1, le=100)
+    live_market_db_flush_seconds: float = Field(default=1.0, ge=0.25, le=10.0)
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
