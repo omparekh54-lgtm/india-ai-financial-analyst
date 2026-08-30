@@ -4,6 +4,7 @@ from collections import defaultdict
 from typing import Any
 
 from app.agents.contracts import AgentInput, AgentName, AgentOutput, Claim
+from app.research.insights import special_mode_insights
 
 
 class ChiefAnalystAgent:
@@ -11,9 +12,16 @@ class ChiefAnalystAgent:
 
     async def run(self, agent_input: AgentInput) -> AgentOutput:
         raw_claims = agent_input.context.get("validated_claims") or []
-        claims = [claim if isinstance(claim, Claim) else Claim.model_validate(claim) for claim in raw_claims]
+        claims = [
+            claim if isinstance(claim, Claim) else Claim.model_validate(claim)
+            for claim in raw_claims
+        ]
 
-        disallowed = [claim for claim in claims if claim.status not in {"verified", "supported", "inferred"}]
+        disallowed = [
+            claim
+            for claim in claims
+            if claim.status not in {"verified", "supported", "inferred"}
+        ]
         if disallowed:
             return AgentOutput(
                 agent=AgentName.SYNTHESIS,
@@ -26,10 +34,15 @@ class ChiefAnalystAgent:
             grouped[claim.agent.value].append(claim.model_dump(mode="json"))
 
         confidence = _confidence_framework(claims)
+        mode = str(agent_input.context.get("analysis_mode") or "full_analysis")
+        special = special_mode_insights(mode, agent_input.context, dict(grouped))
         report = {
             "query": agent_input.query,
+            "mode": mode,
+            "security": agent_input.context.get("security"),
             "claim_count": len(claims),
             "sections": dict(grouped),
+            "special_mode": special,
             "confidence": confidence,
             "validation": agent_input.context.get("validation_metrics", {}),
             "warnings": agent_input.context.get("validation_warnings", []),
