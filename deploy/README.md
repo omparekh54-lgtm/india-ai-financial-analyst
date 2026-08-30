@@ -36,6 +36,7 @@ ENABLE_EXTERNAL_DATA_CALLS=false
 ENABLE_LIVE_MARKET=false
 ENABLE_SEMANTIC_RETRIEVAL=false
 ENABLE_MULTIMODAL_DOCUMENT_ANALYSIS=false
+ENABLE_AUDIO_TRANSCRIPTION=false
 ```
 
 Add provider secrets only to the API/worker secret store. Enable each feature only after the corresponding credentials, quota controls and data-quality checks are ready.
@@ -97,6 +98,22 @@ It additionally requires `ENABLE_EXTERNAL_LLM_CALLS=true` and a configured Gemin
 
 Turn this on only after ordinary text/XBRL filing ingestion is healthy and after testing Gemini quota/latency on a small filing sample.
 
+## Earnings-call audio transcription
+
+Official-event audio attachments can use the same evidence pipeline as filing PDFs. Audio transcription is separately gated:
+
+```text
+ENABLE_AUDIO_TRANSCRIPTION=false
+GEMINI_AUDIO_MODEL=gemini-3.7-flash
+AUDIO_TRANSCRIPTION_MAX_INLINE_BYTES=12000000
+AUDIO_TRANSCRIPTION_MAX_OUTPUT_TOKENS=16000
+AUDIO_TRANSCRIPT_CHUNK_CHARS=3200
+```
+
+It additionally requires `ENABLE_EXTERNAL_LLM_CALLS=true` and a configured Gemini key. Only allowlisted official-source URLs are fetched by the official-feed worker. Oversized inline audio is rejected rather than truncated. Transcript chunks retain source provenance and timestamps when available, but are exposed to research agents as secondary `audio_transcript` evidence and cannot independently become verified primary facts.
+
+Raw audio bytes are not retained in the evidence database after transcription; the source URL, checksum, transcript chunks and transcription metadata are retained. Enable this only after a small known earnings-call sample has been checked for terminology, numbers, timestamps and quota usage.
+
 ## Supabase Auth
 
 The browser signs in with the publishable key and sends the resulting access token to FastAPI as `Authorization: Bearer <token>`. FastAPI verifies the token against Supabase Auth and persists the Supabase user UUID in `research_jobs.requested_by`.
@@ -148,5 +165,6 @@ docker run --env-file .env \
 7. Enable semantic retrieval and backfill filing embeddings; verify fallback behavior and query latency.
 8. Enable Tavily and LLM providers one at a time; verify provenance, fallback and quota usage.
 9. Enable multimodal filing analysis on a small filing sample and verify that its evidence remains `ai_extraction` rather than primary evidence.
-10. Configure broker OAuth/live-market adapters last; never store user broker tokens in the frontend bundle.
-11. Run load, failure, security and data-freshness tests before public launch.
+10. Enable audio transcription on a small known call and verify transcript/timestamp quality plus `audio_transcript` evidence status.
+11. Configure broker OAuth/live-market adapters last; never store user broker tokens in the frontend bundle.
+12. Run load, failure, security and data-freshness tests before public launch.
