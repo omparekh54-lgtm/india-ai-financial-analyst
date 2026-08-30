@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 
 from app.agents.contracts import AgentInput, AgentName, AgentOutput, Claim, EvidenceRef
 
-
 HIGH_IMPACT = (
     "earnings",
     "results",
@@ -93,7 +92,10 @@ class NewsEventAgent:
                         )
                     )
 
-        events.sort(key=lambda event: {"high": 2, "medium": 1, "low": 0}[str(event["materiality"])], reverse=True)
+        events.sort(
+            key=lambda event: {"high": 2, "medium": 1, "low": 0}[str(event["materiality"])],
+            reverse=True,
+        )
         return AgentOutput(
             agent=AgentName.NEWS,
             claims=claims,
