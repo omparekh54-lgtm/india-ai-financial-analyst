@@ -19,6 +19,7 @@ class ContextLoader(Protocol):
         security_id: UUID,
         *,
         mode: str,
+        user_id: UUID | None = None,
     ) -> tuple[dict[str, object], list[EvidenceRef]]: ...
 
 
@@ -129,6 +130,7 @@ class OrchestratorRuntime:
         loaded_context, loaded_evidence = await self.context_loader.load(
             working_input.security_id,
             mode=plan.mode.value,
+            user_id=working_input.user_id,
         )
         working_input.context.update(loaded_context)
         working_input.evidence = _dedupe_evidence([*working_input.evidence, *loaded_evidence])
