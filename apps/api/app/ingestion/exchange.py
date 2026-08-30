@@ -32,53 +32,121 @@ class IngestedDisclosure:
 
 
 _EVENT_PATTERNS: tuple[tuple[str, re.Pattern[str], float], ...] = (
-    ("auditor_resignation", re.compile(r"auditor.{0,50}resign", re.IGNORECASE), 0.95),
+    ("auditor_resignation", re.compile(r"auditor.{0,80}(resign|cessation)", re.IGNORECASE), 0.98),
     (
-        "promoter_pledge",
-        re.compile(r"promoter.{0,80}(pledge|encumbrance)", re.IGNORECASE),
+        "cfo_change",
+        re.compile(r"(chief financial officer|\bcfo\b).{0,80}(resign|cessation|appoint|change)", re.IGNORECASE),
+        0.92,
+    ),
+    (
+        "ceo_change",
+        re.compile(r"(chief executive officer|\bceo\b|managing director|\bmd\b).{0,80}(resign|cessation|appoint|change)", re.IGNORECASE),
         0.90,
     ),
     (
-        "credit_rating",
-        re.compile(r"credit rating|rating (upgrade|downgrade|reaffirm)", re.IGNORECASE),
+        "director_change",
+        re.compile(r"(independent director|director).{0,80}(resign|cessation|appoint|change)", re.IGNORECASE),
         0.85,
     ),
     (
-        "financial_results",
-        re.compile(r"financial results|quarterly results|regulation 33", re.IGNORECASE),
+        "promoter_pledge",
+        re.compile(r"promoter.{0,100}(pledge|encumbrance)|encumbrance.{0,100}promoter", re.IGNORECASE),
         0.95,
     ),
     (
-        "earnings_call",
-        re.compile(r"earnings call|conference call|concall", re.IGNORECASE),
-        0.80,
-    ),
-    ("investor_presentation", re.compile(r"investor presentation", re.IGNORECASE), 0.75),
-    ("buyback", re.compile(r"buy[- ]?back", re.IGNORECASE), 0.90),
-    ("bonus", re.compile(r"bonus (issue|share)", re.IGNORECASE), 0.85),
-    ("split", re.compile(r"stock split|sub[- ]?division of.*share", re.IGNORECASE), 0.85),
-    (
-        "qip",
-        re.compile(r"qualified institutional placement|\bqip\b", re.IGNORECASE),
-        0.85,
-    ),
-    (
-        "preferential_issue",
-        re.compile(r"preferential (issue|allotment)", re.IGNORECASE),
-        0.85,
-    ),
-    ("related_party", re.compile(r"related party transaction", re.IGNORECASE), 0.80),
-    (
-        "merger_demerger",
-        re.compile(r"merger|demerger|scheme of arrangement", re.IGNORECASE),
+        "credit_rating",
+        re.compile(r"credit rating|rating (upgrade|downgrade|reaffirm|revision|withdraw)", re.IGNORECASE),
         0.90,
     ),
     (
+        "financial_results",
+        re.compile(r"financial results|quarterly results|regulation 33|integrated filing.*financial", re.IGNORECASE),
+        0.98,
+    ),
+    (
+        "earnings_call",
+        re.compile(r"earnings call|conference call|concall|analyst.*call|investor.*call", re.IGNORECASE),
+        0.85,
+    ),
+    ("earnings_transcript", re.compile(r"earnings call transcript|concall transcript|transcript", re.IGNORECASE), 0.90),
+    ("investor_presentation", re.compile(r"investor presentation|analyst presentation", re.IGNORECASE), 0.85),
+    ("annual_report", re.compile(r"annual report|regulation 34", re.IGNORECASE), 0.95),
+    ("board_meeting", re.compile(r"outcome of board meeting|board meeting outcome|board meeting intimation", re.IGNORECASE), 0.75),
+    ("buyback", re.compile(r"buy[- ]?back", re.IGNORECASE), 0.92),
+    ("bonus", re.compile(r"bonus (issue|share)|issue of bonus", re.IGNORECASE), 0.88),
+    ("split", re.compile(r"stock split|sub[- ]?division of.*share|share split", re.IGNORECASE), 0.88),
+    (
+        "qip",
+        re.compile(r"qualified institutional placement|\bqip\b", re.IGNORECASE),
+        0.90,
+    ),
+    (
+        "preferential_issue",
+        re.compile(r"preferential (issue|allotment)|issue of warrants", re.IGNORECASE),
+        0.88,
+    ),
+    ("rights_issue", re.compile(r"rights issue|right issue of equity", re.IGNORECASE), 0.85),
+    ("fund_raise", re.compile(r"fund rais|raising of funds|debt issuance|non[- ]convertible debenture", re.IGNORECASE), 0.80),
+    ("related_party", re.compile(r"related party transaction|\brpt\b", re.IGNORECASE), 0.88),
+    (
+        "merger_demerger",
+        re.compile(r"merger|demerger|scheme of arrangement|amalgamation", re.IGNORECASE),
+        0.92,
+    ),
+    (
+        "acquisition_disposal",
+        re.compile(r"acquisition|acquire|divestment|disposal|sale of stake|subsidiary.*sale", re.IGNORECASE),
+        0.82,
+    ),
+    (
         "order_win",
-        re.compile(r"award of order|receipt of order|order win", re.IGNORECASE),
+        re.compile(r"award of order|receipt of order|order win|letter of award|work order", re.IGNORECASE),
+        0.82,
+    ),
+    ("dividend", re.compile(r"dividend|record date", re.IGNORECASE), 0.78),
+    (
+        "regulatory_action",
+        re.compile(r"sebi.{0,80}(order|penalty|notice)|exchange.{0,80}penalty|regulatory action", re.IGNORECASE),
+        0.95,
+    ),
+    (
+        "litigation",
+        re.compile(r"litigation|court order|arbitration|legal proceeding|tax demand", re.IGNORECASE),
+        0.82,
+    ),
+    ("shareholding_pattern", re.compile(r"shareholding pattern", re.IGNORECASE), 0.72),
+    (
+        "insider_transaction",
+        re.compile(r"insider trading|prohibition of insider trading|regulation 7\(2\)", re.IGNORECASE),
         0.75,
     ),
-    ("dividend", re.compile(r"dividend|record date", re.IGNORECASE), 0.75),
+)
+
+HIGH_VALUE_DOCUMENT_EVENTS = frozenset(
+    {
+        "auditor_resignation",
+        "cfo_change",
+        "ceo_change",
+        "director_change",
+        "promoter_pledge",
+        "credit_rating",
+        "financial_results",
+        "earnings_call",
+        "earnings_transcript",
+        "investor_presentation",
+        "annual_report",
+        "buyback",
+        "qip",
+        "preferential_issue",
+        "rights_issue",
+        "fund_raise",
+        "related_party",
+        "merger_demerger",
+        "acquisition_disposal",
+        "order_win",
+        "regulatory_action",
+        "litigation",
+    }
 )
 
 
@@ -211,6 +279,10 @@ def classify_exchange_event(headline: str, excerpt: str | None = None) -> tuple[
         if pattern.search(text_value):
             return event_type, materiality
     return "exchange_announcement", 0.50
+
+
+def should_follow_exchange_document(event_type: str) -> bool:
+    return event_type in HIGH_VALUE_DOCUMENT_EVENTS
 
 
 def disclosure_fingerprint(
