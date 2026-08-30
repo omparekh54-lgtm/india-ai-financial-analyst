@@ -70,6 +70,7 @@ class SemanticEvidenceRetriever:
                               left join corporate_events ce on ce.id = ces.event_id
                               where s.security_id = :security_id
                                 and ec.embedding is not null
+                                and coalesce(ec.section, '') <> 'multimodal_extraction'
                                 and s.source_type in ('exchange_filing', 'company_filing', 'regulator')
                             ), scored as (
                               select *,
