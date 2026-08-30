@@ -30,5 +30,5 @@ async def database_health(engine: AsyncEngine) -> bool:
         async with engine.connect() as connection:
             await connection.execute(text("select 1"))
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001 - health probes intentionally collapse DB failures to false
         return False
