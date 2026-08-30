@@ -96,7 +96,9 @@ h2 { max-width: 760px; font-size: clamp(28px, 4vw, 48px); line-height: 1.05; let
 .authFields button { background: #f1f5f9; color: #0b0e12; font-weight: 800; }
 .historyPanel h2 { margin-bottom: 20px; }
 .historyList { display: grid; gap: 8px; }
-.historyRow { display: flex; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid #202c38; border-radius: 14px; background: #0d131a; padding: 14px 16px; }
+.historyRow { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid #202c38; border-radius: 14px; background: #0d131a; color: inherit; padding: 14px 16px; text-align: left; transition: border-color .15s ease, background .15s ease; }
+.historyRow:not(:disabled):hover { border-color: #3b5266; background: #111923; }
+.historyRow:focus-visible { outline: 2px solid #7ce2aa; outline-offset: 2px; }
 .historyRow > div:first-child { display: grid; gap: 5px; }
 .historyRow span, .historyRow small { color: #81909f; font-size: 12px; }
 .historyMeta { display: flex; align-items: center; gap: 10px; text-align: right; }
