@@ -133,6 +133,7 @@ def _supported_media_type(media_type: str, url: str) -> bool:
         "application/json",
         "text/json",
         "application/xml",
+        "application/xbrl+xml",
         "text/xml",
     }
     if media_type in supported:
@@ -140,7 +141,7 @@ def _supported_media_type(media_type: str, url: str) -> bool:
     if media_type != "application/octet-stream":
         return False
     suffix = PurePosixPath(urlparse(url).path).suffix.lower()
-    return suffix in {".csv", ".json", ".xml", ".pdf", ".html", ".txt"}
+    return suffix in {".csv", ".json", ".xml", ".xbrl", ".pdf", ".html", ".xhtml", ".txt"}
 
 
 def _resolve_addresses(hostname: str, port: int) -> set[str]:
