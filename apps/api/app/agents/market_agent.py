@@ -9,10 +9,14 @@ class LiveMarketAgent:
     async def run(self, agent_input: AgentInput) -> AgentOutput:
         quote = agent_input.context.get("market_quote") or {}
         if not quote:
+            warnings = ["No market quote supplied"]
+            live_warning = agent_input.context.get("live_market_warning")
+            if live_warning:
+                warnings.append(str(live_warning))
             return AgentOutput(
                 agent=AgentName.MARKET,
                 ok=False,
-                warnings=["No market quote supplied"],
+                warnings=warnings,
             )
 
         market_evidence = [item for item in agent_input.evidence if item.source_type == "market_data"]
@@ -40,12 +44,16 @@ class LiveMarketAgent:
             "provider": quote.get("provider"),
             "is_delayed": delayed,
             "as_of": quote.get("as_of"),
+            "bid": _number(quote.get("bid")),
+            "ask": _number(quote.get("ask")),
+            "snapshot_age_seconds": _number(quote.get("snapshot_age_seconds")),
+            "live_market_status": agent_input.context.get("live_market_status"),
         }
 
         confidence = 0.99 if not delayed else 0.90
         claims: list[Claim] = []
         if price is not None:
-            label = "Latest stored market close" if delayed else "Live market price"
+            label = "Fresh exchange snapshot" if not delayed else "Latest delayed market observation"
             claims.append(
                 Claim(
                     agent=AgentName.MARKET,
@@ -58,6 +66,7 @@ class LiveMarketAgent:
                         "metric": "price",
                         "value": price,
                         "as_of": metrics["as_of"],
+                        "provider": metrics["provider"],
                         "is_delayed": delayed,
                         "requires_current_data": not delayed,
                     },
@@ -67,18 +76,21 @@ class LiveMarketAgent:
             claims.append(
                 Claim(
                     agent=AgentName.MARKET,
-                    statement=f"Price change versus previous stored close is {change_pct:.2f}%",
+                    statement=f"Price change versus previous close is {change_pct:.2f}%",
                     claim_type="calculation",
-                    confidence=0.99,
+                    confidence=0.99 if not delayed else 0.94,
                     evidence_ids=evidence_ids,
                     status="pending",
                     data={"metric": "change_pct", "value": change_pct, "is_delayed": delayed},
                 )
             )
 
-        warnings = []
-        if delayed:
-            warnings.append("Market quote is delayed; it is not labeled real-time")
+        warnings: list[str] = []
+        live_warning = agent_input.context.get("live_market_warning")
+        if live_warning:
+            warnings.append(str(live_warning))
+        elif delayed:
+            warnings.append("Market observation is delayed; it is not labeled real-time")
         if not evidence_ids:
             warnings.append("No market-data evidence reference was available")
         return AgentOutput(
