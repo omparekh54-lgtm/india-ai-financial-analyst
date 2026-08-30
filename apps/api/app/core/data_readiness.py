@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -120,9 +120,16 @@ def evaluate_data_coverage(
     coverage: DataCoverage,
     *,
     min_nse_eq_securities: int = 1000,
+    as_of: datetime | None = None,
+    market_max_age_days: int = 7,
+    benchmark_max_age_days: int = 7,
+    macro_max_age_days: int = 45,
+    corporate_event_max_age_days: int = 90,
+    financial_period_max_age_days: int = 200,
 ) -> DataCoverageReport:
     errors: list[str] = []
     warnings: list[str] = []
+    now = _utc(as_of or datetime.now(UTC))
 
     if coverage.nse_eq_securities < min_nse_eq_securities:
         errors.append(
@@ -136,14 +143,39 @@ def evaluate_data_coverage(
         )
     if coverage.financial_facts == 0:
         warnings.append("No normalized financial facts are populated.")
+    elif _date_age_days(now, coverage.latest_financial_period) > financial_period_max_age_days:
+        warnings.append(
+            "Normalized financial facts appear stale; latest period is "
+            f"{_iso(coverage.latest_financial_period)}."
+        )
     if coverage.corporate_events == 0 or coverage.evidence_chunks == 0:
         warnings.append("No parsed corporate-event filing evidence is populated.")
+    elif _datetime_age_days(now, coverage.latest_corporate_event) > corporate_event_max_age_days:
+        warnings.append(
+            "Corporate-event filing evidence appears stale; latest event is "
+            f"{_iso(coverage.latest_corporate_event)}."
+        )
     if coverage.market_bars == 0:
         warnings.append("No stored security market bars are populated.")
+    elif _datetime_age_days(now, coverage.latest_market_bar) > market_max_age_days:
+        warnings.append(
+            "Stored security market bars appear stale; latest bar is "
+            f"{_iso(coverage.latest_market_bar)}."
+        )
     if coverage.benchmark_bars == 0:
         warnings.append("No NIFTY/India VIX benchmark bars are populated.")
+    elif _datetime_age_days(now, coverage.latest_benchmark_bar) > benchmark_max_age_days:
+        warnings.append(
+            "NIFTY/India VIX benchmark bars appear stale; latest bar is "
+            f"{_iso(coverage.latest_benchmark_bar)}."
+        )
     if coverage.macro_observations == 0:
         warnings.append("No India/global macro observations are populated.")
+    elif _date_age_days(now, coverage.latest_macro_observation) > macro_max_age_days:
+        warnings.append(
+            "India/global macro observations appear stale; latest observation is "
+            f"{_iso(coverage.latest_macro_observation)}."
+        )
     if coverage.security_metrics == 0:
         warnings.append("No comparable/security metrics are populated for peer analysis.")
     if coverage.sources > 0 and coverage.evidence_chunks > 0 and coverage.embedded_evidence_chunks == 0:
@@ -159,6 +191,25 @@ def evaluate_data_coverage(
         errors=tuple(errors),
         warnings=tuple(warnings),
     )
+
+
+def _datetime_age_days(now: datetime, value: datetime | None) -> int:
+    if value is None:
+        return 0
+    age = now - _utc(value)
+    return max(age.days, 0)
+
+
+def _date_age_days(now: datetime, value: date | None) -> int:
+    if value is None:
+        return 0
+    return max((now.date() - value).days, 0)
+
+
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _iso(value: date | datetime | None) -> str | None:
