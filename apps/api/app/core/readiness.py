@@ -95,21 +95,23 @@ def audit_settings(settings: Settings) -> ReadinessReport:
             "ENABLE_EXTERNAL_LLM_CALLS is true but no LLM provider key is configured.",
         )
 
-    if settings.enable_multimodal_document_analysis:
-        if not settings.enable_external_llm_calls or not settings.gemini_api_key:
-            add(
-                "multimodal_gemini_missing",
-                "error",
-                "Multimodal filing analysis requires external LLM calls and GEMINI_API_KEY.",
-            )
+    if settings.enable_multimodal_document_analysis and (
+        not settings.enable_external_llm_calls or not settings.gemini_api_key
+    ):
+        add(
+            "multimodal_gemini_missing",
+            "error",
+            "Multimodal filing analysis requires external LLM calls and GEMINI_API_KEY.",
+        )
 
-    if settings.enable_audio_transcription:
-        if not settings.enable_external_llm_calls or not settings.gemini_api_key:
-            add(
-                "audio_gemini_missing",
-                "error",
-                "Audio transcription requires external LLM calls and GEMINI_API_KEY.",
-            )
+    if settings.enable_audio_transcription and (
+        not settings.enable_external_llm_calls or not settings.gemini_api_key
+    ):
+        add(
+            "audio_gemini_missing",
+            "error",
+            "Audio transcription requires external LLM calls and GEMINI_API_KEY.",
+        )
 
     if settings.enable_semantic_retrieval and importlib.util.find_spec("sentence_transformers") is None:
         add(
