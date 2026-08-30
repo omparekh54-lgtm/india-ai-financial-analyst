@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -236,12 +236,12 @@ def _parse_timestamp(value: object) -> datetime:
     if not candidate:
         raise UpstoxMarketDataError("Upstox market data has an empty timestamp")
     if candidate.isdigit():
-        raw = int(candidate)
-        if raw > 10_000_000_000:
-            raw /= 1000
-        return datetime.fromtimestamp(raw).astimezone()
+        seconds: float = float(candidate)
+        if seconds > 10_000_000_000:
+            seconds /= 1000
+        return datetime.fromtimestamp(seconds, tz=UTC)
     try:
-        parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(candidate)
     except ValueError as exc:
         raise UpstoxMarketDataError("Upstox market data has an invalid timestamp") from exc
     if parsed.tzinfo is None:
