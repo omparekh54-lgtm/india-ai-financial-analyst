@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncConnection
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from app.agents.contracts import AgentOutput, EvidenceRef
 
