@@ -4,6 +4,7 @@ import asyncio
 import ipaddress
 import socket
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -40,16 +41,24 @@ class SafeHttpFetcher:
         self.max_bytes = max_bytes
         self.max_redirects = max_redirects
 
-    async def fetch(self, url: str) -> FetchedDocument:
+    async def fetch(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> FetchedDocument:
         current_url = url
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(30.0, connect=10.0),
             follow_redirects=False,
-            headers={"User-Agent": "IndiaAIFinancialAnalyst/0.2 evidence-fetcher"},
+            headers={
+                "User-Agent": "IndiaAIFinancialAnalyst/0.3 evidence-fetcher",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
         ) as client:
             for _ in range(self.max_redirects + 1):
                 await self._validate_url(current_url)
-                async with client.stream("GET", current_url) as response:
+                async with client.stream("GET", current_url, headers=headers) as response:
                     if response.status_code in {301, 302, 303, 307, 308}:
                         location = response.headers.get("location")
                         if not location:
@@ -60,15 +69,7 @@ class SafeHttpFetcher:
                     response.raise_for_status()
                     media_type = response.headers.get("content-type", "application/octet-stream")
                     media_type = media_type.split(";", 1)[0].strip().lower()
-                    if media_type not in {
-                        "application/pdf",
-                        "text/html",
-                        "application/xhtml+xml",
-                        "text/plain",
-                        "text/csv",
-                        "application/xml",
-                        "text/xml",
-                    }:
+                    if not _supported_media_type(media_type, current_url):
                         raise SourceFetchError(f"Unsupported evidence content type: {media_type}")
 
                     declared_length = response.headers.get("content-length")
@@ -118,6 +119,28 @@ class SafeHttpFetcher:
 
     def _domain_allowed(self, hostname: str) -> bool:
         return any(hostname == domain or hostname.endswith(f".{domain}") for domain in self.allowed_domains)
+
+
+def _supported_media_type(media_type: str, url: str) -> bool:
+    supported = {
+        "application/pdf",
+        "text/html",
+        "application/xhtml+xml",
+        "text/plain",
+        "text/csv",
+        "application/csv",
+        "application/vnd.ms-excel",
+        "application/json",
+        "text/json",
+        "application/xml",
+        "text/xml",
+    }
+    if media_type in supported:
+        return True
+    if media_type != "application/octet-stream":
+        return False
+    suffix = PurePosixPath(urlparse(url).path).suffix.lower()
+    return suffix in {".csv", ".json", ".xml", ".pdf", ".html", ".txt"}
 
 
 def _resolve_addresses(hostname: str, port: int) -> set[str]:
