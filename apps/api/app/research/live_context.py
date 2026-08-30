@@ -10,17 +10,19 @@ from app.core.config import Settings
 from app.evidence.embeddings import EmbeddingError, build_embedding_provider
 from app.evidence.semantic import SemanticEvidenceRetriever, build_research_queries
 from app.market.live_overlay import LiveMarketOverlayService
+from app.research.acquisition import FreshResearchAcquisitionService
 from app.research.context import DatabaseResearchContextLoader
 from app.research.filing_evidence import load_exchange_filing_evidence
 
 
 class UserAwareResearchContextLoader:
-    """Loads durable research context, filing evidence, then optional user-authorized live data."""
+    """Loads durable context, fresh research, filing evidence and optional live market data."""
 
     def __init__(self, engine: AsyncEngine, settings: Settings) -> None:
         self.engine = engine
         self.settings = settings
         self.base = DatabaseResearchContextLoader(engine)
+        self.acquisition = FreshResearchAcquisitionService(engine, settings)
         self.live = LiveMarketOverlayService(engine, settings)
         embedder = build_embedding_provider(settings)
         self.semantic = (
@@ -94,6 +96,14 @@ class UserAwareResearchContextLoader:
 
         if not isinstance(security, dict):
             return context, evidence
+
+        context, evidence = await self.acquisition.enrich(
+            security_id=security_id,
+            security=security,
+            mode=mode,
+            context=context,
+            evidence=evidence,
+        )
         return await self.live.apply(
             user_id=user_id,
             security_id=security_id,
