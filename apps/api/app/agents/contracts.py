@@ -54,6 +54,7 @@ class Claim(BaseModel):
 
 class AgentInput(BaseModel):
     job_id: UUID
+    user_id: UUID | None = None
     security_id: UUID | None = None
     query: str
     context: dict[str, Any] = Field(default_factory=dict)
