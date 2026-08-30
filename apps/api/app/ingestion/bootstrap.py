@@ -3,12 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.ingestion.official_benchmark_files import resolve_official_benchmark_source
+from app.ingestion.official_macro_files import validate_official_source_url, validate_rbi_series_key
+from app.ingestion.reference_provenance import validate_provider_name, validate_source_uri
+
 
 @dataclass(frozen=True)
 class BenchmarkBootstrapSpec:
     code: str
-    provider: str
     file: Path
+    source_url: str
 
 
 @dataclass(frozen=True)
@@ -34,6 +38,14 @@ class MetricsBootstrapSpec:
 
 
 @dataclass(frozen=True)
+class MacroBootstrapSpec:
+    provider: str
+    file: Path
+    source_url: str
+    series_key: str | None = None
+
+
+@dataclass(frozen=True)
 class BootstrapStage:
     name: str
     command: tuple[str, ...]
@@ -42,12 +54,13 @@ class BootstrapStage:
 def parse_benchmark_spec(value: str) -> BenchmarkBootstrapSpec:
     parts = [part.strip() for part in value.split(",", 2)]
     if len(parts) != 3 or not all(parts):
-        raise ValueError("benchmark must use CODE,PROVIDER,FILE format")
-    code, provider, file_name = parts
+        raise ValueError("benchmark must use CODE,FILE,OFFICIAL_SOURCE_URL format")
+    code, file_name, source_url = parts
+    source = resolve_official_benchmark_source(code, source_url)
     return BenchmarkBootstrapSpec(
-        code=code.upper(),
-        provider=provider.lower(),
+        code=source.benchmark_code,
         file=Path(file_name),
+        source_url=source.source_url,
     )
 
 
@@ -59,7 +72,7 @@ def parse_financial_spec(value: str) -> FinancialBootstrapSpec:
     return FinancialBootstrapSpec(
         security=security,
         file=Path(file_name),
-        source_uri=source_uri,
+        source_uri=validate_source_uri(source_uri),
     )
 
 
@@ -70,9 +83,9 @@ def parse_market_spec(value: str) -> MarketBootstrapSpec:
     security, provider, file_name, source_uri = parts
     return MarketBootstrapSpec(
         security=security,
-        provider=provider.lower(),
+        provider=validate_provider_name(provider),
         file=Path(file_name),
-        source_uri=source_uri,
+        source_uri=validate_source_uri(source_uri),
     )
 
 
@@ -84,8 +97,39 @@ def parse_metrics_spec(value: str) -> MetricsBootstrapSpec:
     return MetricsBootstrapSpec(
         security=security,
         file=Path(file_name),
-        source_uri=source_uri,
+        source_uri=validate_source_uri(source_uri),
     )
+
+
+def parse_macro_spec(value: str) -> MacroBootstrapSpec:
+    raw_parts = [part.strip() for part in value.split(",")]
+    if not raw_parts or not raw_parts[0]:
+        raise ValueError(
+            "macro must use RBI,SERIES_KEY,FILE,OFFICIAL_SOURCE_URL or "
+            "NSDL,FILE,OFFICIAL_SOURCE_URL format"
+        )
+
+    provider = raw_parts[0].lower()
+    if provider == "rbi":
+        if len(raw_parts) != 4 or not all(raw_parts):
+            raise ValueError("RBI macro must use RBI,SERIES_KEY,FILE,OFFICIAL_SOURCE_URL format")
+        _, series_key, file_name, source_url = raw_parts
+        return MacroBootstrapSpec(
+            provider="rbi",
+            series_key=validate_rbi_series_key(series_key),
+            file=Path(file_name),
+            source_url=validate_official_source_url("RBI", source_url),
+        )
+    if provider == "nsdl":
+        if len(raw_parts) != 3 or not all(raw_parts):
+            raise ValueError("NSDL macro must use NSDL,FILE,OFFICIAL_SOURCE_URL format")
+        _, file_name, source_url = raw_parts
+        return MacroBootstrapSpec(
+            provider="nsdl",
+            file=Path(file_name),
+            source_url=validate_official_source_url("NSDL", source_url),
+        )
+    raise ValueError("macro provider must be RBI or NSDL")
 
 
 def build_bootstrap_plan(
@@ -108,7 +152,7 @@ def build_bootstrap_plan(
     benchmark_interval: str,
     benchmark_timezone: str,
     benchmark_min_rows: int,
-    macro_files: tuple[Path, ...],
+    macros: tuple[MacroBootstrapSpec, ...],
     macro_min_rows: int,
     dry_run: bool,
     run_official_feeds: bool,
@@ -124,8 +168,10 @@ def build_bootstrap_plan(
         raise ValueError("market_min_rows must be >= 1")
     if metrics_min_rows < 1:
         raise ValueError("metrics_min_rows must be >= 1")
-    if benchmark_min_rows < 1:
-        raise ValueError("benchmark_min_rows must be >= 1")
+    if benchmark_min_rows < 2:
+        raise ValueError("benchmark_min_rows must be >= 2")
+    if benchmark_interval.strip().lower() != "1d":
+        raise ValueError("official benchmark bootstrap currently supports interval=1d only")
     if macro_min_rows < 1:
         raise ValueError("macro_min_rows must be >= 1")
     if official_feed_limit < 1 or official_feed_limit > 20:
@@ -228,16 +274,13 @@ def build_bootstrap_plan(
     for index, spec in enumerate(benchmarks, start=1):
         command = [
             python_executable,
-            str(scripts_dir / "import_reference_csv.py"),
-            "benchmark",
+            str(scripts_dir / "import_official_benchmark_file.py"),
             "--file",
             str(spec.file),
+            "--source-url",
+            spec.source_url,
             "--benchmark-code",
             spec.code,
-            "--provider",
-            spec.provider,
-            "--interval",
-            benchmark_interval,
             "--timezone",
             benchmark_timezone,
             "--min-rows",
@@ -247,19 +290,31 @@ def build_bootstrap_plan(
             command.append("--dry-run")
         stages.append(BootstrapStage(name=f"benchmark_{index}_{spec.code}", command=tuple(command)))
 
-    for index, path in enumerate(macro_files, start=1):
+    for index, spec in enumerate(macros, start=1):
         command = [
             python_executable,
-            str(scripts_dir / "import_reference_csv.py"),
-            "macro",
+            str(scripts_dir / "import_official_macro_file.py"),
+            spec.provider,
             "--file",
-            str(path),
+            str(spec.file),
+            "--source-url",
+            spec.source_url,
             "--min-rows",
             str(macro_min_rows),
         ]
+        if spec.provider == "rbi":
+            if spec.series_key is None:
+                raise ValueError("RBI macro bootstrap requires a series_key")
+            command.extend(["--series-key", spec.series_key])
         if dry_run:
             command.append("--dry-run")
-        stages.append(BootstrapStage(name=f"macro_{index}", command=tuple(command)))
+        stage_suffix = spec.series_key or "flows"
+        stages.append(
+            BootstrapStage(
+                name=f"macro_{index}_{spec.provider.upper()}_{stage_suffix}",
+                command=tuple(command),
+            )
+        )
 
     if run_official_feeds:
         stages.append(
