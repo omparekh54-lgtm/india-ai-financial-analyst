@@ -6,7 +6,7 @@ from app.agents.contracts import AgentInput, AgentName, AgentOutput, Claim, Evid
 
 
 class EvidenceCrossValidationAgent:
-    """Enforces evidence coverage before claims reach the chief analyst."""
+    """Enforces evidence coverage and semantic claim status before synthesis."""
 
     async def run(self, agent_input: AgentInput) -> AgentOutput:
         raw_claims = agent_input.context.get("candidate_claims") or []
@@ -45,27 +45,43 @@ class EvidenceCrossValidationAgent:
         claim: Claim,
         evidence_by_id: dict[UUID, EvidenceRef],
     ) -> Claim:
-        if claim.claim_type == "scenario" and not claim.evidence_ids:
-            return claim.model_copy(update={"status": "inferred"})
-
         linked = [evidence_by_id[item] for item in claim.evidence_ids if item in evidence_by_id]
-        if not linked:
-            return claim.model_copy(update={"status": "unsupported", "confidence": min(claim.confidence, 0.35)})
 
-        if any(item.freshness == "historical" for item in linked) and claim.data.get("requires_current_data"):
-            return claim.model_copy(update={"status": "stale", "confidence": min(claim.confidence, 0.5)})
+        if not linked:
+            if claim.claim_type == "scenario":
+                return claim.model_copy(
+                    update={"status": "inferred", "confidence": min(claim.confidence, 0.60)}
+                )
+            return claim.model_copy(
+                update={"status": "unsupported", "confidence": min(claim.confidence, 0.35)}
+            )
+
+        if any(item.freshness == "historical" for item in linked) and claim.data.get(
+            "requires_current_data"
+        ):
+            return claim.model_copy(
+                update={"status": "stale", "confidence": min(claim.confidence, 0.5)}
+            )
 
         primary_types = {
             "exchange_filing",
             "company_filing",
             "regulator",
             "official_macro",
+            "official_flow",
             "market_data",
         }
         has_primary = any(item.source_type in primary_types for item in linked)
-        status = "verified" if has_primary else "supported"
         confidence_floor = 0.8 if has_primary else 0.6
-        return claim.model_copy(update={"status": status, "confidence": max(claim.confidence, confidence_floor)})
+        confidence = max(claim.confidence, confidence_floor)
+
+        if claim.claim_type in {"inference", "scenario"}:
+            return claim.model_copy(update={"status": "inferred", "confidence": confidence})
+        if claim.claim_type in {"risk", "catalyst"}:
+            return claim.model_copy(update={"status": "supported", "confidence": confidence})
+
+        status = "verified" if has_primary else "supported"
+        return claim.model_copy(update={"status": status, "confidence": confidence})
 
 
 def _evidence_coverage(claims: list[Claim]) -> float:
