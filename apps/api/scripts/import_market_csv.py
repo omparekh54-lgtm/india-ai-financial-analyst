@@ -14,6 +14,7 @@ from app.ingestion.reference_provenance import (
     parse_optional_datetime,
     resolve_security,
     upsert_reference_source,
+    validate_provider_name,
     validate_source_uri,
 )
 
@@ -22,9 +23,10 @@ async def _run(args: argparse.Namespace) -> dict[str, object]:
     path = Path(args.file)
     content = path.read_text(encoding="utf-8-sig")
     checksum = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    provider = validate_provider_name(args.provider)
     bars = parse_benchmark_csv(
         content,
-        provider=args.provider,
+        provider=provider,
         interval=args.interval,
         timezone=args.timezone,
         min_rows=args.min_rows,
@@ -36,7 +38,7 @@ async def _run(args: argparse.Namespace) -> dict[str, object]:
         "security": args.security.strip(),
         "source_uri": source_uri,
         "sha256": checksum,
-        "provider": args.provider.strip().lower(),
+        "provider": provider,
         "interval": args.interval.strip().lower(),
         "row_count": len(bars),
         "first_timestamp": min(bar.ts for bar in bars).isoformat(),
@@ -65,7 +67,7 @@ async def _run(args: argparse.Namespace) -> dict[str, object]:
                 "importer": "import_market_csv",
                 "file_name": path.name,
                 "sha256": checksum,
-                "provider": args.provider.strip().lower(),
+                "provider": provider,
                 "interval": args.interval.strip().lower(),
             },
         )
