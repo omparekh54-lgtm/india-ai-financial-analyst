@@ -32,12 +32,17 @@ def test_html_parser_removes_scripts() -> None:
 def test_chunker_tracks_source_page() -> None:
     document = fitz.open()
     page = document.new_page()
-    page.insert_textbox((72, 72, 500, 760), "A " * 2000)
+    lines = [
+        f"Financial statement line {index:02d}: revenue cash flow margin debt and return metrics."
+        for index in range(45)
+    ]
+    page.insert_text((72, 72), "\n".join(lines), fontsize=8)
     pdf_bytes = document.tobytes()
     document.close()
 
     parsed = parse_document(pdf_bytes, "application/pdf")
     chunks = chunk_document(parsed, max_chars=800, overlap_chars=100)
 
-    assert chunks
+    assert len(parsed.pages[0].text) > 800
+    assert len(chunks) > 1
     assert all(chunk.page_number == 1 for chunk in chunks)
