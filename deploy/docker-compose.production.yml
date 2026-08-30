@@ -20,6 +20,8 @@ services:
     environment:
       APP_ENV: production
     command: ["python", "scripts/run_official_feed_daemon.py"]
+    healthcheck:
+      disable: true
     restart: unless-stopped
 
   live-market-worker:
@@ -31,4 +33,6 @@ services:
     environment:
       APP_ENV: production
     command: ["python", "scripts/run_live_market_worker.py"]
+    healthcheck:
+      disable: true
     restart: unless-stopped
