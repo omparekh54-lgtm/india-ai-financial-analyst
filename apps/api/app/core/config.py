@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     sentry_dsn: str | None = None
     posthog_key: str | None = None
     posthog_host: str = "https://us.i.posthog.com"
+    enable_product_telemetry: bool = False
 
     enable_live_market: bool = False
     enable_external_llm_calls: bool = False
