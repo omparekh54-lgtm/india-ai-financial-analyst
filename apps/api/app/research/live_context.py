@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.agents.contracts import EvidenceRef
 from app.core.config import Settings
+from app.evidence.embeddings import build_embedding_provider
+from app.evidence.semantic import SemanticEvidenceRetriever, build_research_queries
 from app.market.live_overlay import LiveMarketOverlayService
 from app.research.context import DatabaseResearchContextLoader
 from app.research.filing_evidence import load_exchange_filing_evidence
@@ -16,8 +18,19 @@ class UserAwareResearchContextLoader:
 
     def __init__(self, engine: AsyncEngine, settings: Settings) -> None:
         self.engine = engine
+        self.settings = settings
         self.base = DatabaseResearchContextLoader(engine)
         self.live = LiveMarketOverlayService(engine, settings)
+        embedder = build_embedding_provider(settings)
+        self.semantic = (
+            SemanticEvidenceRetriever(
+                engine,
+                embedder,
+                min_similarity=settings.semantic_evidence_min_similarity,
+            )
+            if embedder is not None
+            else None
+        )
 
     async def load(
         self,
@@ -27,7 +40,34 @@ class UserAwareResearchContextLoader:
         user_id: UUID | None = None,
     ) -> tuple[dict[str, object], list[EvidenceRef]]:
         context, evidence = await self.base.load(security_id, mode=mode)
-        filing_evidence = await load_exchange_filing_evidence(self.engine, security_id)
+        recent_filing_evidence = await load_exchange_filing_evidence(self.engine, security_id)
+        semantic_filing_evidence: list[EvidenceRef] = []
+
+        security = context.get("security")
+        if self.semantic is not None and isinstance(security, dict):
+            matches = await self.semantic.search(
+                security_id,
+                build_research_queries(
+                    user_query=str(security.get("legal_name") or security.get("nse_symbol") or ""),
+                    security=security,
+                    mode=mode,
+                ),
+                per_query=self.settings.semantic_evidence_per_query,
+                max_results=self.settings.semantic_evidence_max_chunks,
+            )
+            semantic_filing_evidence = [match.evidence for match in matches]
+            context["semantic_evidence"] = {
+                "enabled": True,
+                "match_count": len(matches),
+                "top_similarity": round(matches[0].similarity, 4) if matches else None,
+                "queries": len({match.query for match in matches}),
+            }
+        else:
+            context["semantic_evidence"] = {"enabled": False, "match_count": 0}
+
+        filing_evidence = _dedupe_evidence(
+            [*semantic_filing_evidence, *recent_filing_evidence]
+        )
         if filing_evidence:
             context["parsed_exchange_filing_chunks"] = len(filing_evidence)
             evidence = _dedupe_evidence([*evidence, *filing_evidence])
@@ -38,7 +78,6 @@ class UserAwareResearchContextLoader:
             if earnings:
                 context["earnings"] = earnings
 
-        security = context.get("security")
         if not isinstance(security, dict):
             return context, evidence
         return await self.live.apply(
@@ -76,9 +115,7 @@ def _build_earnings_context(
     if period is not None:
         earnings["period"] = period
 
-    result_evidence = [
-        item for item in filing_evidence if item.section == "financial_results"
-    ]
+    result_evidence = [item for item in filing_evidence if item.section == "financial_results"]
     if result_evidence:
         earnings["published_at"] = result_evidence[0].published_at
 
