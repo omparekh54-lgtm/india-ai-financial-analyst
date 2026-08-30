@@ -33,7 +33,10 @@ class EvidenceRef(BaseModel):
     retrieved_at: str
     freshness: Literal["live", "near_live", "periodic", "historical", "unknown"] = "unknown"
     excerpt: str | None = None
+    page_number: int | None = None
+    section: str | None = None
     checksum: str | None = None
+    source_priority: int = Field(default=3, ge=1, le=5)
 
 
 class Claim(BaseModel):
