@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from urllib.parse import parse_qs, urljoin, urlparse
+from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
 
@@ -21,6 +22,7 @@ NSE_FINANCIAL_RESULTS_PAGE = (
 BSE_CORPORATES_PAGE = "https://m.bseindia.com/corporates.aspx"
 RBI_DATA_RELEASES_PAGE = "https://statistics.rbi.org.in/"
 NSDL_FPI_REPORTS_PAGE = "https://pilot.fpi.nsdl.co.in/Reports/ReportsListing.aspx"
+INDIA_TZ = ZoneInfo("Asia/Kolkata")
 
 
 @dataclass(frozen=True)
@@ -377,7 +379,7 @@ def _split_bse_mobile_text(value: str) -> tuple[str | None, str | None, str | No
         r"^(?P<company>.+?)\s+-\s*(?P<headline>.+?)\s*,\s*"
         r"(?P<date>[A-Za-z]{3}\s+\d{1,2}\s+\d{4})\s*,\s*(?P<time>\d{1,2}:\d{2}\s*[AP]M)$",
         cleaned,
-        re.I,
+        re.IGNORECASE,
     )
     if not match:
         return None, None, None
@@ -443,13 +445,15 @@ def _parse_datetime(value: str | None) -> datetime | None:
     )
     for pattern in formats:
         try:
-            parsed = datetime.strptime(cleaned, pattern)
-            return parsed.replace(tzinfo=UTC)
+            parsed = datetime.strptime(cleaned, pattern).replace(tzinfo=INDIA_TZ)
+            return parsed.astimezone(UTC)
         except ValueError:
             continue
     try:
-        parsed = datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+        parsed = datetime.fromisoformat(cleaned)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=INDIA_TZ)
+        return parsed.astimezone(UTC)
     except ValueError:
         return None
 
@@ -460,11 +464,11 @@ def _parse_date(value: object) -> date | None:
     cleaned = re.sub(r"\s+", " ", str(value).strip())
     for pattern in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%d-%b-%Y", "%b %d %Y"):
         try:
-            return datetime.strptime(cleaned, pattern).date()
+            return datetime.strptime(cleaned, pattern).replace(tzinfo=INDIA_TZ).date()
         except ValueError:
             continue
     parsed = _parse_datetime(cleaned)
-    return parsed.date() if parsed else None
+    return parsed.astimezone(INDIA_TZ).date() if parsed else None
 
 
 def _digits(value: str | None) -> str | None:
