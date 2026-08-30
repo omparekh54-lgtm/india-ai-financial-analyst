@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 import sentry_sdk
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel
 
@@ -31,6 +32,13 @@ app = FastAPI(
     version="0.2.0",
     default_response_class=ORJSONResponse,
     lifespan=lifespan,
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origin_list,
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
