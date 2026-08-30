@@ -73,6 +73,7 @@ async def load_exchange_filing_evidence(
             freshness=str(row["freshness"] or "near_live"),
             excerpt=str(row["content"]),
             page_number=row["page_number"],
+            section=str(row["event_type"]),
             checksum=row["checksum"],
             source_priority=1,
         )
