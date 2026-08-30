@@ -10,7 +10,6 @@ from app.connectors.http_fetcher import SafeHttpFetcher
 from app.connectors.tavily import TavilyConnector
 from app.documents.parser import DocumentParseError, chunk_document, parse_document
 
-
 PRIMARY_SOURCE_DOMAINS = {
     "nseindia.com",
     "nsearchives.nseindia.com",
