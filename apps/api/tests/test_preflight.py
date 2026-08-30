@@ -9,6 +9,7 @@ def _preflight(**overrides: object) -> DatabasePreflight:
         "vector_extension": True,
         "semantic_index": True,
         "research_ownership_column": True,
+        "benchmark_source_column": True,
         "missing_tables": (),
         "rls_disabled_tables": (),
         "missing_owner_policies": (),
@@ -26,6 +27,12 @@ def test_missing_owner_policy_fails_preflight() -> None:
     report = _preflight(missing_owner_policies=("claims_owner_read",))
     assert report.ready is False
     assert report.as_dict()["missing_owner_policies"] == ["claims_owner_read"]
+
+
+def test_missing_benchmark_source_column_fails_preflight() -> None:
+    report = _preflight(benchmark_source_column=False)
+    assert report.ready is False
+    assert report.as_dict()["benchmark_source_column"] is False
 
 
 def test_disabled_rls_fails_preflight() -> None:
