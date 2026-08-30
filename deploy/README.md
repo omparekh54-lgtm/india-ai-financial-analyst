@@ -45,10 +45,11 @@ Add provider secrets only to the API/worker secret store. Enable each feature on
 
 ## Production readiness and fail-closed startup
 
-The API distinguishes liveness from readiness:
+The API distinguishes liveness, runtime readiness and corpus readiness:
 
 - `GET /health` checks whether the process is alive and reports basic database/configuration state.
 - `GET /ready` is the traffic-admission check. It audits feature dependencies and database reachability and returns HTTP `503` when the runtime is unsafe to serve production traffic.
+- `GET /v1/system/data-readiness` is authenticated and reports the research-corpus gate separately, including NSE-universe coverage, missing datasets and stale-data warnings.
 
 When `APP_ENV=production`, critical configuration errors also fail application startup. Examples include missing database/Auth configuration, non-HTTPS production origins, enabled LLM features without their providers, semantic retrieval without its local runtime, or live market without encrypted broker OAuth configuration.
 
@@ -60,7 +61,7 @@ Before rollout, run the zero-external-call structural preflight:
 python scripts/run_production_preflight.py
 ```
 
-This verifies configuration, database connectivity, pgvector, the semantic HNSW index, required tables, research ownership and RLS. It does not call an LLM, broker, exchange or market-data API.
+This verifies configuration, database connectivity, pgvector, the semantic HNSW index, required tables, research ownership, RLS enablement and required owner-read policies. It does not call an LLM, broker, exchange or market-data API.
 
 After reference/data bootstrap, run the data coverage audit:
 
@@ -85,6 +86,43 @@ python scripts/import_nse_security_master.py
 ```
 
 Do not substitute an unofficial mirror merely to make the coverage gate pass.
+
+## Guarded one-command corpus bootstrap
+
+`bootstrap_research_data.py` orchestrates the already-validated importers in deterministic order: NSE security master, approved benchmark CSVs, approved macro CSVs, optional explicitly enabled official feeds, optional evidence embeddings, then the canonical data-readiness audit.
+
+Validate file inputs before writing anything:
+
+```bash
+python scripts/bootstrap_research_data.py \
+  --nse-file /data/EQUITY_L.csv \
+  --benchmark NIFTY50,nse,/data/nifty50.csv \
+  --benchmark INDIAVIX,nse,/data/india_vix.csv \
+  --macro-file /data/rbi_macro.csv \
+  --dry-run
+```
+
+For the first write pass, remove `--dry-run` and add `--require-ready` when the deployment must fail unless the hard corpus gate is satisfied:
+
+```bash
+python scripts/bootstrap_research_data.py \
+  --nse-file /data/EQUITY_L.csv \
+  --benchmark NIFTY50,nse,/data/nifty50.csv \
+  --benchmark INDIAVIX,nse,/data/india_vix.csv \
+  --macro-file /data/rbi_macro.csv \
+  --require-ready
+```
+
+If the NSE universe is already populated, resume later stages without re-downloading it:
+
+```bash
+python scripts/bootstrap_research_data.py \
+  --skip-nse \
+  --benchmark NIFTY50,nse,/data/nifty50.csv \
+  --macro-file /data/rbi_macro.csv
+```
+
+The command is fail-fast and emits a machine-readable JSON summary with coverage before/after and the failed stage, if any. `--run-official-feeds` and `--embed-evidence` are explicit write-capable stages and cannot be combined with `--dry-run`. The bootstrap command never enables disabled feed templates; production feed activation remains a separate licensing/source-governance decision.
 
 ## Worker environment
 
@@ -182,8 +220,8 @@ The API image healthcheck uses `/ready`; worker HTTP healthchecks are disabled b
 
 1. Apply all database migrations and run `python scripts/run_production_preflight.py`.
 2. Configure Supabase Auth URLs/email settings.
-3. Run the official NSE security-master dry-run, verify count/checksum, then import the universe.
-4. Bootstrap approved benchmark, macro, fundamentals and filing/evidence datasets and run `python scripts/run_data_coverage_audit.py`.
+3. Dry-run `bootstrap_research_data.py` against the official NSE security master plus approved benchmark/macro files, inspect checksums/counts, then execute the write pass.
+4. Bootstrap approved fundamentals and filing/evidence sources, then rerun `python scripts/run_data_coverage_audit.py` and check `/v1/system/data-readiness` from an authenticated session.
 5. Deploy API with every external-call/optional-intelligence switch **off**; verify `/health` and `/ready`.
 6. Deploy web and test account creation/sign-in; verify one user's research is invisible to a second account.
 7. Start approved/licensed official-data ingestion only after the production data-source decision is complete.
