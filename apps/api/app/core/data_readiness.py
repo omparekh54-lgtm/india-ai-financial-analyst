@@ -18,7 +18,9 @@ class DataCoverage:
     embedded_evidence_chunks: int
     market_bars: int
     benchmark_bars: int
+    sourced_benchmark_bars: int
     macro_observations: int
+    sourced_macro_observations: int
     security_metrics: int
     enabled_official_feeds: int
     latest_financial_period: date | None = None
@@ -38,7 +40,9 @@ class DataCoverage:
             "embedded_evidence_chunks": self.embedded_evidence_chunks,
             "market_bars": self.market_bars,
             "benchmark_bars": self.benchmark_bars,
+            "sourced_benchmark_bars": self.sourced_benchmark_bars,
             "macro_observations": self.macro_observations,
+            "sourced_macro_observations": self.sourced_macro_observations,
             "security_metrics": self.security_metrics,
             "enabled_official_feeds": self.enabled_official_feeds,
             "latest_financial_period": _iso(self.latest_financial_period),
@@ -83,7 +87,9 @@ async def load_data_coverage(engine: AsyncEngine) -> DataCoverage:
           (select count(*) from evidence_chunks where embedding is not null) as embedded_evidence_chunks,
           (select count(*) from market_bars) as market_bars,
           (select count(*) from benchmark_bars) as benchmark_bars,
+          (select count(*) from benchmark_bars where source_id is not null) as sourced_benchmark_bars,
           (select count(*) from macro_observations) as macro_observations,
+          (select count(*) from macro_observations where source_id is not null) as sourced_macro_observations,
           (select count(*) from security_metrics) as security_metrics,
           (select count(*) from official_data_feeds where enabled) as enabled_official_feeds,
           (select max(period_end) from financial_facts) as latest_financial_period,
@@ -105,7 +111,9 @@ async def load_data_coverage(engine: AsyncEngine) -> DataCoverage:
         embedded_evidence_chunks=int(row["embedded_evidence_chunks"] or 0),
         market_bars=int(row["market_bars"] or 0),
         benchmark_bars=int(row["benchmark_bars"] or 0),
+        sourced_benchmark_bars=int(row["sourced_benchmark_bars"] or 0),
         macro_observations=int(row["macro_observations"] or 0),
+        sourced_macro_observations=int(row["sourced_macro_observations"] or 0),
         security_metrics=int(row["security_metrics"] or 0),
         enabled_official_feeds=int(row["enabled_official_feeds"] or 0),
         latest_financial_period=row["latest_financial_period"],
@@ -164,18 +172,31 @@ def evaluate_data_coverage(
         )
     if coverage.benchmark_bars == 0:
         warnings.append("No NIFTY/India VIX benchmark bars are populated.")
-    elif _datetime_age_days(now, coverage.latest_benchmark_bar) > benchmark_max_age_days:
-        warnings.append(
-            "NIFTY/India VIX benchmark bars appear stale; latest bar is "
-            f"{_iso(coverage.latest_benchmark_bar)}."
-        )
+    else:
+        if coverage.sourced_benchmark_bars < coverage.benchmark_bars:
+            warnings.append(
+                "Some NIFTY/India VIX benchmark bars lack source provenance: "
+                f"{coverage.sourced_benchmark_bars}/{coverage.benchmark_bars} are source-linked."
+            )
+        if _datetime_age_days(now, coverage.latest_benchmark_bar) > benchmark_max_age_days:
+            warnings.append(
+                "NIFTY/India VIX benchmark bars appear stale; latest bar is "
+                f"{_iso(coverage.latest_benchmark_bar)}."
+            )
     if coverage.macro_observations == 0:
         warnings.append("No India/global macro observations are populated.")
-    elif _date_age_days(now, coverage.latest_macro_observation) > macro_max_age_days:
-        warnings.append(
-            "India/global macro observations appear stale; latest observation is "
-            f"{_iso(coverage.latest_macro_observation)}."
-        )
+    else:
+        if coverage.sourced_macro_observations < coverage.macro_observations:
+            warnings.append(
+                "Some India/global macro observations lack source provenance: "
+                f"{coverage.sourced_macro_observations}/{coverage.macro_observations} "
+                "are source-linked."
+            )
+        if _date_age_days(now, coverage.latest_macro_observation) > macro_max_age_days:
+            warnings.append(
+                "India/global macro observations appear stale; latest observation is "
+                f"{_iso(coverage.latest_macro_observation)}."
+            )
     if coverage.security_metrics == 0:
         warnings.append("No comparable/security metrics are populated for peer analysis.")
     if coverage.sources > 0 and coverage.evidence_chunks > 0 and coverage.embedded_evidence_chunks == 0:
