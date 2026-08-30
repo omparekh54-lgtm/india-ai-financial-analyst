@@ -69,8 +69,12 @@ class SafeHttpFetcher:
                     response.raise_for_status()
                     media_type = response.headers.get("content-type", "application/octet-stream")
                     media_type = media_type.split(";", 1)[0].strip().lower()
-                    if not _supported_media_type(media_type, current_url):
-                        raise SourceFetchError(f"Unsupported evidence content type: {media_type}")
+                    media_type = _canonical_media_type(media_type, current_url)
+                    if media_type is None:
+                        raise SourceFetchError(
+                            "Unsupported evidence content type: "
+                            + response.headers.get("content-type", "application/octet-stream")
+                        )
 
                     declared_length = response.headers.get("content-length")
                     if declared_length and int(declared_length) > self.max_bytes:
@@ -121,7 +125,7 @@ class SafeHttpFetcher:
         return any(hostname == domain or hostname.endswith(f".{domain}") for domain in self.allowed_domains)
 
 
-def _supported_media_type(media_type: str, url: str) -> bool:
+def _canonical_media_type(media_type: str, url: str) -> str | None:
     supported = {
         "application/pdf",
         "text/html",
@@ -137,11 +141,21 @@ def _supported_media_type(media_type: str, url: str) -> bool:
         "text/xml",
     }
     if media_type in supported:
-        return True
+        return media_type
     if media_type != "application/octet-stream":
-        return False
+        return None
+
     suffix = PurePosixPath(urlparse(url).path).suffix.lower()
-    return suffix in {".csv", ".json", ".xml", ".xbrl", ".pdf", ".html", ".xhtml", ".txt"}
+    return {
+        ".csv": "text/csv",
+        ".json": "application/json",
+        ".xml": "application/xml",
+        ".xbrl": "application/xbrl+xml",
+        ".pdf": "application/pdf",
+        ".html": "text/html",
+        ".xhtml": "application/xhtml+xml",
+        ".txt": "text/plain",
+    }.get(suffix)
 
 
 def _resolve_addresses(hostname: str, port: int) -> set[str]:
