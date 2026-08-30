@@ -72,6 +72,16 @@ class EvidenceCrossValidationAgent:
             "market_data",
         }
         has_primary = any(item.source_type in primary_types for item in linked)
+        ai_only = all(item.source_type == "ai_extraction" for item in linked)
+        if ai_only:
+            if claim.claim_type in {"inference", "scenario"}:
+                return claim.model_copy(
+                    update={"status": "inferred", "confidence": min(claim.confidence, 0.65)}
+                )
+            return claim.model_copy(
+                update={"status": "supported", "confidence": min(claim.confidence, 0.60)}
+            )
+
         confidence_floor = 0.8 if has_primary else 0.6
         confidence = max(claim.confidence, confidence_floor)
 
