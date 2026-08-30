@@ -14,6 +14,7 @@ class DataCoverage:
     financial_facts: int
     sourced_financial_facts: int
     corporate_events: int
+    sourced_corporate_events: int
     sources: int
     evidence_chunks: int
     embedded_evidence_chunks: int
@@ -39,6 +40,7 @@ class DataCoverage:
             "financial_facts": self.financial_facts,
             "sourced_financial_facts": self.sourced_financial_facts,
             "corporate_events": self.corporate_events,
+            "sourced_corporate_events": self.sourced_corporate_events,
             "sources": self.sources,
             "evidence_chunks": self.evidence_chunks,
             "embedded_evidence_chunks": self.embedded_evidence_chunks,
@@ -90,6 +92,8 @@ async def load_data_coverage(engine: AsyncEngine) -> DataCoverage:
           (select count(*) from financial_facts where source_id is not null)
             as sourced_financial_facts,
           (select count(*) from corporate_events) as corporate_events,
+          (select count(*) from corporate_events where source_id is not null)
+            as sourced_corporate_events,
           (select count(*) from sources) as sources,
           (select count(*) from evidence_chunks) as evidence_chunks,
           (select count(*) from evidence_chunks where embedding is not null) as embedded_evidence_chunks,
@@ -119,6 +123,7 @@ async def load_data_coverage(engine: AsyncEngine) -> DataCoverage:
         financial_facts=int(row["financial_facts"] or 0),
         sourced_financial_facts=int(row["sourced_financial_facts"] or 0),
         corporate_events=int(row["corporate_events"] or 0),
+        sourced_corporate_events=int(row["sourced_corporate_events"] or 0),
         sources=int(row["sources"] or 0),
         evidence_chunks=int(row["evidence_chunks"] or 0),
         embedded_evidence_chunks=int(row["embedded_evidence_chunks"] or 0),
@@ -180,11 +185,18 @@ def evaluate_data_coverage(
             )
     if coverage.corporate_events == 0 or coverage.evidence_chunks == 0:
         warnings.append("No parsed corporate-event filing evidence is populated.")
-    elif _datetime_age_days(now, coverage.latest_corporate_event) > corporate_event_max_age_days:
-        warnings.append(
-            "Corporate-event filing evidence appears stale; latest event is "
-            f"{_iso(coverage.latest_corporate_event)}."
+    else:
+        _require_full_provenance(
+            errors,
+            label="corporate events",
+            sourced=coverage.sourced_corporate_events,
+            total=coverage.corporate_events,
         )
+        if _datetime_age_days(now, coverage.latest_corporate_event) > corporate_event_max_age_days:
+            warnings.append(
+                "Corporate-event filing evidence appears stale; latest event is "
+                f"{_iso(coverage.latest_corporate_event)}."
+            )
     if coverage.market_bars == 0:
         warnings.append("No stored security market bars are populated.")
     else:
