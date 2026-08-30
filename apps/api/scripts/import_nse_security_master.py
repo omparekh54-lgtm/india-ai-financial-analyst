@@ -8,6 +8,7 @@ import io
 import json
 import re
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -80,11 +81,10 @@ def validate_rows(rows: list[dict[str, str]], *, min_rows: int) -> dict[str, obj
     }
 
 
-def _duplicates(values: object) -> list[str]:
+def _duplicates(values: Iterable[str]) -> list[str]:
     seen: set[str] = set()
     duplicates: set[str] = set()
-    for raw in values:  # type: ignore[union-attr]
-        value = str(raw)
+    for value in values:
         if value in seen:
             duplicates.add(value)
         else:
