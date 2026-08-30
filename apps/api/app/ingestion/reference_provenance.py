@@ -17,7 +17,6 @@ _SYNTHETIC_SOURCE_TOKENS = frozenset(
         "dummy",
         "fixture",
         "sample",
-        "example",
         "generated",
         "placeholder",
     }
