@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Any
 from uuid import UUID
 
@@ -14,6 +15,7 @@ from app.orchestration.registry import build_agent_registry
 from app.orchestration.runtime import OrchestratorRuntime
 from app.repositories.research import ResearchRepository
 from app.research.live_context import UserAwareResearchContextLoader
+from app.telemetry import ProductTelemetry
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,7 @@ class ResearchService:
         self.engine = engine
         self.settings = settings or get_settings()
         self.repository = ResearchRepository(engine)
+        self.telemetry = ProductTelemetry(self.settings)
         self.runtime = OrchestratorRuntime(
             build_agent_registry(engine, self.settings),
             max_concurrency=max_concurrency,
@@ -49,12 +52,14 @@ class ResearchService:
         context: dict[str, Any] | None = None,
         requested_by: UUID | None = None,
     ) -> ResearchExecution:
+        started = perf_counter()
         job_id = await self.repository.create_job(
             query=query,
             mode=mode.value,
             requested_by=requested_by,
         )
         await self.repository.set_job_status(job_id, "running")
+        await self.telemetry.capture("research_started", {"mode": mode.value})
 
         try:
             outputs = await self.runtime.run(
@@ -85,14 +90,37 @@ class ResearchService:
             if security_id is not None and report:
                 await self._save_snapshot(job_id, security_id, mode, report)
 
+            validation = report.get("validation") if isinstance(report.get("validation"), dict) else {}
+            coverage = validation.get("evidence_coverage") if isinstance(validation, dict) else None
+            await self.telemetry.capture(
+                "research_completed",
+                {
+                    "mode": mode.value,
+                    "duration_ms": round((perf_counter() - started) * 1000),
+                    "agent_count": len(outputs),
+                    "agent_warning_count": sum(bool(output.warnings) for output in outputs),
+                    "claim_count": sum(len(output.claims) for output in outputs),
+                    "security_resolved": security_id is not None,
+                    "report_generated": bool(report),
+                    "evidence_coverage": float(coverage) if isinstance(coverage, (int, float)) else None,
+                },
+            )
             return ResearchExecution(
                 job_id=job_id,
                 security_id=security_id,
                 report=report,
                 outputs=outputs,
             )
-        except Exception:
+        except Exception as exc:
             await self.repository.set_job_status(job_id, "failed")
+            await self.telemetry.capture(
+                "research_failed",
+                {
+                    "mode": mode.value,
+                    "duration_ms": round((perf_counter() - started) * 1000),
+                    "error_type": type(exc).__name__,
+                },
+            )
             raise
 
     async def _attach_security(self, job_id: UUID, security_id: UUID) -> None:
