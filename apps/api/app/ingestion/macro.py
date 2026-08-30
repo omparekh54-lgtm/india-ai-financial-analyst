@@ -126,7 +126,7 @@ def canonical_macro_series_key(value: str) -> str:
     return _SERIES_ALIASES.get(normalized, normalized.replace(" ", "_"))
 
 
-def _decimal(value: int | float | Decimal | str) -> Decimal:
+def _decimal(value: float | Decimal | str) -> Decimal:
     try:
         result = Decimal(str(value).replace(",", "").strip())
     except (InvalidOperation, AttributeError) as exc:
