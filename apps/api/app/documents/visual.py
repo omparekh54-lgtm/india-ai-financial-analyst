@@ -175,7 +175,7 @@ def render_visual_pages(
             try:
                 image_count = len(page.get_images(full=True))
                 drawing_count = len(page.get_drawings())
-            except Exception:
+            except (RuntimeError, ValueError):
                 image_count = 0
                 drawing_count = 0
 
