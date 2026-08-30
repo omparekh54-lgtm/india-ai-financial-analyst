@@ -36,6 +36,34 @@ async def test_validator_promotes_primary_sourced_claim() -> None:
 
 
 @pytest.mark.asyncio
+async def test_validator_keeps_grounded_interpretation_inferred() -> None:
+    evidence = EvidenceRef(
+        source_type="exchange_filing",
+        source_uri="https://example.test/management-commentary",
+        retrieved_at=datetime.now(UTC).isoformat(),
+        freshness="near_live",
+    )
+    claim = Claim(
+        agent=AgentName.SENTIMENT,
+        statement="Management narrative appears more cautious",
+        claim_type="inference",
+        confidence=0.72,
+        evidence_ids=[evidence.evidence_id],
+    )
+    result = await EvidenceCrossValidationAgent().run(
+        AgentInput(
+            job_id=uuid4(),
+            query="EXAMPLE",
+            evidence=[evidence],
+            context={"candidate_claims": [claim]},
+        )
+    )
+
+    assert result.claims[0].status == "inferred"
+    assert result.claims[0].confidence >= 0.8
+
+
+@pytest.mark.asyncio
 async def test_validator_rejects_unsourced_fact() -> None:
     claim = Claim(
         agent=AgentName.NEWS,
