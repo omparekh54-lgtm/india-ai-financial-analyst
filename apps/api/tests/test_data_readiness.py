@@ -12,16 +12,19 @@ def _coverage(**overrides: object) -> DataCoverage:
         "nse_eq_securities": 1800,
         "provider_instruments": 1800,
         "financial_facts": 100,
+        "sourced_financial_facts": 100,
         "corporate_events": 20,
         "sources": 20,
         "evidence_chunks": 200,
         "embedded_evidence_chunks": 150,
         "market_bars": 1000,
+        "sourced_market_bars": 1000,
         "benchmark_bars": 500,
         "sourced_benchmark_bars": 500,
         "macro_observations": 100,
         "sourced_macro_observations": 100,
         "security_metrics": 100,
+        "sourced_security_metrics": 100,
         "enabled_official_feeds": 1,
     }
     values.update(overrides)
@@ -38,16 +41,19 @@ def test_empty_research_datasets_are_visible_warnings() -> None:
     report = evaluate_data_coverage(
         _coverage(
             financial_facts=0,
+            sourced_financial_facts=0,
             corporate_events=0,
             sources=0,
             evidence_chunks=0,
             embedded_evidence_chunks=0,
             market_bars=0,
+            sourced_market_bars=0,
             benchmark_bars=0,
             sourced_benchmark_bars=0,
             macro_observations=0,
             sourced_macro_observations=0,
             security_metrics=0,
+            sourced_security_metrics=0,
             enabled_official_feeds=0,
         )
     )
@@ -110,20 +116,30 @@ def test_naive_freshness_timestamp_is_treated_as_utc() -> None:
     assert not any("market bars appear stale" in warning for warning in report.warnings)
 
 
-def test_partial_benchmark_and_macro_provenance_is_visible() -> None:
+def test_partial_provenance_is_a_hard_readiness_failure() -> None:
     report = evaluate_data_coverage(
         _coverage(
+            financial_facts=100,
+            sourced_financial_facts=99,
+            market_bars=1000,
+            sourced_market_bars=990,
             benchmark_bars=500,
             sourced_benchmark_bars=450,
             macro_observations=100,
             sourced_macro_observations=80,
+            security_metrics=100,
+            sourced_security_metrics=95,
         )
     )
-    assert report.ready is True
-    assert any("450/500 are source-linked" in warning for warning in report.warnings)
-    assert any("80/100 are source-linked" in warning for warning in report.warnings)
+    assert report.ready is False
+    assert any("99/100 are source-linked" in error for error in report.errors)
+    assert any("990/1000 are source-linked" in error for error in report.errors)
+    assert any("450/500 are source-linked" in error for error in report.errors)
+    assert any("80/100 are source-linked" in error for error in report.errors)
+    assert any("95/100 are source-linked" in error for error in report.errors)
 
 
-def test_fully_sourced_benchmark_and_macro_data_has_no_provenance_warning() -> None:
+def test_fully_sourced_material_data_has_no_provenance_error() -> None:
     report = evaluate_data_coverage(_coverage())
-    assert not any("lack source provenance" in warning for warning in report.warnings)
+    assert report.ready is True
+    assert not any("without source provenance" in error for error in report.errors)
