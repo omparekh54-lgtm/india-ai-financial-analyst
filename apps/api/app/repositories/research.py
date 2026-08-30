@@ -1,0 +1,173 @@
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime
+from uuid import UUID
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from app.agents.contracts import AgentOutput
+
+
+class ResearchRepository:
+    """Persists research jobs, agent runs, claims and final reports transactionally."""
+
+    def __init__(self, engine: AsyncEngine) -> None:
+        self.engine = engine
+
+    async def create_job(
+        self,
+        *,
+        query: str,
+        mode: str,
+        security_id: UUID | None = None,
+        requested_by: UUID | None = None,
+    ) -> UUID:
+        statement = text(
+            """
+            insert into research_jobs (security_id, query, mode, requested_by, status)
+            values (:security_id, :query, :mode, :requested_by, 'queued')
+            returning id
+            """
+        )
+        async with self.engine.begin() as connection:
+            result = await connection.execute(
+                statement,
+                {
+                    "security_id": security_id,
+                    "query": query,
+                    "mode": mode,
+                    "requested_by": requested_by,
+                },
+            )
+            return result.scalar_one()
+
+    async def set_job_status(self, job_id: UUID, status: str) -> None:
+        fields = {"status": status, "job_id": job_id}
+        timestamp_sql = ""
+        if status == "running":
+            timestamp_sql = ", started_at = coalesce(started_at, :now)"
+            fields["now"] = datetime.now(UTC)
+        elif status in {"completed", "failed"}:
+            timestamp_sql = ", completed_at = :now"
+            fields["now"] = datetime.now(UTC)
+
+        statement = text(
+            f"update research_jobs set status = :status{timestamp_sql} where id = :job_id"
+        )
+        async with self.engine.begin() as connection:
+            await connection.execute(statement, fields)
+
+    async def save_agent_output(self, job_id: UUID, output: AgentOutput) -> UUID:
+        run_statement = text(
+            """
+            insert into agent_runs (job_id, agent_name, status, warnings, errors, metadata, completed_at)
+            values (
+                :job_id,
+                :agent_name,
+                :status,
+                cast(:warnings as jsonb),
+                cast(:errors as jsonb),
+                cast(:metadata as jsonb),
+                :completed_at
+            )
+            returning id
+            """
+        )
+        claim_statement = text(
+            """
+            insert into claims (
+                id, job_id, agent_run_id, claim_type, statement, confidence,
+                validation_status, data
+            )
+            values (
+                :id, :job_id, :agent_run_id, :claim_type, :statement, :confidence,
+                :validation_status, cast(:data as jsonb)
+            )
+            on conflict (id) do update set
+                confidence = excluded.confidence,
+                validation_status = excluded.validation_status,
+                data = excluded.data
+            """
+        )
+        link_statement = text(
+            """
+            insert into claim_evidence (claim_id, evidence_chunk_id)
+            values (:claim_id, :evidence_chunk_id)
+            on conflict do nothing
+            """
+        )
+
+        async with self.engine.begin() as connection:
+            result = await connection.execute(
+                run_statement,
+                {
+                    "job_id": job_id,
+                    "agent_name": output.agent.value,
+                    "status": "completed" if output.ok else "completed_with_warnings",
+                    "warnings": json.dumps(output.warnings),
+                    "errors": json.dumps(output.errors),
+                    "metadata": json.dumps(output.metrics),
+                    "completed_at": datetime.now(UTC),
+                },
+            )
+            agent_run_id = result.scalar_one()
+
+            for claim in output.claims:
+                await connection.execute(
+                    claim_statement,
+                    {
+                        "id": claim.claim_id,
+                        "job_id": job_id,
+                        "agent_run_id": agent_run_id,
+                        "claim_type": claim.claim_type,
+                        "statement": claim.statement,
+                        "confidence": claim.confidence,
+                        "validation_status": claim.status,
+                        "data": json.dumps(claim.data),
+                    },
+                )
+                for evidence_id in claim.evidence_ids:
+                    await connection.execute(
+                        link_statement,
+                        {"claim_id": claim.claim_id, "evidence_chunk_id": evidence_id},
+                    )
+
+            return agent_run_id
+
+    async def save_report(self, job_id: UUID, report: dict[str, object]) -> None:
+        confidence = report.get("confidence") or {}
+        if not isinstance(confidence, dict):
+            confidence = {}
+        statement = text(
+            """
+            insert into research_reports (
+                job_id, executive_summary, report_json, data_confidence,
+                thesis_confidence, valuation_confidence, catalyst_confidence
+            ) values (
+                :job_id, :executive_summary, cast(:report_json as jsonb), :data_confidence,
+                :thesis_confidence, :valuation_confidence, :catalyst_confidence
+            )
+            on conflict (job_id) do update set
+                executive_summary = excluded.executive_summary,
+                report_json = excluded.report_json,
+                data_confidence = excluded.data_confidence,
+                thesis_confidence = excluded.thesis_confidence,
+                valuation_confidence = excluded.valuation_confidence,
+                catalyst_confidence = excluded.catalyst_confidence
+            """
+        )
+        async with self.engine.begin() as connection:
+            await connection.execute(
+                statement,
+                {
+                    "job_id": job_id,
+                    "executive_summary": report.get("executive_summary"),
+                    "report_json": json.dumps(report),
+                    "data_confidence": confidence.get("data_confidence"),
+                    "thesis_confidence": confidence.get("thesis_confidence"),
+                    "valuation_confidence": confidence.get("valuation_confidence"),
+                    "catalyst_confidence": confidence.get("catalyst_confidence"),
+                },
+            )
