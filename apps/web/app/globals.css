@@ -9,6 +9,7 @@
 body { margin: 0; background: radial-gradient(circle at top, #121923 0, #080b10 45%); }
 button, input { font: inherit; }
 button { cursor: pointer; }
+button:disabled { cursor: wait; opacity: .7; }
 .shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 72px 0 96px; }
 .hero { padding: 52px 0 42px; }
 .eyebrow { letter-spacing: .16em; font-size: 12px; color: #9aa8b8; font-weight: 700; }
@@ -20,12 +21,20 @@ h2 { max-width: 760px; font-size: clamp(28px, 4vw, 48px); line-height: 1.05; let
 .searchCard button, .quickModes button { border: 1px solid #334154; border-radius: 12px; color: #f4f7fa; background: #17202a; padding: 14px 18px; }
 .searchCard button { background: #f1f5f9; color: #0b0e12; font-weight: 800; }
 .quickModes { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.quickModes .modeActive { border-color: #7ce2aa; background: rgba(124,226,170,.12); }
+.errorText { color: #ff9f9f; margin-top: 16px; }
 .panel { margin-top: 48px; border: 1px solid #202a36; border-radius: 24px; padding: 30px; background: rgba(13,18,24,.8); }
 .agentGrid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; }
 .agentCard, .metricCard { border: 1px solid #202c38; background: #0d131a; border-radius: 16px; padding: 18px; }
 .agentCard { display: grid; grid-template-columns: 12px 1fr; column-gap: 10px; }
 .agentCard small { grid-column: 2; color: #7f8c99; margin-top: 7px; }
 .statusDot { width: 8px; height: 8px; border-radius: 999px; background: #7ce2aa; margin-top: 6px; box-shadow: 0 0 18px rgba(124,226,170,.45); }
+.planPanel h2 { margin-bottom: 18px; }
+.planGrid { display: grid; gap: 10px; }
+.planStage { display: grid; grid-template-columns: 48px 1fr; gap: 14px; align-items: start; border: 1px solid #202c38; background: #0d131a; border-radius: 16px; padding: 16px; }
+.stageNumber { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 10px; background: #17202a; color: #7ce2aa; font-weight: 800; }
+.planStage p { margin: 4px 0 7px; color: #9aa8b8; font-size: 13px; }
+.planStage small { color: #7f8c99; line-height: 1.5; }
 .confidenceGrid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; margin-top: 14px; }
 .metricCard { min-height: 122px; display: flex; flex-direction: column; justify-content: space-between; }
 .metricCard span { color: #91a0af; }
