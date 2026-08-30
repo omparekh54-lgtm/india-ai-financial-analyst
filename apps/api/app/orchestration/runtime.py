@@ -57,6 +57,7 @@ class OrchestratorRuntime:
     async def run(self, plan: ResearchPlan, agent_input: AgentInput) -> list[AgentOutput]:
         outputs: list[AgentOutput] = []
         working_input = agent_input.model_copy(deep=True)
+        working_input.context["analysis_mode"] = plan.mode.value
 
         for stage in plan.stages:
             if stage.name == "validate":
