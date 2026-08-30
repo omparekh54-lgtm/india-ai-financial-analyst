@@ -69,13 +69,39 @@ h2 { max-width: 760px; font-size: clamp(28px, 4vw, 48px); line-height: 1.05; let
 .changeCard small { color: #7f8c99; }
 .agentRunPanel { margin-top: 14px; }
 .disclaimer { color: #6f7d8b; font-size: 12px; max-width: 800px; line-height: 1.5; margin: 18px 4px; }
+.authCard { max-width: 780px; margin-top: 28px; border: 1px solid #25303d; border-radius: 18px; background: rgba(13,18,24,.88); padding: 16px; color: #b7c0cc; }
+.authWarning { display: grid; gap: 6px; border-color: #5e4b31; background: rgba(68,51,28,.2); }
+.signedInCard { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.signedInCard > div { display: grid; gap: 5px; }
+.signedInCard small, .authMessage, .mutedText { color: #7f8c99; }
+.secureBadge { width: fit-content; font-size: 10px; letter-spacing: .14em; color: #7ce2aa; font-weight: 800; }
+.secondaryButton, .authTabs button, .authFields button { border: 1px solid #334154; border-radius: 10px; color: #f4f7fa; background: #17202a; padding: 11px 14px; }
+.authForm { display: grid; gap: 12px; }
+.authTabs { display: flex; gap: 8px; }
+.authTabs button { color: #91a0af; }
+.authTabs .authTabActive { color: #f3f5f7; border-color: #50715f; background: rgba(124,226,170,.08); }
+.authFields { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; }
+.authFields input { min-width: 0; border: 1px solid #293644; outline: 0; border-radius: 10px; background: #0b1016; color: #f3f5f7; padding: 12px 14px; }
+.authFields button { background: #f1f5f9; color: #0b0e12; font-weight: 800; }
+.historyPanel h2 { margin-bottom: 20px; }
+.historyList { display: grid; gap: 8px; }
+.historyRow { display: flex; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid #202c38; border-radius: 14px; background: #0d131a; padding: 14px 16px; }
+.historyRow > div:first-child { display: grid; gap: 5px; }
+.historyRow span, .historyRow small { color: #81909f; font-size: 12px; }
+.historyMeta { display: flex; align-items: center; gap: 10px; text-align: right; }
 @media (max-width: 860px) {
   .agentGrid { grid-template-columns: repeat(2,1fr); }
   .confidenceGrid, .reportGrid, .changeGrid { grid-template-columns: repeat(2,1fr); }
   .resultHeader { align-items: start; flex-direction: column; }
+  .authFields { grid-template-columns: 1fr 1fr; }
+  .authFields button { grid-column: 1 / -1; }
 }
 @media (max-width: 560px) {
   .shell { width: min(100% - 24px,1180px); padding-top: 24px; }
   .searchCard { flex-direction: column; }
   .agentGrid, .confidenceGrid, .reportGrid, .changeGrid { grid-template-columns: 1fr; }
+  .signedInCard, .historyRow { align-items: stretch; flex-direction: column; }
+  .authFields { grid-template-columns: 1fr; }
+  .authFields button { grid-column: auto; }
+  .historyMeta { justify-content: space-between; text-align: left; }
 }
