@@ -3,7 +3,7 @@ from uuid import uuid4
 import pytest
 
 from app.agents.contracts import AgentInput, AgentName, AgentOutput
-from app.orchestration.plan import ExecutionStage, ResearchPlan, AnalysisMode
+from app.orchestration.plan import AnalysisMode, ExecutionStage, ResearchPlan
 from app.orchestration.runtime import AgentRegistry, OrchestratorRuntime
 
 
