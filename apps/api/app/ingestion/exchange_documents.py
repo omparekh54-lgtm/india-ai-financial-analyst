@@ -9,13 +9,20 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.documents.parser import DocumentParseError, chunk_document, parse_document
+from app.evidence.embeddings import EmbeddingError, EmbeddingProvider, vector_literal
 
 
 class ExchangeDocumentIngestor:
     """Persists an exchange attachment and page-aware evidence chunks for a corporate event."""
 
-    def __init__(self, engine: AsyncEngine) -> None:
+    def __init__(
+        self,
+        engine: AsyncEngine,
+        *,
+        embedder: EmbeddingProvider | None = None,
+    ) -> None:
         self.engine = engine
+        self.embedder = embedder
 
     async def ingest(
         self,
@@ -65,6 +72,7 @@ class ExchangeDocumentIngestor:
                 "event_id": str(event_id),
                 "chunk_count": 0,
                 "parse_status": "unsupported",
+                "embedding_status": "not_applicable",
                 "checksum": checksum,
             }
 
@@ -82,19 +90,27 @@ class ExchangeDocumentIngestor:
             )
             raise
 
+        embedding_values, embedding_status = await self._embed_chunks(
+            [chunk.content for chunk in chunks]
+        )
+        embedding_model = self.embedder.model_name if self.embedder is not None else None
+        section = str(source_metadata.get("event_type") or document_role)
+
         async with self.engine.begin() as connection:
             await connection.execute(
                 text("delete from evidence_chunks where source_id = :source_id"),
                 {"source_id": source_id},
             )
-            for chunk in chunks:
+            for chunk, embedding in zip(chunks, embedding_values, strict=True):
                 await connection.execute(
                     text(
                         """
                         insert into evidence_chunks (
-                            source_id, chunk_index, page_number, content, metadata
+                            source_id, chunk_index, page_number, section, content, embedding, metadata
                         ) values (
-                            :source_id, :chunk_index, :page_number, :content, cast(:metadata as jsonb)
+                            :source_id, :chunk_index, :page_number, :section, :content,
+                            case when :embedding is null then null else cast(:embedding as vector) end,
+                            cast(:metadata as jsonb)
                         )
                         """
                     ),
@@ -102,7 +118,9 @@ class ExchangeDocumentIngestor:
                         "source_id": source_id,
                         "chunk_index": chunk.chunk_index,
                         "page_number": chunk.page_number,
+                        "section": section,
                         "content": chunk.content,
+                        "embedding": embedding,
                         "metadata": json.dumps(
                             {
                                 "document_role": document_role,
@@ -110,6 +128,8 @@ class ExchangeDocumentIngestor:
                                 "content_checksum": hashlib.sha256(
                                     chunk.content.encode("utf-8")
                                 ).hexdigest(),
+                                "embedding_status": embedding_status,
+                                "embedding_model": embedding_model,
                             }
                         ),
                     },
@@ -125,6 +145,8 @@ class ExchangeDocumentIngestor:
                 **source_metadata,
                 "page_count": len(parsed.pages),
                 "chunk_count": len(chunks),
+                "embedding_status": embedding_status,
+                "embedding_model": embedding_model,
             },
         )
         return {
@@ -133,6 +155,8 @@ class ExchangeDocumentIngestor:
             "chunk_count": len(chunks),
             "page_count": len(parsed.pages),
             "parse_status": "parsed",
+            "embedding_status": embedding_status,
+            "embedded_chunk_count": sum(value is not None for value in embedding_values),
             "checksum": checksum,
         }
 
@@ -153,6 +177,21 @@ class ExchangeDocumentIngestor:
             parse_status="parsed",
             metadata=metadata or {},
         )
+
+    async def _embed_chunks(self, contents: list[str]) -> tuple[list[str | None], str]:
+        if not contents:
+            return [], "empty"
+        if self.embedder is None:
+            return [None for _ in contents], "disabled"
+        try:
+            vectors = await self.embedder.embed(contents)
+        except EmbeddingError:
+            return [None for _ in contents], "failed"
+        if len(vectors) != len(contents):
+            return [None for _ in contents], "failed"
+        return [
+            vector_literal(vector, dimensions=self.embedder.dimensions) for vector in vectors
+        ], "embedded"
 
     async def _ensure_source(
         self,
