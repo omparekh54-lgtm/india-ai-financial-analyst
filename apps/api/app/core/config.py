@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     cerebras_base_url: str = "https://api.cerebras.ai/v1"
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
 
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "openai/gpt-oss-20b"
     nvidia_model: str = "deepseek-ai/deepseek-v4-pro-0813"
     cerebras_model: str = "gpt-oss-120b"
     gemini_model: str = "gemini-2.5-flash"
@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     fred_api_key: str | None = None
     alpha_vantage_api_key: str | None = None
 
+    tavily_base_url: str = "https://api.tavily.com"
     fred_base_url: str = "https://api.stlouisfed.org/fred"
     alpha_vantage_base_url: str = "https://www.alphavantage.co/query"
 
