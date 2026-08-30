@@ -17,7 +17,7 @@ async def load_exchange_filing_evidence(
     max_chunks_per_document: int = 8,
     max_ai_chunks_per_document: int = 4,
 ) -> list[EvidenceRef]:
-    """Load bounded raw filing chunks plus separately-labeled AI visual interpretations."""
+    """Load bounded official-event evidence, including filings and labeled AI-derived media text."""
     max_chunks = max(1, min(max_chunks, 80))
     max_chunks_per_document = max(1, min(max_chunks_per_document, 12))
     max_ai_chunks_per_document = max(1, min(max_ai_chunks_per_document, 6))
@@ -73,15 +73,21 @@ async def load_exchange_filing_evidence(
     now = datetime.now(UTC).isoformat()
     evidence: list[EvidenceRef] = []
     for row in rows:
-        is_ai = str(row["chunk_section"] or "") == "multimodal_extraction"
+        chunk_section = str(row["chunk_section"] or "")
+        raw_source_type = str(row["source_type"] or "exchange_filing")
+        is_ai = chunk_section == "multimodal_extraction"
+        is_audio = raw_source_type == "earnings_audio" or chunk_section == "earnings_transcript"
+        event_section = str(row["event_type"] or chunk_section or "exchange_filing")
         evidence.append(
             EvidenceRef(
                 evidence_id=row["evidence_id"],
-                source_type="ai_extraction"
-                if is_ai
-                else str(row["source_type"] or "exchange_filing"),
+                source_type=(
+                    "ai_extraction"
+                    if is_ai
+                    else "audio_transcript" if is_audio else raw_source_type
+                ),
                 source_uri=str(row["source_uri"]),
-                title=str(row["title"] or f"{row['event_type']} exchange filing"),
+                title=str(row["title"] or f"{event_section} official evidence"),
                 published_at=(
                     row["published_at"].isoformat()
                     if row["published_at"]
@@ -91,9 +97,9 @@ async def load_exchange_filing_evidence(
                 freshness=str(row["freshness"] or "near_live"),
                 excerpt=str(row["content"]),
                 page_number=row["page_number"],
-                section="multimodal_extraction" if is_ai else str(row["event_type"]),
+                section="multimodal_extraction" if is_ai else event_section,
                 checksum=row["checksum"],
-                source_priority=4 if is_ai else 1,
+                source_priority=4 if is_ai else 2 if is_audio else 1,
             )
         )
     return evidence
