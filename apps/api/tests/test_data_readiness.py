@@ -18,7 +18,9 @@ def _coverage(**overrides: object) -> DataCoverage:
         "embedded_evidence_chunks": 150,
         "market_bars": 1000,
         "benchmark_bars": 500,
+        "sourced_benchmark_bars": 500,
         "macro_observations": 100,
+        "sourced_macro_observations": 100,
         "security_metrics": 100,
         "enabled_official_feeds": 1,
     }
@@ -42,7 +44,9 @@ def test_empty_research_datasets_are_visible_warnings() -> None:
             embedded_evidence_chunks=0,
             market_bars=0,
             benchmark_bars=0,
+            sourced_benchmark_bars=0,
             macro_observations=0,
+            sourced_macro_observations=0,
             security_metrics=0,
             enabled_official_feeds=0,
         )
@@ -104,3 +108,22 @@ def test_naive_freshness_timestamp_is_treated_as_utc() -> None:
         as_of=AS_OF,
     )
     assert not any("market bars appear stale" in warning for warning in report.warnings)
+
+
+def test_partial_benchmark_and_macro_provenance_is_visible() -> None:
+    report = evaluate_data_coverage(
+        _coverage(
+            benchmark_bars=500,
+            sourced_benchmark_bars=450,
+            macro_observations=100,
+            sourced_macro_observations=80,
+        )
+    )
+    assert report.ready is True
+    assert any("450/500 are source-linked" in warning for warning in report.warnings)
+    assert any("80/100 are source-linked" in warning for warning in report.warnings)
+
+
+def test_fully_sourced_benchmark_and_macro_data_has_no_provenance_warning() -> None:
+    report = evaluate_data_coverage(_coverage())
+    assert not any("lack source provenance" in warning for warning in report.warnings)
