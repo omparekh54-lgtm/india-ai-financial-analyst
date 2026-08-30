@@ -12,6 +12,10 @@ class ProviderGateway:
         self.settings = settings
         self.router = ProviderRouter(settings)
 
+    @property
+    def enabled(self) -> bool:
+        return self.settings.enable_external_llm_calls
+
     async def complete(
         self,
         capability: Capability,
