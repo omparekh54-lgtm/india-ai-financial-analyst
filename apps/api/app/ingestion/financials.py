@@ -39,15 +39,30 @@ _FACT_ALIASES = {
     "total revenue": "revenue",
     "sales": "revenue",
     "net sales": "revenue",
+    "cost of goods sold": "cogs",
+    "cost of revenue": "cogs",
+    "cost of sales": "cogs",
     "ebitda": "ebitda",
     "operating ebitda": "ebitda",
     "ebit": "ebit",
     "operating profit": "ebit",
     "profit before interest and tax": "ebit",
+    "profit before tax": "pbt",
+    "profit before exceptional items and tax": "pbt",
     "pat": "pat",
     "profit after tax": "pat",
     "net profit": "pat",
     "profit for the period": "pat",
+    "tax expense": "tax_expense",
+    "total tax expense": "tax_expense",
+    "depreciation and amortisation expense": "depreciation_amortization",
+    "depreciation and amortization expense": "depreciation_amortization",
+    "depreciation amortisation and impairment": "depreciation_amortization",
+    "depreciation amortization and impairment": "depreciation_amortization",
+    "other income": "other_income",
+    "employee benefit expense": "employee_cost",
+    "employee benefits expense": "employee_cost",
+    "employee cost": "employee_cost",
     "cash flow from operating activities": "cfo",
     "net cash from operating activities": "cfo",
     "operating cash flow": "cfo",
@@ -69,29 +84,61 @@ _FACT_ALIASES = {
     "payables": "payables",
     "total assets": "total_assets",
     "current liabilities": "current_liabilities",
+    "total equity": "total_equity",
+    "equity": "total_equity",
+    "net worth": "net_worth",
     "interest expense": "interest_expense",
     "finance costs": "interest_expense",
+    "interest expended": "interest_expense",
     "shares outstanding": "shares_outstanding",
     "number of shares": "shares_outstanding",
     "book value per share": "book_value_per_share",
     "sales per share": "sales_per_share",
+    "basic earnings per share": "eps_basic",
+    "earnings per share basic": "eps_basic",
+    "diluted earnings per share": "eps_diluted",
+    "earnings per share diluted": "eps_diluted",
+    "net interest income": "net_interest_income",
+    "interest earned": "interest_income",
+    "interest income": "interest_income",
+    "deposits": "deposits",
+    "total deposits": "deposits",
+    "advances": "advances",
+    "gross advances": "gross_advances",
+    "net advances": "net_advances",
+    "provisions": "provisions",
+    "provisions and contingencies": "provisions",
+    "provision coverage ratio": "provision_coverage_pct",
     "gross npa": "gross_npa_pct",
     "gross npa pct": "gross_npa_pct",
     "gross npa percentage": "gross_npa_pct",
+    "gross npa ratio": "gross_npa_pct",
+    "gross non performing assets ratio": "gross_npa_pct",
     "net npa": "net_npa_pct",
     "net npa pct": "net_npa_pct",
+    "net npa ratio": "net_npa_pct",
+    "net non performing assets ratio": "net_npa_pct",
     "net interest margin": "nim_pct",
     "nim": "nim_pct",
     "casa ratio": "casa_ratio_pct",
     "credit cost": "credit_cost_pct",
     "capital adequacy ratio": "capital_adequacy_pct",
+    "capital to risk weighted assets ratio": "capital_adequacy_pct",
     "crar": "capital_adequacy_pct",
     "return on assets": "roa_pct",
     "return on equity": "roe_pct",
+    "gross stage 3 ratio": "gross_stage3_pct",
+    "net stage 3 ratio": "net_stage3_pct",
     "aum": "aum",
     "assets under management": "aum",
     "disbursements": "disbursements",
+    "gross written premium": "gross_written_premium",
+    "gwp": "gross_written_premium",
+    "gross direct premium": "gross_written_premium",
+    "new business premium": "new_business_premium",
     "annual premium equivalent": "ape",
+    "annualized premium equivalent": "ape",
+    "annualised premium equivalent": "ape",
     "ape": "ape",
     "value of new business": "vnb",
     "vnb": "vnb",
@@ -99,13 +146,25 @@ _FACT_ALIASES = {
     "embedded value": "embedded_value",
     "embedded value per share": "embedded_value_per_share",
     "solvency ratio": "solvency_ratio_pct",
+    "combined ratio": "combined_ratio_pct",
+    "expense ratio": "expense_ratio_pct",
+    "claims incurred": "claims_incurred",
+    "persistency ratio": "persistency_ratio_pct",
     "attrition": "attrition_pct",
     "utilization": "utilization_pct",
     "total contract value": "tcv",
+    "large deal total contract value": "tcv",
+    "large deal tcv": "tcv",
+    "deal wins tcv": "tcv",
     "tcv": "tcv",
     "constant currency growth": "constant_currency_growth_pct",
     "volume growth": "volume_growth_pct",
     "market share": "market_share_pct",
+    "employee count": "employee_count",
+    "employees": "employee_count",
+    "order book": "order_book",
+    "capacity utilization": "capacity_utilization_pct",
+    "capacity utilisation": "capacity_utilization_pct",
 }
 
 _PERIOD_TYPES = {
@@ -119,6 +178,9 @@ _PERIOD_TYPES = {
     "half year": "half_year",
     "half-year": "half_year",
     "half_year": "half_year",
+    "nine month": "nine_month",
+    "nine months": "nine_month",
+    "nine_month": "nine_month",
     "ttm": "ttm",
     "trailing twelve months": "ttm",
     "point in time": "point_in_time",
@@ -166,24 +228,43 @@ def normalize_financial_facts(facts: list[RawFinancialFact]) -> list[NormalizedF
         grouped.setdefault((item.period_end, item.period_type), {})[item.fact_name] = item
 
     for (period_end, period_type), period in grouped.items():
-        if "free_cash_flow" in period or "cfo" not in period or "capex" not in period:
-            continue
-        cfo = period["cfo"]
-        capex = period["capex"]
-        derived = NormalizedFinancialFact(
-            fact_name="free_cash_flow",
-            period_start=cfo.period_start,
-            period_end=period_end,
-            period_type=period_type,
-            value=cfo.value - abs(capex.value),
-            unit=cfo.unit or capex.unit,
-            metadata={
-                "derived": True,
-                "formula": "cfo - abs(capex)",
-                "components": ["cfo", "capex"],
-            },
-        )
-        normalized[(derived.fact_name, period_end, period_type)] = derived
+        if "free_cash_flow" not in period and "cfo" in period and "capex" in period:
+            cfo = period["cfo"]
+            capex = period["capex"]
+            if _units_compatible(cfo.unit, capex.unit):
+                derived_fcf = NormalizedFinancialFact(
+                    fact_name="free_cash_flow",
+                    period_start=cfo.period_start,
+                    period_end=period_end,
+                    period_type=period_type,
+                    value=cfo.value - abs(capex.value),
+                    unit=cfo.unit or capex.unit,
+                    metadata={
+                        "derived": True,
+                        "formula": "cfo - abs(capex)",
+                        "components": ["cfo", "capex"],
+                    },
+                )
+                normalized[(derived_fcf.fact_name, period_end, period_type)] = derived_fcf
+
+        if "ebitda" not in period and "ebit" in period and "depreciation_amortization" in period:
+            ebit = period["ebit"]
+            depreciation = period["depreciation_amortization"]
+            if _units_compatible(ebit.unit, depreciation.unit):
+                derived_ebitda = NormalizedFinancialFact(
+                    fact_name="ebitda",
+                    period_start=ebit.period_start,
+                    period_end=period_end,
+                    period_type=period_type,
+                    value=ebit.value + abs(depreciation.value),
+                    unit=ebit.unit or depreciation.unit,
+                    metadata={
+                        "derived": True,
+                        "formula": "ebit + abs(depreciation_amortization)",
+                        "components": ["ebit", "depreciation_amortization"],
+                    },
+                )
+                normalized[(derived_ebitda.fact_name, period_end, period_type)] = derived_ebitda
 
     return sorted(
         normalized.values(),
@@ -276,6 +357,12 @@ async def _upsert_financial_fact(
         ),
         parameters,
     )
+
+
+def _units_compatible(left: str | None, right: str | None) -> bool:
+    if not left or not right:
+        return True
+    return left.strip().lower() == right.strip().lower()
 
 
 def _normalize_label(value: str) -> str:
