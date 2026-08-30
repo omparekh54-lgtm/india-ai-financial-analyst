@@ -14,6 +14,7 @@ def _coverage(**overrides: object) -> DataCoverage:
         "financial_facts": 100,
         "sourced_financial_facts": 100,
         "corporate_events": 20,
+        "sourced_corporate_events": 20,
         "sources": 20,
         "evidence_chunks": 200,
         "embedded_evidence_chunks": 150,
@@ -43,6 +44,7 @@ def test_empty_research_datasets_are_visible_warnings() -> None:
             financial_facts=0,
             sourced_financial_facts=0,
             corporate_events=0,
+            sourced_corporate_events=0,
             sources=0,
             evidence_chunks=0,
             embedded_evidence_chunks=0,
@@ -121,6 +123,8 @@ def test_partial_provenance_is_a_hard_readiness_failure() -> None:
         _coverage(
             financial_facts=100,
             sourced_financial_facts=99,
+            corporate_events=20,
+            sourced_corporate_events=19,
             market_bars=1000,
             sourced_market_bars=990,
             benchmark_bars=500,
@@ -133,6 +137,7 @@ def test_partial_provenance_is_a_hard_readiness_failure() -> None:
     )
     assert report.ready is False
     assert any("99/100 are source-linked" in error for error in report.errors)
+    assert any("19/20 are source-linked" in error for error in report.errors)
     assert any("990/1000 are source-linked" in error for error in report.errors)
     assert any("450/500 are source-linked" in error for error in report.errors)
     assert any("80/100 are source-linked" in error for error in report.errors)
