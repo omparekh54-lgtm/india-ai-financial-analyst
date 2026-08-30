@@ -150,6 +150,18 @@ def _canonical_media_type(media_type: str, url: str) -> str | None:
         "application/xml",
         "application/xbrl+xml",
         "text/xml",
+        "audio/aac",
+        "audio/aiff",
+        "audio/flac",
+        "audio/m4a",
+        "audio/mp3",
+        "audio/mpeg",
+        "audio/ogg",
+        "audio/opus",
+        "audio/wav",
+        "audio/webm",
+        "audio/x-m4a",
+        "audio/x-wav",
     }
     if media_type in supported:
         return media_type
@@ -166,6 +178,15 @@ def _canonical_media_type(media_type: str, url: str) -> str | None:
         ".html": "text/html",
         ".xhtml": "application/xhtml+xml",
         ".txt": "text/plain",
+        ".aac": "audio/aac",
+        ".aiff": "audio/aiff",
+        ".flac": "audio/flac",
+        ".m4a": "audio/m4a",
+        ".mp3": "audio/mpeg",
+        ".ogg": "audio/ogg",
+        ".opus": "audio/opus",
+        ".wav": "audio/wav",
+        ".webm": "audio/webm",
     }.get(suffix)
 
 
