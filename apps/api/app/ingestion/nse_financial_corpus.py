@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, time
+from datetime import UTC, date, datetime, time
 
 from app.connectors.nse_financial_results import NseFinancialResultRecord
 
@@ -27,7 +27,7 @@ def select_financial_result_records(
     if max_periods < 1:
         raise ValueError("max_periods must be >= 1")
 
-    by_period: dict[object, NseFinancialResultRecord] = {}
+    by_period: dict[date, NseFinancialResultRecord] = {}
     for record in records:
         if record.period_end is None:
             continue
@@ -86,12 +86,11 @@ def financial_result_metadata(
 
 
 def _preference_key(record: NseFinancialResultRecord) -> tuple[int, int, datetime, int]:
+    timestamp = record.filing_at or record.broadcast_at
     return (
         _consolidation_rank(record.consolidation),
         1 if record.period.strip().lower() == "annual" else 0,
-        _utc(record.filing_at or record.broadcast_at)
-        if record.filing_at is not None or record.broadcast_at is not None
-        else datetime.min.replace(tzinfo=UTC),
+        _utc(timestamp) if timestamp is not None else datetime.min.replace(tzinfo=UTC),
         -record.raw_index,
     )
 
