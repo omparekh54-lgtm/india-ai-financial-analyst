@@ -13,6 +13,7 @@ from app.ingestion.exchange_documents import ExchangeDocumentIngestor
 from app.ingestion.india_official import OfficialIndiaIngestionService
 from app.ingestion.official_pipeline import OFFICIAL_INDIA_DOMAINS
 from app.repositories.official_feeds import ClaimedFeed, OfficialFeedRepository
+from app.research.event_dispatch import EventResearchDispatcher
 
 _MAX_EXCHANGE_DOCUMENTS_PER_RUN = 12
 
@@ -26,6 +27,7 @@ class OfficialFeedWorker:
         *,
         external_data_enabled: bool,
         app_env: str = "development",
+        event_research_enabled: bool = False,
     ) -> None:
         self.external_data_enabled = external_data_enabled
         self.app_env = app_env.strip().lower()
@@ -35,6 +37,10 @@ class OfficialFeedWorker:
         self.bse_public = BsePublicAnnouncementsFetcher()
         self.ingestion = OfficialIndiaIngestionService(engine)
         self.documents = ExchangeDocumentIngestor(engine)
+        self.event_dispatcher = EventResearchDispatcher(
+            engine,
+            enabled=event_research_enabled,
+        )
 
     async def run_once(self, *, limit: int = 4) -> dict[str, object]:
         if not self.external_data_enabled:
@@ -225,6 +231,7 @@ class OfficialFeedWorker:
         parsed = 0
         xbrl_normalized = 0
         failures: list[dict[str, str]] = []
+        event_research: list[dict[str, object]] = []
 
         for raw_candidate in candidates[:_MAX_EXCHANGE_DOCUMENTS_PER_RUN]:
             if not isinstance(raw_candidate, dict):
@@ -234,6 +241,7 @@ class OfficialFeedWorker:
             security_id = _uuid(candidate.get("security_id"))
             exchange = _optional_string(candidate.get("exchange"))
             identifier = _optional_string(candidate.get("identifier"))
+            event_type = _optional_string(candidate.get("event_type")) or ""
             headline = _optional_string(candidate.get("headline")) or "Exchange disclosure"
             published_at = _configured_datetime(candidate.get("published_at"))
             if not event_id or not security_id or not exchange or not identifier:
@@ -243,7 +251,7 @@ class OfficialFeedWorker:
             attachment_url = _optional_string(candidate.get("attachment_url"))
             xbrl_url = _optional_string(candidate.get("xbrl_url"))
             if attachment_url:
-                urls.append((attachment_url, _document_role(candidate.get("event_type"))))
+                urls.append((attachment_url, _document_role(event_type)))
             if xbrl_url and xbrl_url != attachment_url:
                 urls.append((xbrl_url, "xbrl"))
 
@@ -263,7 +271,7 @@ class OfficialFeedWorker:
                         metadata={
                             "exchange": exchange,
                             "identifier": identifier,
-                            "event_type": candidate.get("event_type"),
+                            "event_type": event_type,
                         },
                     )
                     if document_result.get("parse_status") == "parsed":
@@ -305,6 +313,16 @@ class OfficialFeedWorker:
                         }
                     )
 
+            dispatch_result = await self.event_dispatcher.dispatch_corporate_event(
+                event_id=event_id,
+                security_id=security_id,
+                event_type=event_type,
+                query=identifier,
+                headline=headline,
+                published_at=published_at.isoformat() if published_at else None,
+            )
+            event_research.append(dispatch_result)
+
         return {
             "candidate_count": min(len(candidates), _MAX_EXCHANGE_DOCUMENTS_PER_RUN),
             "attempted_count": attempted,
@@ -312,6 +330,7 @@ class OfficialFeedWorker:
             "xbrl_normalized_fact_count": xbrl_normalized,
             "failure_count": len(failures),
             "failures": failures[:20],
+            "event_research": event_research,
         }
 
 
