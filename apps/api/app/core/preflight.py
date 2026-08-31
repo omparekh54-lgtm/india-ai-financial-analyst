@@ -49,6 +49,8 @@ _REQUIRED_OWNER_POLICIES = (
     "analysis_snapshots_owner_read",
 )
 
+_REFERENCE_APPROVAL_CONSTRAINT = "sources_reference_production_approved_chk"
+
 
 @dataclass(frozen=True)
 class DatabasePreflight:
@@ -57,6 +59,7 @@ class DatabasePreflight:
     semantic_index: bool
     research_ownership_column: bool
     benchmark_source_column: bool
+    reference_source_approval_constraint: bool
     missing_tables: tuple[str, ...]
     rls_disabled_tables: tuple[str, ...]
     missing_owner_policies: tuple[str, ...]
@@ -70,6 +73,7 @@ class DatabasePreflight:
             and self.semantic_index
             and self.research_ownership_column
             and self.benchmark_source_column
+            and self.reference_source_approval_constraint
             and not self.missing_tables
             and not self.rls_disabled_tables
             and not self.missing_owner_policies
@@ -84,6 +88,7 @@ class DatabasePreflight:
             "semantic_index": self.semantic_index,
             "research_ownership_column": self.research_ownership_column,
             "benchmark_source_column": self.benchmark_source_column,
+            "reference_source_approval_constraint": self.reference_source_approval_constraint,
             "missing_tables": list(self.missing_tables),
             "rls_disabled_tables": list(self.rls_disabled_tables),
             "missing_owner_policies": list(self.missing_owner_policies),
@@ -116,6 +121,11 @@ async def database_preflight(engine: AsyncEngine) -> DatabasePreflight:
                 table_name="benchmark_bars",
                 column_name="source_id",
             )
+            reference_source_approval_constraint = await _validated_constraint_exists(
+                connection,
+                table_name="sources",
+                constraint_name=_REFERENCE_APPROVAL_CONSTRAINT,
+            )
             missing_tables = await _missing_tables(connection)
             rls_disabled_tables = await _rls_disabled_tables(connection)
             missing_owner_policies = await _missing_owner_policies(connection)
@@ -126,6 +136,7 @@ async def database_preflight(engine: AsyncEngine) -> DatabasePreflight:
             semantic_index=False,
             research_ownership_column=False,
             benchmark_source_column=False,
+            reference_source_approval_constraint=False,
             missing_tables=(),
             rls_disabled_tables=(),
             missing_owner_policies=(),
@@ -138,6 +149,7 @@ async def database_preflight(engine: AsyncEngine) -> DatabasePreflight:
         semantic_index=semantic_index,
         research_ownership_column=research_ownership_column,
         benchmark_source_column=benchmark_source_column,
+        reference_source_approval_constraint=reference_source_approval_constraint,
         missing_tables=missing_tables,
         rls_disabled_tables=rls_disabled_tables,
         missing_owner_policies=missing_owner_policies,
@@ -164,6 +176,33 @@ async def _column_exists(
                 """
             ),
             {"table_name": table_name, "column_name": column_name},
+        )
+    )
+
+
+async def _validated_constraint_exists(
+    connection: AsyncConnection,
+    *,
+    table_name: str,
+    constraint_name: str,
+) -> bool:
+    return bool(
+        await connection.scalar(
+            text(
+                """
+                select exists(
+                  select 1
+                  from pg_constraint constraint_row
+                  join pg_class table_row on table_row.oid = constraint_row.conrelid
+                  join pg_namespace schema_row on schema_row.oid = table_row.relnamespace
+                  where schema_row.nspname = 'public'
+                    and table_row.relname = :table_name
+                    and constraint_row.conname = :constraint_name
+                    and constraint_row.convalidated
+                )
+                """
+            ),
+            {"table_name": table_name, "constraint_name": constraint_name},
         )
     )
 
