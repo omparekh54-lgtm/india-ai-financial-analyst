@@ -171,15 +171,15 @@ class DerivedSecurityMetricIngestor:
 def render_derived_metric_evidence(symbol: str, metrics: list[SecurityMetricInput]) -> str:
     lines = [f"Deterministic comparable metrics | security={symbol.strip().upper()}"]
     for item in metrics:
-        metric_name = str(item.metric_name)
-        as_of_date = item.as_of_date
-        value = item.value
-        unit = item.unit or "unit_unspecified"
         metadata = item.metadata
         formula = str(metadata.get("formula") or "source_fact_passthrough")
-        upstream = ",".join(str(value) for value in metadata.get("upstream_source_ids", []))
+        raw_upstream = metadata.get("upstream_source_ids")
+        if not isinstance(raw_upstream, list):
+            raise ValueError("derived metric evidence requires upstream source IDs")
+        upstream = ",".join(str(value) for value in raw_upstream)
         lines.append(
-            f"- {metric_name}: {value} {unit} | as_of={as_of_date.isoformat()} "
-            f"| formula={formula} | upstream_sources={upstream}"
+            f"- {item.metric_name}: {item.value} {item.unit or 'unit_unspecified'} "
+            f"| as_of={item.as_of_date.isoformat()} | formula={formula} "
+            f"| upstream_sources={upstream}"
         )
     return "\n".join(lines)
