@@ -94,7 +94,7 @@ class ResearchService:
 
             await self.repository.set_job_status(job_id, "completed")
             if security_id is not None and report:
-                await self._save_snapshot(job_id, security_id, mode, depth, report)
+                await self._save_snapshot(job_id, security_id, mode, depth, report, outputs)
 
             validation = report.get("validation") if isinstance(report.get("validation"), dict) else {}
             coverage = validation.get("evidence_coverage") if isinstance(validation, dict) else None
@@ -146,15 +146,38 @@ class ResearchService:
         mode: AnalysisMode,
         depth: ResearchDepth,
         report: dict[str, Any],
+        outputs: list[AgentOutput],
     ) -> None:
         sections = report.get("sections") if isinstance(report.get("sections"), dict) else {}
         risks = sections.get(AgentName.RISK.value, []) if isinstance(sections, dict) else []
         catalysts: list[object] = []
+        disclosures: list[object] = []
         if isinstance(sections, dict):
             for section in (AgentName.NEWS.value, AgentName.EARNINGS.value):
                 for claim in sections.get(section, []):
                     if isinstance(claim, dict) and claim.get("claim_type") == "catalyst":
                         catalysts.append(claim)
+            for section in (AgentName.FILINGS.value, AgentName.EARNINGS.value):
+                disclosures.extend(
+                    claim for claim in sections.get(section, []) if isinstance(claim, dict)
+                )
+
+        snapshot_metrics: dict[str, object] = {
+            "confidence": report.get("confidence") or {},
+        }
+        metric_agents = {
+            "market": AgentName.MARKET,
+            "financials": AgentName.FINANCIALS,
+            "earnings": AgentName.EARNINGS,
+            "industry": AgentName.INDUSTRY,
+            "macro": AgentName.MACRO,
+            "valuation": AgentName.VALUATION,
+            "technical": AgentName.TECHNICAL,
+        }
+        for key, agent in metric_agents.items():
+            output = _latest_output(outputs, agent)
+            if output is not None and output.metrics:
+                snapshot_metrics[key] = output.metrics
 
         async with self.engine.begin() as connection:
             await connection.execute(
@@ -173,10 +196,16 @@ class ResearchService:
                     "security_id": security_id,
                     "job_id": job_id,
                     "snapshot_type": mode.value,
-                    "metrics": _json(report.get("confidence") or {}),
+                    "metrics": _json(snapshot_metrics),
                     "catalysts": _json(catalysts),
                     "risks": _json(risks),
-                    "metadata": _json({"analysis_depth": depth.value}),
+                    "metadata": _json(
+                        {
+                            "analysis_depth": depth.value,
+                            "disclosure_claims": disclosures[:80],
+                            "snapshot_schema_version": 2,
+                        }
+                    ),
                 },
             )
 
