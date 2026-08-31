@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 import re
 from io import BytesIO
 
@@ -8,6 +9,8 @@ import fitz
 from bs4 import BeautifulSoup
 
 from app.documents.models import ParsedDocument, ParsedPage, TextChunk
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentParseError(ValueError):
@@ -36,10 +39,11 @@ def parse_pdf(data: bytes, *, title: str | None = None) -> ParsedDocument:
     if importlib.util.find_spec("docling") is not None:
         try:
             return _parse_pdf_docling(data, title=title)
-        except Exception:
-            # Parsing availability must degrade gracefully. Gemini/page-level visual analysis can
-            # still enrich the PyMuPDF fallback downstream and Agent 15 will source-grade it.
-            pass
+        except Exception as exc:  # noqa: BLE001 - optional parser failures must degrade safely
+            logger.warning(
+                "Docling structural parsing failed; using PyMuPDF fallback",
+                extra={"error_type": type(exc).__name__},
+            )
     return _parse_pdf_pymupdf(data, title=title)
 
 
