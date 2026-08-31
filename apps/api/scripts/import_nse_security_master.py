@@ -63,11 +63,16 @@ def validate_rows(rows: list[dict[str, str]], *, min_rows: int) -> dict[str, obj
 
     duplicate_symbols = _duplicates([row["symbol"] for row in rows])
     duplicate_isins = _duplicates([row["isin"] for row in rows])
+    invalid_isins = sorted(
+        row["isin"] for row in rows if re.fullmatch(r"IN[A-Z0-9]{10}", row["isin"].upper()) is None
+    )
     if duplicate_symbols or duplicate_isins:
         raise ValueError(
             "NSE security master contains duplicate identifiers: "
             f"symbols={duplicate_symbols[:10]}, isins={duplicate_isins[:10]}"
         )
+    if invalid_isins:
+        raise ValueError(f"NSE security master contains invalid Indian ISINs: {invalid_isins[:10]}")
 
     return {
         "row_count": len(rows),
@@ -87,21 +92,23 @@ def _duplicates(values: list[str]) -> list[str]:
     return sorted(duplicates)
 
 
-def _validate_remote_url(url: str) -> None:
-    parsed = urlparse(url)
+def _validate_remote_url(url: str) -> str:
+    cleaned = url.strip()
+    parsed = urlparse(cleaned)
     host = (parsed.hostname or "").lower()
     if parsed.scheme != "https" or host not in _ALLOWED_REMOTE_HOSTS:
-        raise ValueError("Remote NSE security-master URL must be HTTPS on an official NSE host")
+        raise ValueError("NSE security-master source URL must be HTTPS on an official NSE host")
+    return cleaned
 
 
 async def download_csv(url: str) -> str:
-    _validate_remote_url(url)
+    source_url = _validate_remote_url(url)
     headers = {
         "User-Agent": "IndiaAIFinancialAnalyst/0.6 security-master-importer",
         "Accept": "text/csv,text/plain,*/*",
     }
     async with httpx.AsyncClient(timeout=45.0, follow_redirects=True, headers=headers) as client:
-        response = await client.get(url)
+        response = await client.get(source_url)
         response.raise_for_status()
         content = response.text
     header = content.lstrip("\ufeff").splitlines()[0].upper() if content.strip() else ""
@@ -135,7 +142,9 @@ async def upsert_rows(
     database_url: str,
     *,
     source_checksum: str,
+    source_url: str,
 ) -> tuple[int, int]:
+    source_url = _validate_remote_url(source_url)
     engine = create_database_engine(database_url)
     security_sql = text(
         """
@@ -149,7 +158,9 @@ async def upsert_rows(
                 'face_value', :face_value,
                 'market_lot', :market_lot,
                 'security_master_source', 'NSE EQUITY_L.csv',
-                'security_master_sha256', :source_checksum
+                'security_master_source_url', :source_url,
+                'security_master_sha256', :source_checksum,
+                'security_master_provenance_class', 'official_source'
             )
         )
         on conflict (isin) do update set
@@ -174,7 +185,12 @@ async def upsert_rows(
             security_id, provider, instrument_id, exchange_segment, trading_symbol, metadata
         ) values (
             :security_id, 'nse', :instrument_id, 'NSE_EQ', :symbol,
-            jsonb_build_object('series', :series, 'source_sha256', :source_checksum)
+            jsonb_build_object(
+                'series', :series,
+                'source_url', :source_url,
+                'source_sha256', :source_checksum,
+                'provenance_class', 'official_source'
+            )
         )
         on conflict (provider, instrument_id) do update set
             security_id = excluded.security_id,
@@ -189,7 +205,11 @@ async def upsert_rows(
     try:
         async with engine.begin() as connection:
             for row in rows:
-                payload = {**row, "source_checksum": source_checksum}
+                payload = {
+                    **row,
+                    "source_checksum": source_checksum,
+                    "source_url": source_url,
+                }
                 result = await connection.execute(security_sql, payload)
                 security_id = result.scalar_one()
                 alias_values = {
@@ -225,6 +245,7 @@ async def upsert_rows(
                         "instrument_id": f"NSE:{row['symbol']}:{row['series']}",
                         "symbol": row["symbol"],
                         "series": row["series"],
+                        "source_url": source_url,
                         "source_checksum": source_checksum,
                     },
                 )
@@ -236,9 +257,16 @@ async def upsert_rows(
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Import NSE equity security master")
-    parser.add_argument("--url", default=DEFAULT_URL)
+    parser.add_argument(
+        "--url",
+        default=DEFAULT_URL,
+        help=(
+            "Official NSE source/provenance URL. It is validated and persisted even when --file "
+            "is used for an already-downloaded official artifact."
+        ),
+    )
     parser.add_argument("--series", default="EQ")
-    parser.add_argument("--file", help="Read an existing CSV instead of downloading")
+    parser.add_argument("--file", help="Read an already-downloaded official NSE CSV")
     parser.add_argument("--min-rows", type=int, default=1000)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -246,19 +274,23 @@ async def main() -> None:
     if args.min_rows < 1:
         raise SystemExit("--min-rows must be >= 1")
 
+    source_url = _validate_remote_url(args.url)
     if args.file:
-        content = Path(args.file).read_text(encoding="utf-8-sig")
-        source = str(Path(args.file).resolve())
+        file_path = Path(args.file)
+        content = file_path.read_text(encoding="utf-8-sig")
+        input_location = str(file_path.resolve())
     else:
-        content = await download_csv(args.url)
-        source = args.url
+        content = await download_csv(source_url)
+        input_location = source_url
 
     rows = parse_rows(content, series=args.series)
     validation = validate_rows(rows, min_rows=args.min_rows)
     checksum = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     summary: dict[str, object] = {
-        "source": source,
+        "input_location": input_location,
+        "source_url": source_url,
+        "provenance_class": "official_source",
         "series": args.series,
         "sha256": checksum,
         **validation,
@@ -278,6 +310,7 @@ async def main() -> None:
         rows,
         settings.database_url,
         source_checksum=checksum,
+        source_url=source_url,
     )
     after = await existing_coverage(settings.database_url, series=args.series)
     summary.update(
