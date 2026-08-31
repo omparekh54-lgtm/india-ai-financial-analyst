@@ -5,7 +5,7 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from uuid import UUID
 
 from sqlalchemy import text
@@ -111,7 +111,11 @@ async def _run() -> int:
     target_group.add_argument("--security", action="append", help="NSE symbol/BSE code/ISIN")
     target_group.add_argument("--all", action="store_true", help="Process a bounded NSE batch")
     parser.add_argument("--from-date", type=date.fromisoformat, required=True)
-    parser.add_argument("--to-date", type=date.fromisoformat, default=date.today())
+    parser.add_argument(
+        "--to-date",
+        type=date.fromisoformat,
+        default=datetime.now(UTC).date(),
+    )
     parser.add_argument("--limit", type=int, default=50)
     parser.add_argument("--after-symbol")
     parser.add_argument("--access-token-env", default=DEFAULT_TOKEN_ENV)
