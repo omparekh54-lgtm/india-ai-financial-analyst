@@ -23,11 +23,15 @@ class ResearchRepository:
         mode: str,
         security_id: UUID | None = None,
         requested_by: UUID | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> UUID:
         statement = text(
             """
-            insert into research_jobs (security_id, query, mode, requested_by, status)
-            values (:security_id, :query, :mode, :requested_by, 'queued')
+            insert into research_jobs (
+                security_id, query, mode, requested_by, status, metadata
+            ) values (
+                :security_id, :query, :mode, :requested_by, 'queued', cast(:metadata as jsonb)
+            )
             returning id
             """
         )
@@ -39,6 +43,7 @@ class ResearchRepository:
                     "query": query,
                     "mode": mode,
                     "requested_by": requested_by,
+                    "metadata": json.dumps(metadata or {}),
                 },
             )
             return result.scalar_one()
@@ -51,6 +56,7 @@ class ResearchRepository:
                 job.query,
                 job.status,
                 job.mode,
+                job.metadata as job_metadata,
                 job.security_id,
                 job.started_at,
                 job.completed_at,
@@ -87,6 +93,7 @@ class ResearchRepository:
                 job.query,
                 job.status,
                 job.mode,
+                job.metadata as job_metadata,
                 job.security_id,
                 job.started_at,
                 job.completed_at,
@@ -115,6 +122,98 @@ class ResearchRepository:
                 )
             ).mappings().one_or_none()
         return dict(row) if row is not None else None
+
+    async def get_user_job_evidence(
+        self,
+        user_id: UUID,
+        job_id: UUID,
+    ) -> list[dict[str, object]]:
+        """Return claim-level evidence, scoped through the owning research job."""
+        statement = text(
+            """
+            select
+                c.id as claim_id,
+                c.claim_type,
+                c.statement,
+                c.confidence,
+                c.validation_status,
+                c.data as claim_data,
+                ar.agent_name,
+                ec.id as evidence_id,
+                ec.page_number,
+                ec.section,
+                ec.content,
+                ec.metadata as evidence_metadata,
+                src.id as source_id,
+                src.source_type,
+                src.source_uri,
+                src.title as source_title,
+                src.published_at,
+                src.retrieved_at,
+                src.freshness,
+                src.checksum
+            from claims c
+            join research_jobs job on job.id = c.job_id
+            left join agent_runs ar on ar.id = c.agent_run_id
+            left join claim_evidence ce on ce.claim_id = c.id
+            left join evidence_chunks ec on ec.id = ce.evidence_chunk_id
+            left join sources src on src.id = ec.source_id
+            where c.job_id = :job_id
+              and job.requested_by = :user_id
+            order by c.created_at, c.id, ec.page_number nulls last, ec.chunk_index
+            """
+        )
+        async with self.engine.connect() as connection:
+            rows = (
+                await connection.execute(
+                    statement,
+                    {"job_id": job_id, "user_id": user_id},
+                )
+            ).mappings().all()
+
+        claims: dict[str, dict[str, object]] = {}
+        for row in rows:
+            claim_id = str(row["claim_id"])
+            claim = claims.setdefault(
+                claim_id,
+                {
+                    "claim_id": claim_id,
+                    "agent": row["agent_name"],
+                    "claim_type": row["claim_type"],
+                    "statement": row["statement"],
+                    "confidence": float(row["confidence"]),
+                    "validation_status": row["validation_status"],
+                    "data": row["claim_data"] if isinstance(row["claim_data"], dict) else {},
+                    "evidence": [],
+                },
+            )
+            if row["evidence_id"] is None:
+                continue
+            evidence = claim["evidence"]
+            if not isinstance(evidence, list):  # pragma: no cover - internal invariant
+                raise TypeError("claim evidence payload must be a list")
+            evidence.append(
+                {
+                    "evidence_id": str(row["evidence_id"]),
+                    "source_id": str(row["source_id"]) if row["source_id"] else None,
+                    "source_type": row["source_type"],
+                    "source_uri": row["source_uri"],
+                    "title": row["source_title"],
+                    "published_at": row["published_at"],
+                    "retrieved_at": row["retrieved_at"],
+                    "freshness": row["freshness"],
+                    "checksum": row["checksum"],
+                    "page_number": row["page_number"],
+                    "section": row["section"],
+                    "content": row["content"],
+                    "metadata": (
+                        row["evidence_metadata"]
+                        if isinstance(row["evidence_metadata"], dict)
+                        else {}
+                    ),
+                }
+            )
+        return list(claims.values())
 
     async def set_job_status(self, job_id: UUID, status: str) -> None:
         fields = {"status": status, "job_id": job_id}
