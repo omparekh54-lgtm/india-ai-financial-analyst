@@ -4,11 +4,14 @@ from typing import Any
 
 from app.agents.contracts import AgentInput, AgentName, AgentOutput, Claim
 from app.calculations.financials import (
+    altman_z_score,
+    beneish_m_score,
     cfo_to_pat,
     growth_rate,
     interest_coverage,
     margin,
     net_debt_to_ebitda,
+    piotroski_f_score,
     roce,
     working_capital_days,
 )
@@ -93,13 +96,24 @@ SECTOR_KPIS = (
     "normalized_ebitda",
 )
 
+FINANCIAL_SECTOR_MARKERS = (
+    "bank",
+    "banking",
+    "financial services",
+    "finance",
+    "nbfc",
+    "insurance",
+    "asset management",
+    "brokerage",
+)
+
 
 class FinancialForensicAgent:
     """Code-first financial analysis agent over normalized sourced facts."""
 
     async def run(self, agent_input: AgentInput) -> AgentOutput:
         facts = agent_input.context.get("financials") or {}
-        if not facts:
+        if not isinstance(facts, dict) or not facts:
             return AgentOutput(
                 agent=AgentName.FINANCIALS,
                 ok=False,
@@ -138,6 +152,7 @@ class FinancialForensicAgent:
         }
         evidence = [item for item in agent_input.evidence if item.source_type in FINANCIAL_SOURCE_TYPES]
         evidence_ids = [item.evidence_id for item in evidence]
+        period = _period(facts)
 
         claims = [
             Claim(
@@ -147,6 +162,10 @@ class FinancialForensicAgent:
                 confidence=0.99,
                 evidence_ids=evidence_ids,
                 status="pending",
+                metric=name,
+                value=float(value),
+                period=period,
+                calculation_version=f"financial.{name}.v1",
                 data={"metric": name, "value": value},
             )
             for name, value in calculated_metrics.items()
@@ -160,6 +179,9 @@ class FinancialForensicAgent:
                 confidence=0.98,
                 evidence_ids=evidence_ids,
                 status="pending",
+                metric=name,
+                value=float(value),
+                period=str(facts.get(f"{name}_period_end") or period or "") or None,
                 data={
                     "metric": name,
                     "value": value,
@@ -170,10 +192,51 @@ class FinancialForensicAgent:
             for name, value in sector_metrics.items()
         )
 
+        forensic_scores: dict[str, float | int] = {}
+        if _forensic_scores_applicable(agent_input.context):
+            piotroski = piotroski_f_score(facts)
+            altman = altman_z_score(facts)
+            beneish = beneish_m_score(facts)
+            if piotroski is not None:
+                forensic_scores["piotroski_f_score"] = piotroski
+            if altman is not None:
+                forensic_scores["altman_z_score"] = altman
+            if beneish is not None:
+                forensic_scores["beneish_m_score"] = beneish
+
+        for name, value in forensic_scores.items():
+            claims.append(
+                Claim(
+                    agent=AgentName.FINANCIALS,
+                    statement=f"{name} calculated as {float(value):.4f}",
+                    claim_type="calculation",
+                    confidence=0.98,
+                    evidence_ids=evidence_ids,
+                    status="pending",
+                    metric=name,
+                    value=float(value),
+                    unit="score",
+                    period=period,
+                    materiality=0.70,
+                    calculation_version=f"forensic.{name}.v1",
+                    data={
+                        "metric": name,
+                        "value": value,
+                        "forensic_score": True,
+                        "applicability_checked": True,
+                    },
+                )
+            )
+
         warnings = [] if evidence_ids else ["Financial calculations lack source-linked evidence"]
+        if not _forensic_scores_applicable(agent_input.context):
+            warnings.append(
+                "Classic Piotroski/Altman/Beneish scores suppressed for a financial-sector issuer"
+            )
         metrics: dict[str, object] = {
             **calculated_metrics,
             "sector_kpis": sector_metrics,
+            "forensic_scores": forensic_scores,
         }
         return AgentOutput(
             agent=AgentName.FINANCIALS,
@@ -182,6 +245,25 @@ class FinancialForensicAgent:
             metrics=metrics,
             warnings=warnings,
         )
+
+
+def _forensic_scores_applicable(context: dict[str, Any]) -> bool:
+    security = context.get("security")
+    if not isinstance(security, dict):
+        return True
+    descriptor = " ".join(
+        str(security.get(key) or "").lower()
+        for key in ("sector", "industry")
+    )
+    return not any(marker in descriptor for marker in FINANCIAL_SECTOR_MARKERS)
+
+
+def _period(facts: dict[str, Any]) -> str | None:
+    for name in ("revenue_period_end", "pat_period_end", "total_assets_period_end"):
+        value = facts.get(name)
+        if value:
+            return str(value)
+    return None
 
 
 def _number(value: Any) -> float | None:
