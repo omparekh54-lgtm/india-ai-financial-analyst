@@ -148,6 +148,14 @@ type StoredResearchJob = ResearchJobSummary & {
   report_json?: ResearchReport | null;
 };
 
+type MetricChange = {
+  metric?: unknown;
+  previous?: unknown;
+  current?: unknown;
+  absolute_change?: unknown;
+  pct_change?: unknown;
+};
+
 export default function HomePage() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const [session, setSession] = useState<Session | null>(null);
@@ -293,9 +301,7 @@ export default function HomePage() {
         body: JSON.stringify({ query: query.trim(), mode, depth }),
       });
       const body = await response.json();
-      if (!response.ok) {
-        throw new Error(apiErrorMessage(body, response.status));
-      }
+      if (!response.ok) throw new Error(apiErrorMessage(body, response.status));
       setResult(body as ResearchResponse);
       setHistory(await loadHistory(session.access_token));
     } catch (requestError) {
@@ -312,9 +318,7 @@ export default function HomePage() {
     setEvidenceExplorer(null);
     try {
       const stored = await loadResearchJob(session.access_token, jobId);
-      if (!stored.report_json) {
-        throw new Error("This research run does not have a saved report yet.");
-      }
+      if (!stored.report_json) throw new Error("This research run does not have a saved report yet.");
       const storedDepth = resolveJobDepth(stored);
       setResult({
         job_id: stored.id,
@@ -491,9 +495,7 @@ function AuthPanel({
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onSignOut: () => void | Promise<void>;
 }) {
-  if (!ready) {
-    return <div className="authCard"><span>Checking secure session…</span></div>;
-  }
+  if (!ready) return <div className="authCard"><span>Checking secure session…</span></div>;
   if (!configured) {
     return (
       <div className="authCard authWarning">
@@ -665,7 +667,11 @@ function ResearchResult({
       {report.special_mode ? (
         <section className="panel specialPanel">
           <p className="eyebrow">
-            {report.mode === "what_changed" ? "WHAT CHANGED" : report.mode === "why_did_it_move" ? "WHY DID IT MOVE" : "MODE INSIGHTS"}
+            {report.mode === "what_changed"
+              ? "WHAT CHANGED"
+              : report.mode === "why_did_it_move"
+                ? "WHY DID IT MOVE"
+                : "MODE INSIGHTS"}
           </p>
           <SpecialMode data={report.special_mode} />
         </section>
@@ -876,14 +882,14 @@ function EvidenceExplorerPanel({
 }
 
 function SpecialMode({ data }: { data: Record<string, unknown> }) {
-  const drivers = Array.isArray(data.candidate_drivers) ? data.candidate_drivers : null;
-  if (drivers) {
+  const drivers = asObjectArray(data.candidate_drivers);
+  if (drivers !== null) {
     return (
       <div className="driverList">
         {drivers.length ? drivers.map((driver, index) => (
           <article key={index} className="driverCard">
-            <strong>#{index + 1} {String((driver as Record<string, unknown>).type ?? "candidate driver")}</strong>
-            <p>{String((driver as Record<string, unknown>).detail ?? "")}</p>
+            <strong>#{index + 1} {humanize(String(driver.type ?? "candidate_driver"))}</strong>
+            <p>{String(driver.detail ?? "")}</p>
           </article>
         )) : <p>No sufficiently strong candidate driver was identified.</p>}
         <small>{String(data.note ?? "")}</small>
@@ -891,20 +897,67 @@ function SpecialMode({ data }: { data: Record<string, unknown> }) {
     );
   }
 
-  const groups = ["new_risks", "resolved_risks", "new_catalysts", "resolved_catalysts"];
+  const claimGroups = [
+    "new_disclosures",
+    "new_risks",
+    "resolved_risks",
+    "new_catalysts",
+    "resolved_catalysts",
+  ];
+  const metricGroups = [
+    "market_changes",
+    "financial_changes",
+    "valuation_changes",
+    "confidence_changes",
+  ];
+  const baselineAvailable = data.baseline_available !== false;
+
   return (
-    <div className="changeGrid">
-      {groups.map((key) => {
-        const values = Array.isArray(data[key]) ? data[key] as Array<Record<string, unknown>> : [];
-        return (
-          <article key={key} className="changeCard">
-            <strong>{humanize(key)}</strong>
-            {values.length ? values.map((item, index) => (
-              <p key={index}>{String(item.statement ?? item.title ?? "Material change")}</p>
-            )) : <small>None detected</small>}
-          </article>
-        );
-      })}
+    <div className="driverList">
+      <div className="validationWarnings">
+        <strong>{baselineAvailable ? "Compared with prior validated snapshot" : "Baseline run"}</strong>
+        <span>
+          {baselineAvailable && typeof data.baseline_at === "string"
+            ? `Previous snapshot: ${formatDate(data.baseline_at)}`
+            : "No prior validated snapshot exists yet; this run establishes the baseline."}
+        </span>
+      </div>
+
+      <div className="changeGrid">
+        {claimGroups.map((key) => {
+          const values = asObjectArray(data[key]) ?? [];
+          return (
+            <article key={key} className="changeCard">
+              <strong>{humanize(key)}</strong>
+              {values.length ? values.map((item, index) => (
+                <p key={index}>{String(item.statement ?? item.title ?? "Material change")}</p>
+              )) : <small>None detected</small>}
+            </article>
+          );
+        })}
+      </div>
+
+      <div className="changeGrid">
+        {metricGroups.map((key) => {
+          const changes = (asObjectArray(data[key]) ?? []) as MetricChange[];
+          return (
+            <article key={key} className="changeCard">
+              <strong>{humanize(key)}</strong>
+              {changes.length ? changes.map((change, index) => (
+                <p key={index}>
+                  <strong>{humanize(String(change.metric ?? "metric"))}</strong>{" "}
+                  {formatMetricValue(change.previous)} → {formatMetricValue(change.current)}
+                  {typeof change.pct_change === "number"
+                    ? ` (${change.pct_change >= 0 ? "+" : ""}${change.pct_change.toFixed(2)}%)`
+                    : ""}
+                </p>
+              )) : <small>No numeric delta detected</small>}
+            </article>
+          );
+        })}
+      </div>
+
+      <small>{String(data.note ?? "")}</small>
     </div>
   );
 }
@@ -947,9 +1000,7 @@ async function loadResearchJob(accessToken: string, jobId: string): Promise<Stor
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   const body = await response.json();
-  if (!response.ok) {
-    throw new Error(apiErrorMessage(body, response.status));
-  }
+  if (!response.ok) throw new Error(apiErrorMessage(body, response.status));
   return body as StoredResearchJob;
 }
 
@@ -961,9 +1012,7 @@ async function loadEvidenceExplorer(
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   const body = await response.json();
-  if (!response.ok) {
-    throw new Error(apiErrorMessage(body, response.status));
-  }
+  if (!response.ok) throw new Error(apiErrorMessage(body, response.status));
   return body as EvidenceExplorerPayload;
 }
 
@@ -996,6 +1045,18 @@ function resolveJobDepth(job: ResearchJobSummary | StoredResearchJob): ResearchD
   const metadataDepth = job.job_metadata?.analysis_depth;
   const candidate = String(reportDepth ?? metadataDepth ?? "standard");
   return candidate === "quick" || candidate === "deep" ? candidate : "standard";
+}
+
+function asObjectArray(value: unknown): Array<Record<string, unknown>> | null {
+  if (!Array.isArray(value)) return null;
+  return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+}
+
+function formatMetricValue(value: unknown) {
+  if (typeof value !== "number") return String(value ?? "—");
+  if (Math.abs(value) < 1 && value !== 0) return value.toFixed(4);
+  if (Math.abs(value) < 1000) return value.toFixed(2);
+  return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
 function apiErrorMessage(body: unknown, status: number) {
