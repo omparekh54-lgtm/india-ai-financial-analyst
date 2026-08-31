@@ -10,6 +10,7 @@ from sqlalchemy import text
 from app.core.config import get_settings
 from app.db import create_database_engine
 from app.ingestion.official_pipeline import OFFICIAL_INDIA_DOMAINS
+from app.workers.official_feeds import production_feed_block_reason
 
 PROVIDERS = {"NSE", "BSE", "RBI", "NSDL"}
 FEED_TYPES = {"exchange_disclosures", "financial_xbrl", "rbi_macro", "nsdl_flows"}
@@ -48,6 +49,13 @@ async def _register(args: argparse.Namespace) -> str:
     parser_config = json.loads(args.parser_config)
     if not isinstance(parser_config, dict):
         raise TypeError("--parser-config must be a JSON object")
+
+    block_reason = production_feed_block_reason(parser_config, app_env=settings.app_env)
+    if block_reason and not args.disabled:
+        raise ValueError(
+            f"Cannot enable this feed in production: {block_reason} "
+            "Register it with --disabled until licensing/source approval is complete."
+        )
 
     parameters = {
         "name": args.name,
