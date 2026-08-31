@@ -17,6 +17,7 @@ from app.brokers.upstox_oauth import UpstoxOAuthError, UpstoxOAuthService
 from app.core.config import get_settings
 from app.core.data_readiness import evaluate_data_coverage, load_data_coverage
 from app.core.readiness import assert_production_ready, audit_settings
+from app.core.research_gate import ResearchCorpusNotReadyError, enforce_research_corpus_ready
 from app.db import create_database_engine, database_health
 from app.orchestration.plan import AnalysisMode, build_research_plan
 from app.providers.router import Capability, ProviderRouter
@@ -284,6 +285,18 @@ async def run_research(
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
 
     engine = create_database_engine(settings.database_url)
+    try:
+        await enforce_research_corpus_ready(engine, app_env=settings.app_env)
+    except ResearchCorpusNotReadyError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "research_corpus_not_ready",
+                "message": "Production research is blocked until hard corpus-readiness gates pass.",
+                "errors": list(exc.errors[:8]),
+            },
+        ) from exc
+
     service = ResearchService(
         engine,
         max_concurrency=settings.max_agent_concurrency,
