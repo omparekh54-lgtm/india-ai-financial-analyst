@@ -9,6 +9,7 @@ import { getSupabaseBrowserClient } from "../lib/supabase";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 const agents = [
+  "Security & Entity Intelligence",
   "Market & Microstructure",
   "Financial & Forensics",
   "Filings & Governance",
@@ -17,17 +18,29 @@ const agents = [
   "Web Intelligence",
   "Industry & Peers",
   "India Macro & Flows",
-  "Valuation",
+  "Valuation & Scenarios",
   "Technical & Derivatives",
   "Sentiment & Narrative",
   "Risk & Red Flags",
+  "Evidence & Cross-Validation",
+  "Chief Analyst",
 ];
 
 const modes = [
   ["Full Analysis", "full_analysis"],
   ["What Changed?", "what_changed"],
   ["Why Did It Move?", "why_did_it_move"],
+  ["Fundamentals", "fundamentals"],
+  ["Risk Review", "risk"],
 ] as const;
+
+const depths = [
+  ["Quick", "quick", "Focused evidence and fewer optional specialist passes."],
+  ["Standard", "standard", "Balanced institutional research depth."],
+  ["Deep", "deep", "Expanded semantic evidence and bounded research coverage."],
+] as const;
+
+type ResearchDepth = (typeof depths)[number][1];
 
 type Claim = {
   claim_id: string;
@@ -45,8 +58,31 @@ type Evidence = {
   source_uri: string;
   title?: string | null;
   published_at?: string | null;
+  retrieved_at?: string | null;
   freshness: string;
   excerpt?: string | null;
+  page_number?: number | null;
+  section?: string | null;
+  checksum?: string | null;
+  content?: string | null;
+};
+
+type EvidenceExplorerClaim = {
+  claim_id: string;
+  agent?: string | null;
+  claim_type: string;
+  statement: string;
+  confidence: number;
+  validation_status: string;
+  data?: Record<string, unknown>;
+  evidence: Evidence[];
+};
+
+type EvidenceExplorerPayload = {
+  job_id: string;
+  claim_count: number;
+  linked_evidence_count: number;
+  claims: EvidenceExplorerClaim[];
 };
 
 type ResearchNarrative = {
@@ -61,6 +97,7 @@ type ResearchNarrative = {
 type ResearchReport = {
   query: string;
   mode: string;
+  depth?: ResearchDepth | string;
   security?: Record<string, unknown> | null;
   claim_count: number;
   sections: Record<string, Claim[]>;
@@ -86,6 +123,8 @@ type AgentSummary = {
 type ResearchResponse = {
   job_id: string;
   security_id?: string | null;
+  depth?: ResearchDepth | string;
+  evidence_explorer_path?: string;
   report: ResearchReport;
   agents: AgentSummary[];
 };
@@ -95,6 +134,7 @@ type ResearchJobSummary = {
   query: string;
   status: string;
   mode: string;
+  job_metadata?: Record<string, unknown> | null;
   created_at: string;
   completed_at?: string | null;
   legal_name?: string | null;
@@ -119,7 +159,10 @@ export default function HomePage() {
   const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState("full_analysis");
+  const [depth, setDepth] = useState<ResearchDepth>("standard");
   const [result, setResult] = useState<ResearchResponse | null>(null);
+  const [evidenceExplorer, setEvidenceExplorer] = useState<EvidenceExplorerPayload | null>(null);
+  const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [history, setHistory] = useState<ResearchJobSummary[]>([]);
   const [historyLoadingId, setHistoryLoadingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -155,6 +198,28 @@ export default function HomePage() {
     }
     void loadHistory(session.access_token).then(setHistory).catch(() => setHistory([]));
   }, [session]);
+
+  useEffect(() => {
+    if (!session || !result?.job_id) {
+      setEvidenceExplorer(null);
+      return;
+    }
+    let active = true;
+    setEvidenceLoading(true);
+    void loadEvidenceExplorer(session.access_token, result.job_id)
+      .then((payload) => {
+        if (active) setEvidenceExplorer(payload);
+      })
+      .catch(() => {
+        if (active) setEvidenceExplorer(null);
+      })
+      .finally(() => {
+        if (active) setEvidenceLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [session, result?.job_id]);
 
   async function submitAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -200,6 +265,7 @@ export default function HomePage() {
     if (!supabase) return;
     await supabase.auth.signOut();
     setResult(null);
+    setEvidenceExplorer(null);
     setHistory([]);
     setHistoryLoadingId(null);
     setAuthMessage("Signed out.");
@@ -216,6 +282,7 @@ export default function HomePage() {
     setLoading(true);
     setError(null);
     setResult(null);
+    setEvidenceExplorer(null);
     try {
       const response = await fetch(`${API_BASE}/v1/research/run`, {
         method: "POST",
@@ -223,11 +290,11 @@ export default function HomePage() {
           Authorization: `Bearer ${session.access_token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ query: query.trim(), mode }),
+        body: JSON.stringify({ query: query.trim(), mode, depth }),
       });
       const body = await response.json();
       if (!response.ok) {
-        throw new Error(body?.detail ?? `API returned ${response.status}`);
+        throw new Error(apiErrorMessage(body, response.status));
       }
       setResult(body as ResearchResponse);
       setHistory(await loadHistory(session.access_token));
@@ -242,19 +309,23 @@ export default function HomePage() {
     if (!session) return;
     setHistoryLoadingId(jobId);
     setError(null);
+    setEvidenceExplorer(null);
     try {
       const stored = await loadResearchJob(session.access_token, jobId);
       if (!stored.report_json) {
         throw new Error("This research run does not have a saved report yet.");
       }
+      const storedDepth = resolveJobDepth(stored);
       setResult({
         job_id: stored.id,
         security_id: stored.security_id ?? null,
+        depth: storedDepth,
         report: stored.report_json,
         agents: [],
       });
       setQuery(stored.query);
       setMode(stored.mode);
+      setDepth(storedDepth);
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to open saved research");
@@ -277,10 +348,10 @@ export default function HomePage() {
     <main className="shell">
       <section className="hero">
         <p className="eyebrow">INDIA-FIRST EQUITY INTELLIGENCE</p>
-        <h1>Research a stock with a 16-agent evidence engine.</h1>
+        <h1>Research a stock with a 16-role evidence engine.</h1>
         <p className="subhead">
           NSE/BSE market context, filings, fundamentals, governance, valuation, derivatives and
-          source-linked research with an independent validation gate.
+          source-linked research with an independent validation gate before publication.
         </p>
 
         <AuthPanel
@@ -310,27 +381,65 @@ export default function HomePage() {
             {loading ? "Researching…" : session ? "Analyze" : "Sign in to analyze"}
           </button>
         </form>
-        <div className="quickModes">
-          {modes.map(([label, value]) => (
-            <button
-              key={value}
-              type="button"
-              className={mode === value ? "modeActive" : undefined}
-              onClick={() => setMode(value)}
-            >
-              {label}
-            </button>
-          ))}
+
+        <div className="controlBlock">
+          <div className="controlLabel">
+            <strong>Analysis mode</strong>
+            <span>Choose the question the agent DAG should answer.</span>
+          </div>
+          <div className="quickModes">
+            {modes.map(([label, value]) => (
+              <button
+                key={value}
+                type="button"
+                className={mode === value ? "modeActive" : undefined}
+                onClick={() => setMode(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
+
+        <div className="controlBlock depthBlock">
+          <div className="controlLabel">
+            <strong>Research depth</strong>
+            <span>Depth changes evidence/search budgets, not validation standards.</span>
+          </div>
+          <div className="depthGrid">
+            {depths.map(([label, value, description]) => (
+              <button
+                key={value}
+                type="button"
+                className={depth === value ? "depthCard depthActive" : "depthCard"}
+                onClick={() => setDepth(value)}
+              >
+                <strong>{label}</strong>
+                <small>{description}</small>
+              </button>
+            ))}
+          </div>
+        </div>
+
         {loading ? (
           <p className="runStatus">
-            Resolving security → collecting evidence → analyzing → validating → composing report…
+            Resolving security → collecting source evidence → calculating → validating → composing report…
           </p>
         ) : null}
         {error ? <p className="errorText">{error}</p> : null}
       </section>
 
-      {result ? <ResearchResult result={result} /> : <PipelineOverview />}
+      {result ? (
+        <ResearchResult
+          result={result}
+          evidenceExplorer={evidenceExplorer}
+          evidenceLoading={evidenceLoading}
+          accessToken={session?.access_token ?? null}
+        />
+      ) : (
+        <PipelineOverview />
+      )}
+
       {session ? (
         <RecentResearch
           jobs={history}
@@ -399,7 +508,7 @@ function AuthPanel({
         <div>
           <span className="secureBadge">PRIVATE RESEARCH</span>
           <strong>{session.user.email ?? "Authenticated analyst"}</strong>
-          <small>Runs and reports are isolated to your account.</small>
+          <small>Runs, reports and evidence graphs are isolated to your account.</small>
         </div>
         <button type="button" className="secondaryButton" onClick={() => void onSignOut()}>
           Sign out
@@ -484,7 +593,7 @@ function RecentResearch({
                 <strong>{job.legal_name ?? job.query}</strong>
                 <span>
                   {job.nse_symbol ? `NSE: ${job.nse_symbol} · ` : ""}
-                  {humanize(job.mode)}
+                  {humanize(job.mode)} · {humanize(resolveJobDepth(job))}
                 </span>
               </div>
               <div className="historyMeta">
@@ -503,12 +612,28 @@ function RecentResearch({
   );
 }
 
-function ResearchResult({ result }: { result: ResearchResponse }) {
+function ResearchResult({
+  result,
+  evidenceExplorer,
+  evidenceLoading,
+  accessToken,
+}: {
+  result: ResearchResponse;
+  evidenceExplorer: EvidenceExplorerPayload | null;
+  evidenceLoading: boolean;
+  accessToken: string | null;
+}) {
   const report = result.report;
   const security = report.security ?? {};
   const name = String(security.legal_name ?? report.query);
   const symbol = security.nse_symbol ? String(security.nse_symbol) : null;
   const sections = Object.entries(report.sections ?? {}).filter(([, claims]) => claims.length > 0);
+  const detailedByClaim = useMemo(() => {
+    const map = new Map<string, EvidenceExplorerClaim>();
+    for (const claim of evidenceExplorer?.claims ?? []) map.set(claim.claim_id, claim);
+    return map;
+  }, [evidenceExplorer]);
+  const activeDepth = String(report.depth ?? result.depth ?? "standard");
 
   return (
     <>
@@ -517,7 +642,8 @@ function ResearchResult({ result }: { result: ResearchResponse }) {
           <p className="eyebrow">VALIDATED RESEARCH REPORT</p>
           <h2>{name}</h2>
           <p className="resultMeta">
-            {symbol ? `NSE: ${symbol} · ` : ""}{report.claim_count} admitted claims · Job {result.job_id.slice(0, 8)}
+            {symbol ? `NSE: ${symbol} · ` : ""}
+            {humanize(report.mode)} · {humanize(activeDepth)} depth · {report.claim_count} admitted claims · Job {result.job_id.slice(0, 8)}
           </p>
         </div>
         <div className="validationBadge">
@@ -525,6 +651,8 @@ function ResearchResult({ result }: { result: ResearchResponse }) {
           <strong>{formatCoverage(report.validation?.evidence_coverage)}</strong>
         </div>
       </section>
+
+      <ReportActions jobId={result.job_id} accessToken={accessToken} />
 
       {report.executive_summary || report.narrative || report.warnings?.length ? (
         <AnalystNarrative
@@ -536,7 +664,9 @@ function ResearchResult({ result }: { result: ResearchResponse }) {
 
       {report.special_mode ? (
         <section className="panel specialPanel">
-          <p className="eyebrow">{report.mode === "what_changed" ? "WHAT CHANGED" : "WHY DID IT MOVE"}</p>
+          <p className="eyebrow">
+            {report.mode === "what_changed" ? "WHAT CHANGED" : report.mode === "why_did_it_move" ? "WHY DID IT MOVE" : "MODE INSIGHTS"}
+          </p>
           <SpecialMode data={report.special_mode} />
         </section>
       ) : null}
@@ -547,12 +677,19 @@ function ResearchResult({ result }: { result: ResearchResponse }) {
             <p className="eyebrow">{humanize(section)}</p>
             <div className="claimList">
               {claims.map((claim) => (
-                <ClaimCard key={claim.claim_id} claim={claim} evidence={report.evidence_catalog ?? {}} />
+                <ClaimCard
+                  key={claim.claim_id}
+                  claim={claim}
+                  evidence={report.evidence_catalog ?? {}}
+                  detailed={detailedByClaim.get(claim.claim_id) ?? null}
+                />
               ))}
             </div>
           </article>
         ))}
       </section>
+
+      <EvidenceExplorerPanel payload={evidenceExplorer} loading={evidenceLoading} />
 
       {result.agents.length ? (
         <section className="panel agentRunPanel">
@@ -571,6 +708,20 @@ function ResearchResult({ result }: { result: ResearchResponse }) {
 
       {report.research_disclaimer ? <p className="disclaimer">{report.research_disclaimer}</p> : null}
     </>
+  );
+}
+
+function ReportActions({ jobId, accessToken }: { jobId: string; accessToken: string | null }) {
+  if (!accessToken) return null;
+  return (
+    <section className="reportActions" aria-label="Report exports">
+      <button type="button" onClick={() => void downloadExport(accessToken, jobId, "markdown")}>
+        Export Markdown
+      </button>
+      <button type="button" onClick={() => void downloadExport(accessToken, jobId, "json")}>
+        Export JSON
+      </button>
+    </section>
   );
 }
 
@@ -622,7 +773,16 @@ function AnalystNarrative({
   );
 }
 
-function ClaimCard({ claim, evidence }: { claim: Claim; evidence: Record<string, Evidence> }) {
+function ClaimCard({
+  claim,
+  evidence,
+  detailed,
+}: {
+  claim: Claim;
+  evidence: Record<string, Evidence>;
+  detailed: EvidenceExplorerClaim | null;
+}) {
+  const detailedEvidence = detailed?.evidence ?? [];
   return (
     <div className="claimCard">
       <div className="claimTopline">
@@ -632,23 +792,86 @@ function ClaimCard({ claim, evidence }: { claim: Claim; evidence: Record<string,
       <p>{claim.statement}</p>
       {claim.evidence_ids.length ? (
         <details>
-          <summary>View evidence ({claim.evidence_ids.length})</summary>
+          <summary>View evidence ({Math.max(claim.evidence_ids.length, detailedEvidence.length)})</summary>
           <div className="evidenceList">
-            {claim.evidence_ids.map((id) => {
-              const item = evidence[id];
-              if (!item) return <small key={id}>Evidence reference {id.slice(0, 8)}</small>;
-              return (
-                <a key={id} href={safeExternalHref(item.source_uri)} target="_blank" rel="noreferrer">
-                  <strong>{item.title ?? item.source_type}</strong>
-                  <span>{item.freshness} · {item.published_at ?? "date unavailable"}</span>
-                  {item.excerpt ? <small>{item.excerpt}</small> : null}
-                </a>
-              );
-            })}
+            {detailedEvidence.length
+              ? detailedEvidence.map((item, index) => <EvidenceItem key={`${claim.claim_id}-${index}`} item={item} />)
+              : claim.evidence_ids.map((id) => {
+                  const item = evidence[id];
+                  if (!item) return <small key={id}>Evidence reference {id.slice(0, 8)}</small>;
+                  return <EvidenceItem key={id} item={item} />;
+                })}
           </div>
         </details>
       ) : null}
     </div>
+  );
+}
+
+function EvidenceItem({ item }: { item: Evidence }) {
+  const href = safeExternalHref(item.source_uri);
+  const locator = [
+    item.page_number ? `Page ${item.page_number}` : null,
+    item.section ? humanize(item.section) : null,
+  ].filter(Boolean).join(" · ");
+  const body = item.content ?? item.excerpt;
+
+  return (
+    <a href={href} target={href === "#" ? undefined : "_blank"} rel={href === "#" ? undefined : "noreferrer"}>
+      <strong>{item.title ?? item.source_type}</strong>
+      <span>
+        {humanize(item.freshness || "unknown")}
+        {item.published_at ? ` · ${formatDate(item.published_at)}` : ""}
+        {locator ? ` · ${locator}` : ""}
+      </span>
+      {body ? <small>{body}</small> : null}
+      {item.checksum ? <code>checksum {item.checksum.slice(0, 12)}…</code> : null}
+    </a>
+  );
+}
+
+function EvidenceExplorerPanel({
+  payload,
+  loading,
+}: {
+  payload: EvidenceExplorerPayload | null;
+  loading: boolean;
+}) {
+  return (
+    <section className="panel evidenceExplorerPanel">
+      <div className="evidenceExplorerHeader">
+        <div>
+          <p className="eyebrow">CLAIM-LEVEL EVIDENCE EXPLORER</p>
+          <h2>Trace conclusions back to source evidence.</h2>
+        </div>
+        <div className="evidenceCount">
+          <strong>{payload?.linked_evidence_count ?? "—"}</strong>
+          <span>linked chunks</span>
+        </div>
+      </div>
+      {loading ? <p className="mutedText">Loading persisted evidence graph…</p> : null}
+      {!loading && payload ? (
+        <div className="explorerList">
+          {payload.claims.map((claim) => (
+            <details className="explorerClaim" key={claim.claim_id}>
+              <summary>
+                <span className={`claimStatus ${claim.validation_status}`}>{claim.validation_status}</span>
+                <strong>{claim.statement}</strong>
+                <small>{claim.evidence.length} linked sources</small>
+              </summary>
+              <div className="evidenceList explorerEvidenceList">
+                {claim.evidence.length
+                  ? claim.evidence.map((item, index) => <EvidenceItem key={`${claim.claim_id}-e-${index}`} item={item} />)
+                  : <small>No persisted evidence chunk is linked to this claim.</small>}
+              </div>
+            </details>
+          ))}
+        </div>
+      ) : null}
+      {!loading && !payload ? (
+        <p className="mutedText">No persisted claim-evidence graph is available for this report yet.</p>
+      ) : null}
+    </section>
   );
 }
 
@@ -692,13 +915,17 @@ function PipelineOverview() {
       <div>
         <p className="eyebrow">RESEARCH PIPELINE</p>
         <h2>Deterministic numbers. AI reasoning. Independent validation.</h2>
+        <p className="mutedText">
+          The 16 logical roles communicate through typed state and evidence. Quick may skip optional
+          specialists, but every published report still passes the evidence validator before Chief Analyst synthesis.
+        </p>
       </div>
       <div className="agentGrid">
         {agents.map((agent) => (
           <article key={agent} className="agentCard">
             <span className="statusDot" />
             <strong>{agent}</strong>
-            <small>Structured output + evidence</small>
+            <small>Structured output + evidence contract</small>
           </article>
         ))}
       </div>
@@ -721,9 +948,66 @@ async function loadResearchJob(accessToken: string, jobId: string): Promise<Stor
   });
   const body = await response.json();
   if (!response.ok) {
-    throw new Error(body?.detail ?? `API returned ${response.status}`);
+    throw new Error(apiErrorMessage(body, response.status));
   }
   return body as StoredResearchJob;
+}
+
+async function loadEvidenceExplorer(
+  accessToken: string,
+  jobId: string,
+): Promise<EvidenceExplorerPayload> {
+  const response = await fetch(`${API_BASE}/v1/research/jobs/${encodeURIComponent(jobId)}/evidence`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const body = await response.json();
+  if (!response.ok) {
+    throw new Error(apiErrorMessage(body, response.status));
+  }
+  return body as EvidenceExplorerPayload;
+}
+
+async function downloadExport(
+  accessToken: string,
+  jobId: string,
+  format: "markdown" | "json",
+) {
+  const response = await fetch(
+    `${API_BASE}/v1/research/jobs/${encodeURIComponent(jobId)}/export?format=${format}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(apiErrorMessage(body, response.status));
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `india-equity-research-${jobId}.${format === "json" ? "json" : "md"}`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function resolveJobDepth(job: ResearchJobSummary | StoredResearchJob): ResearchDepth {
+  const reportDepth = "report_json" in job ? job.report_json?.depth : undefined;
+  const metadataDepth = job.job_metadata?.analysis_depth;
+  const candidate = String(reportDepth ?? metadataDepth ?? "standard");
+  return candidate === "quick" || candidate === "deep" ? candidate : "standard";
+}
+
+function apiErrorMessage(body: unknown, status: number) {
+  if (body && typeof body === "object") {
+    const detail = (body as Record<string, unknown>).detail;
+    if (typeof detail === "string") return detail;
+    if (detail && typeof detail === "object") {
+      const message = (detail as Record<string, unknown>).message;
+      if (typeof message === "string") return message;
+    }
+  }
+  return `API returned ${status}`;
 }
 
 function humanize(value: string) {
