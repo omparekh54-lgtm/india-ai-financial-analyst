@@ -56,12 +56,20 @@ def choose_valuation_methods(sector: str | None, industry: str | None = None) ->
             secondary=[ValuationMethod.DCF],
             reason="Multi-business groups require sum-of-the-parts or NAV-based valuation.",
         )
-    if any(term in text for term in ("reit", "real estate investment trust")):
+    if any(
+        term in text
+        for term in (
+            "reit",
+            "real estate investment trust",
+            "invit",
+            "infrastructure investment trust",
+        )
+    ):
         return ValuationRoute(
-            sector_family="reit",
+            sector_family="reit_invit",
             primary=[ValuationMethod.NAV, ValuationMethod.DIVIDEND_YIELD],
             secondary=[ValuationMethod.DCF],
-            reason="REIT economics are best framed around NAV and distributable cash yield.",
+            reason="REIT/InvIT economics are best framed around NAV and distributable cash yield.",
         )
     if any(term in text for term in ("metal", "mining", "steel", "aluminium", "aluminum")):
         return ValuationRoute(
@@ -69,6 +77,23 @@ def choose_valuation_methods(sector: str | None, industry: str | None = None) ->
             primary=[ValuationMethod.EV_EBITDA],
             secondary=[ValuationMethod.DCF, ValuationMethod.PE],
             reason="Cyclical resource businesses require normalized earnings and cycle-aware multiples.",
+        )
+    if any(
+        term in text
+        for term in (
+            "loss making",
+            "loss-making",
+            "pre-profit",
+            "pre profit",
+            "internet platform",
+            "early stage platform",
+        )
+    ):
+        return ValuationRoute(
+            sector_family="loss_making_growth",
+            primary=[ValuationMethod.EV_SALES],
+            secondary=[ValuationMethod.DCF],
+            reason="Pre-profit growth businesses require sales multiples plus explicit scenario economics.",
         )
 
     return ValuationRoute(
