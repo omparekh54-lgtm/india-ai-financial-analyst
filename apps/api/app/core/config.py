@@ -105,6 +105,7 @@ class Settings(BaseSettings):
 
     max_agent_concurrency: int = Field(default=6, ge=1, le=16)
     max_research_job_seconds: int = Field(default=240, ge=30, le=1800)
+    research_worker_poll_seconds: float = Field(default=1.0, ge=0.25, le=30.0)
     official_feed_poll_seconds: int = Field(default=60, ge=30, le=3600)
     official_feed_batch_size: int = Field(default=4, ge=1, le=20)
 
