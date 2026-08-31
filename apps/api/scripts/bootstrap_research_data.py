@@ -109,6 +109,12 @@ def main() -> int:
     )
     parser.add_argument("--nse-min-rows", type=int, default=1000)
     parser.add_argument(
+        "--run-nse-benchmarks",
+        action="store_true",
+        help="Fetch and ingest official NIFTY 50 and India VIX history from NSE.",
+    )
+    parser.add_argument("--nse-benchmark-min-rows", type=int, default=30)
+    parser.add_argument(
         "--financial",
         action="append",
         default=[],
@@ -200,6 +206,8 @@ def main() -> int:
             upstox_url=args.upstox_security_master_url,
             upstox_approval_reference=args.upstox_security_master_approval_reference,
             nse_min_rows=args.nse_min_rows,
+            run_nse_benchmarks=args.run_nse_benchmarks,
+            nse_benchmark_min_rows=args.nse_benchmark_min_rows,
             financials=financials,
             financial_min_rows=args.financial_min_rows,
             markets=markets,
