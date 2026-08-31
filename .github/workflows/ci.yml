@@ -44,3 +44,12 @@ jobs:
         run: npm install
       - name: Build
         run: npm run build
+
+  production-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate production Compose configuration
+        run: |
+          touch .env
+          docker compose -f deploy/docker-compose.production.yml config >/dev/null
