@@ -68,7 +68,7 @@ def parse_equity_rows(payload: list[dict[str, Any]]) -> list[dict[str, object]]:
         legal_name = str(raw.get("name") or raw.get("short_name") or "").strip()
         isin = str(raw.get("isin") or "").strip().upper()
         instrument_key = str(raw.get("instrument_key") or "").strip()
-        combined = " ".join((symbol, legal_name, isin, instrument_key))
+        combined = f"{symbol} {legal_name} {isin} {instrument_key}"
         if not symbol or not legal_name or not isin or not instrument_key:
             continue
         if _NONPRODUCTION_TOKEN.search(combined):
