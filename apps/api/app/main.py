@@ -20,7 +20,7 @@ from app.core.data_readiness import evaluate_data_coverage, load_data_coverage
 from app.core.readiness import assert_production_ready, audit_settings
 from app.core.research_gate import ResearchCorpusNotReadyError, enforce_research_corpus_ready
 from app.db import create_database_engine, database_health
-from app.orchestration.plan import AnalysisMode, build_research_plan
+from app.orchestration.plan import AnalysisMode, ResearchDepth, build_research_plan
 from app.providers.router import Capability, ProviderRouter
 from app.repositories.research import ResearchRepository
 from app.research.export import render_research_markdown, research_export_payload
@@ -47,7 +47,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.6.0",
+    version="0.7.0",
     default_response_class=ORJSONResponse,
     lifespan=lifespan,
 )
@@ -65,6 +65,7 @@ class ResearchPlanRequest(BaseModel):
 
     query: str = Field(min_length=1, max_length=200)
     mode: AnalysisMode = AnalysisMode.FULL
+    depth: ResearchDepth = ResearchDepth.STANDARD
 
 
 class ResearchRunRequest(ResearchPlanRequest):
@@ -129,7 +130,12 @@ async def provider_routing() -> dict[str, object]:
 async def agents() -> dict[str, object]:
     from app.agents.contracts import AgentName
 
-    return {"count": len(AgentName), "agents": [agent.value for agent in AgentName]}
+    return {
+        "count": len(AgentName),
+        "agents": [agent.value for agent in AgentName],
+        "analysis_modes": [mode.value for mode in AnalysisMode],
+        "research_depths": [depth.value for depth in ResearchDepth],
+    }
 
 
 @app.get("/v1/system/data-readiness")
@@ -211,10 +217,11 @@ async def disconnect_upstox(user: CurrentUser) -> dict[str, object]:
 @app.post("/v1/research/plan")
 async def research_plan(request: ResearchPlanRequest) -> dict[str, object]:
     """Build the deterministic execution plan without calling any external API."""
-    plan = build_research_plan(request.mode)
+    plan = build_research_plan(request.mode, request.depth)
     return {
         "query": request.query,
         "mode": plan.mode,
+        "depth": plan.depth,
         "stages": [stage.model_dump(mode="json") for stage in plan.stages],
     }
 
@@ -243,6 +250,32 @@ async def research_job(
     if job is None:
         raise HTTPException(status_code=404, detail="Research job not found")
     return job
+
+
+@app.get("/v1/research/jobs/{job_id}/evidence")
+async def research_job_evidence(
+    job_id: UUID,
+    user: CurrentUser,
+) -> dict[str, object]:
+    """Return the authenticated user's claim-to-source evidence graph for one job."""
+    if not settings.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
+    repository = ResearchRepository(create_database_engine(settings.database_url))
+    job = await repository.get_user_job(user.id, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Research job not found")
+    claims = await repository.get_user_job_evidence(user.id, job_id)
+    linked_evidence_count = sum(
+        len(claim.get("evidence", []))
+        for claim in claims
+        if isinstance(claim.get("evidence"), list)
+    )
+    return {
+        "job_id": str(job_id),
+        "claim_count": len(claims),
+        "linked_evidence_count": linked_evidence_count,
+        "claims": claims,
+    }
 
 
 @app.get("/v1/research/jobs/{job_id}/export")
@@ -289,7 +322,7 @@ async def run_research(
     request: ResearchRunRequest,
     user: CurrentUser,
 ) -> dict[str, object]:
-    """Execute the authenticated DB-backed 16-role research pipeline."""
+    """Execute the authenticated DB-backed research pipeline at the requested depth."""
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
 
@@ -323,6 +356,7 @@ async def run_research(
         execution = await service.execute(
             query=request.query,
             mode=request.mode,
+            depth=request.depth,
             requested_by=user.id,
         )
     except Exception as exc:
@@ -334,6 +368,8 @@ async def run_research(
     return {
         "job_id": str(execution.job_id),
         "security_id": str(execution.security_id) if execution.security_id else None,
+        "depth": execution.depth.value,
+        "evidence_explorer_path": f"/v1/research/jobs/{execution.job_id}/evidence",
         "report": execution.report,
         "agents": [
             {
