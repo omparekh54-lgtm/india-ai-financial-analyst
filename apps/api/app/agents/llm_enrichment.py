@@ -76,6 +76,7 @@ class LlmEnrichedAgent:
             base=base,
             evidence=evidence_keys,
         )
+        budget_key = str(agent_input.job_id)
         try:
             result = await self.gateway.complete(
                 self.capability,
@@ -94,6 +95,7 @@ class LlmEnrichedAgent:
                 ],
                 temperature=0.1,
                 max_tokens=1200,
+                budget_key=budget_key,
             )
             bundle = EnrichmentBundle.model_validate(_json_object(result.content))
         except (ProviderCallError, ValidationError, ValueError, json.JSONDecodeError) as exc:
@@ -139,6 +141,7 @@ class LlmEnrichedAgent:
             "insight_count": len(added),
             "input_tokens": result.input_tokens,
             "output_tokens": result.output_tokens,
+            "job_budget": self.gateway.job_usage(budget_key),
         }
         return base.model_copy(
             update={
@@ -177,6 +180,7 @@ class LlmSynthesisAgent:
             return base
 
         prompt = _synthesis_prompt(agent_input.query, report, admitted)
+        budget_key = str(agent_input.job_id)
         try:
             result = await self.gateway.complete(
                 Capability.DEEP_REASONING,
@@ -193,6 +197,7 @@ class LlmSynthesisAgent:
                 ],
                 temperature=0.15,
                 max_tokens=1800,
+                budget_key=budget_key,
             )
             narrative = SynthesisNarrative.model_validate(_json_object(result.content))
         except (ProviderCallError, ValidationError, ValueError, json.JSONDecodeError) as exc:
@@ -222,6 +227,7 @@ class LlmSynthesisAgent:
             "model": result.model,
             "input_tokens": result.input_tokens,
             "output_tokens": result.output_tokens,
+            "job_budget": self.gateway.job_usage(budget_key),
         }
         return base.model_copy(update={"metrics": metrics})
 
