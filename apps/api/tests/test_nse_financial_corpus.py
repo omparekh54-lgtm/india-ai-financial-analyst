@@ -94,7 +94,7 @@ def test_missing_filing_timestamp_uses_conservative_period_end_not_retrieval_tim
 
 
 def test_filing_timestamp_has_priority_and_is_normalized_to_utc() -> None:
-    naive_filing = datetime(2026, 7, 20, 12, 30)
+    naive_filing = datetime(2026, 7, 20, 12, 30, tzinfo=UTC).replace(tzinfo=None)
     record = _record(
         period_end=date(2026, 6, 30),
         filing_at=naive_filing,
