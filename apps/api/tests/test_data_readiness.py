@@ -16,6 +16,7 @@ def _coverage(**overrides: object) -> DataCoverage:
         "corporate_events": 20,
         "sourced_corporate_events": 20,
         "sources": 20,
+        "nonproduction_sources": 0,
         "evidence_chunks": 200,
         "embedded_evidence_chunks": 150,
         "market_bars": 1000,
@@ -36,6 +37,13 @@ def test_full_security_universe_is_required() -> None:
     report = evaluate_data_coverage(_coverage(nse_eq_securities=5, provider_instruments=5))
     assert report.ready is False
     assert "5 < 1000" in report.errors[0]
+
+
+def test_nonproduction_provenance_is_a_hard_readiness_failure() -> None:
+    report = evaluate_data_coverage(_coverage(nonproduction_sources=2))
+    assert report.ready is False
+    assert any("Non-production provenance" in error for error in report.errors)
+    assert any("2 source row(s)" in error for error in report.errors)
 
 
 def test_empty_research_datasets_are_visible_warnings() -> None:
