@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from app.agents.contracts import AgentInput, AgentName, AgentOutput, Claim
 from app.calculations.valuation import DcfAssumptions, discounted_cash_flow
 
@@ -30,7 +32,7 @@ class ValuationScenarioAgent:
         current_price = _number(data.get("current_price"))
         base_value = scenarios.get("base")
         upside_pct = None
-        if current_price not in {None, 0} and base_value is not None:
+        if current_price is not None and current_price != 0 and base_value is not None:
             upside_pct = (base_value / current_price - 1.0) * 100.0
 
         claim = Claim(
@@ -85,9 +87,19 @@ def _calculate(method: str, data: dict[str, object]) -> dict[str, float]:
         adjusted = base * (1.0 - discount)
         return {"bear": adjusted * 0.85, "base": adjusted, "bull": adjusted * 1.15}
 
+    growth_values = data.get("growth_rates", [])
+    if not isinstance(growth_values, (list, tuple)):
+        raise ValueError("growth_rates must be a list or tuple")
+    growth_rates: list[float] = []
+    for value in growth_values:
+        parsed = _number(value)
+        if parsed is None:
+            raise ValueError("growth_rates must contain only numeric values")
+        growth_rates.append(parsed)
+
     assumptions = DcfAssumptions(
         base_fcf=_required(data, "base_fcf"),
-        growth_rates=[float(value) for value in data.get("growth_rates", [])],
+        growth_rates=growth_rates,
         wacc=_required(data, "wacc"),
         terminal_growth=_required(data, "terminal_growth"),
         net_debt=_required(data, "net_debt"),
@@ -132,7 +144,7 @@ def _required(data: dict[str, object], key: str) -> float:
     return value
 
 
-def _number(value: object) -> float | None:
+def _number(value: Any) -> float | None:
     try:
         if value is None:
             return None
