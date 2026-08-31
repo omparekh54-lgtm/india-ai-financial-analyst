@@ -26,6 +26,8 @@ def _plan(**overrides: object):
         "upstox_url": None,
         "upstox_approval_reference": "SG-2026-08-31-01",
         "nse_min_rows": 1000,
+        "run_nse_benchmarks": False,
+        "nse_benchmark_min_rows": 30,
         "financials": (),
         "financial_min_rows": 5,
         "markets": (),
@@ -234,6 +236,14 @@ def test_bootstrap_plan_has_deterministic_dependency_order_and_approvals() -> No
     assert "COMPS-LICENSE-2026" in plan[3].command
 
 
+def test_bootstrap_plan_can_run_automatic_nse_benchmarks() -> None:
+    plan = _plan(run_nse_benchmarks=True, nse_benchmark_min_rows=60)
+
+    assert [stage.name for stage in plan] == ["nse_universe", "nse_benchmarks"]
+    assert "backfill_nse_benchmarks.py" in plan[1].command[1]
+    assert plan[1].command[-2:] == ("--min-rows", "60")
+
+
 def test_bootstrap_plan_can_explicitly_use_upstox_master_fallback() -> None:
     plan = _plan(
         security_master_provider="upstox",
@@ -262,6 +272,7 @@ def test_bootstrap_plan_rejects_mixed_security_master_sources() -> None:
 def test_dry_run_propagates_only_to_file_validation_stages() -> None:
     plan = _plan(
         dry_run=True,
+        run_nse_benchmarks=True,
         financials=(
             parse_financial_spec(
                 "RELIANCE,/data/reliance.csv,https://licensed.example/reliance/fy26,"
@@ -336,6 +347,9 @@ def test_bootstrap_plan_rejects_invalid_limits() -> None:
 
     with pytest.raises(ValueError, match="nse_min_rows"):
         _plan(nse_min_rows=999)
+
+    with pytest.raises(ValueError, match="nse_benchmark_min_rows"):
+        _plan(nse_benchmark_min_rows=1)
 
     with pytest.raises(ValueError, match="financial_min_rows"):
         _plan(financial_min_rows=0)
