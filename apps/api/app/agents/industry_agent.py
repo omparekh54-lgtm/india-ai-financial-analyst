@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from statistics import median
+from typing import Any
 
 from app.agents.contracts import AgentInput, AgentName, AgentOutput, Claim
 
@@ -81,7 +82,7 @@ class IndustryPeerAgent:
         )
 
 
-def _number(value: object) -> float | None:
+def _number(value: Any) -> float | None:
     try:
         if value is None:
             return None
