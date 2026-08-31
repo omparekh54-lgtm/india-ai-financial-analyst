@@ -8,7 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.ingestion.derived_metrics import DerivedMetricBundle
-from app.ingestion.metrics import normalize_security_metric
+from app.ingestion.metrics import SecurityMetricInput, normalize_security_metric
 
 
 class DerivedSecurityMetricIngestor:
@@ -168,15 +168,14 @@ class DerivedSecurityMetricIngestor:
         }
 
 
-def render_derived_metric_evidence(symbol: str, metrics: list[object]) -> str:
+def render_derived_metric_evidence(symbol: str, metrics: list[SecurityMetricInput]) -> str:
     lines = [f"Deterministic comparable metrics | security={symbol.strip().upper()}"]
-    for raw in metrics:
-        item = raw
-        metric_name = str(getattr(item, "metric_name"))
-        as_of_date = getattr(item, "as_of_date")
-        value = getattr(item, "value")
-        unit = getattr(item, "unit") or "unit_unspecified"
-        metadata = getattr(item, "metadata")
+    for item in metrics:
+        metric_name = str(item.metric_name)
+        as_of_date = item.as_of_date
+        value = item.value
+        unit = item.unit or "unit_unspecified"
+        metadata = item.metadata
         formula = str(metadata.get("formula") or "source_fact_passthrough")
         upstream = ",".join(str(value) for value in metadata.get("upstream_source_ids", []))
         lines.append(
