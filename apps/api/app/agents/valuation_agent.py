@@ -63,8 +63,10 @@ class ValuationScenarioAgent:
                 ok=False,
                 metrics=route_metrics,
                 warnings=[
-                    "No sector-appropriate valuation method had complete factual and assumption inputs; "
-                    "the engine did not invent missing assumptions."
+                    (
+                        "No sector-appropriate valuation method had complete factual and "
+                        "assumption inputs; the engine did not invent missing assumptions."
+                    )
                 ],
             )
 
