@@ -181,8 +181,12 @@ async def load_data_coverage(engine: AsyncEngine) -> DataCoverage:
             select count(*)
             from official_data_feeds
             where enabled
-              and lower(coalesce(parser_config->>'production_requires_licensing_review', 'false'))
-                in ('true', '1', 'yes', 'y', 'on')
+              and parser_config ? 'production_requires_licensing_review'
+              and (
+                lower(coalesce(parser_config->>'production_requires_licensing_review', 'false'))
+                  in ('true', '1', 'yes', 'y', 'on')
+                or btrim(coalesce(parser_config->>'production_approval_reference', '')) = ''
+              )
           ) as enabled_unapproved_official_feeds,
           (select max(period_end) from financial_facts) as latest_financial_period,
           (select max(event_at) from corporate_events) as latest_corporate_event,
@@ -259,7 +263,8 @@ def evaluate_data_coverage(
     if coverage.enabled_unapproved_official_feeds > 0:
         errors.append(
             "Official feeds are enabled before production licensing/source approval is complete: "
-            f"{coverage.enabled_unapproved_official_feeds} feed(s) still require licensing review."
+            f"{coverage.enabled_unapproved_official_feeds} feed(s) still require licensing review "
+            "or an approval reference."
         )
     if coverage.financial_facts == 0:
         warnings.append("No normalized financial facts are populated.")
