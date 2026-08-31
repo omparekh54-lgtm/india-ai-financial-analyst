@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Self
 from urllib.parse import quote
 
 import httpx
@@ -48,7 +49,7 @@ class NseIndustryClassificationFetcher:
     def __init__(self) -> None:
         self._client: httpx.AsyncClient | None = None
 
-    async def __aenter__(self) -> NseIndustryClassificationFetcher:
+    async def __aenter__(self) -> Self:
         await self.start()
         return self
 
@@ -150,7 +151,7 @@ def parse_nse_quote_classification(
     info = payload.get("info")
     industry_info = payload.get("industryInfo")
     if not isinstance(info, dict) or not isinstance(industry_info, dict):
-        raise ValueError("NSE quote response is missing info or industryInfo")
+        raise TypeError("NSE quote response info and industryInfo must be objects")
 
     symbol = _text(info.get("symbol")) or expected_symbol.strip().upper()
     if symbol.upper() != expected_symbol.strip().upper():
