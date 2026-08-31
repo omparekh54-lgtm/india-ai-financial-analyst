@@ -173,6 +173,8 @@ def build_bootstrap_plan(
     nse_min_rows: int,
     run_nse_benchmarks: bool,
     nse_benchmark_min_rows: int,
+    run_nse_flows: bool,
+    nse_flow_max_age_days: int,
     financials: tuple[FinancialBootstrapSpec, ...],
     financial_min_rows: int,
     markets: tuple[MarketBootstrapSpec, ...],
@@ -200,6 +202,8 @@ def build_bootstrap_plan(
         raise ValueError("nse_min_rows must be >= 1000 for the production NSE universe")
     if nse_benchmark_min_rows < 2:
         raise ValueError("nse_benchmark_min_rows must be >= 2")
+    if nse_flow_max_age_days < 0:
+        raise ValueError("nse_flow_max_age_days must be >= 0")
     if financial_min_rows < 1:
         raise ValueError("financial_min_rows must be >= 1")
     if market_min_rows < 1:
@@ -263,6 +267,17 @@ def build_bootstrap_plan(
         if dry_run:
             command.append("--dry-run")
         stages.append(BootstrapStage(name="nse_benchmarks", command=tuple(command)))
+
+    if run_nse_flows:
+        command = [
+            python_executable,
+            str(scripts_dir / "backfill_nse_fii_dii.py"),
+            "--max-age-days",
+            str(nse_flow_max_age_days),
+        ]
+        if dry_run:
+            command.append("--dry-run")
+        stages.append(BootstrapStage(name="nse_fii_dii_flows", command=tuple(command)))
 
     for index, financial_spec in enumerate(financials, start=1):
         command = [
