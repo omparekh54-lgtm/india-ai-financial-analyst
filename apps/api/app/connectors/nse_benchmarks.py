@@ -267,7 +267,7 @@ def _parse_date(value: object) -> date:
     cleaned = value.strip().upper()
     for pattern in ("%d-%b-%Y", "%d-%m-%Y", "%Y-%m-%d", "%d-%b-%y"):
         try:
-            return datetime.strptime(cleaned, pattern).date()
+            return datetime.strptime(cleaned, pattern).replace(tzinfo=UTC).date()
         except ValueError:
             continue
     raise ValueError(f"Unsupported NSE benchmark date: {value}")
