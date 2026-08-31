@@ -148,9 +148,12 @@ def _promote_stage_metrics(context: dict[str, object], outputs: list[AgentOutput
     mappings = {
         AgentName.MARKET: "market_metrics",
         AgentName.FINANCIALS: "financial_metrics",
+        AgentName.FILINGS: "filing_metrics",
         AgentName.EARNINGS: "earnings_metrics",
         AgentName.INDUSTRY: "industry_metrics",
         AgentName.MACRO: "macro_metrics",
+        AgentName.VALUATION: "valuation_metrics",
+        AgentName.TECHNICAL: "technical_metrics",
     }
     for output in outputs:
         key = mappings.get(output.agent)
