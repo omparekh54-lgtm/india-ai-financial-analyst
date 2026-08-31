@@ -146,3 +146,22 @@ def test_nonproduction_source_blocks_every_agent() -> None:
     assert report.ready is False
     assert all(item.ready is False for item in report.agents)
     assert all(any("forbidden" in error for error in item.errors) for item in report.agents)
+
+
+def test_recent_listing_history_limit_warns_without_falsely_blocking_ready_corpus() -> None:
+    as_of = datetime(2026, 8, 31, tzinfo=UTC)
+    report = evaluate_agent_readiness(
+        _agent_coverage(history_limited_recent_securities=2),
+        _corpus(as_of),
+        _settings(),
+        as_of=as_of,
+    )
+    by_agent = _by_agent(report)
+
+    assert report.ready is True
+    for agent in (AgentName.MARKET, AgentName.TECHNICAL, AgentName.VALUATION):
+        assert by_agent[agent].ready is True  # type: ignore[attr-defined]
+        assert any(
+            "fewer than 30 sessions" in warning
+            for warning in by_agent[agent].warnings  # type: ignore[attr-defined]
+        )
