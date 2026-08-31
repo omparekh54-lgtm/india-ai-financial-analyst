@@ -192,6 +192,6 @@ def _canonical_media_type(media_type: str, url: str) -> str | None:
 
 def _resolve_addresses(hostname: str, port: int) -> set[str]:
     return {
-        item[4][0]
+        str(item[4][0])
         for item in socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
     }
