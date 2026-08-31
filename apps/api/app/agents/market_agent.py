@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from app.agents.contracts import AgentInput, AgentName, AgentOutput, Claim
 
 
@@ -9,14 +11,14 @@ class LiveMarketAgent:
     async def run(self, agent_input: AgentInput) -> AgentOutput:
         quote = agent_input.context.get("market_quote") or {}
         if not quote:
-            warnings = ["No market quote supplied"]
+            missing_warnings = ["No market quote supplied"]
             live_warning = agent_input.context.get("live_market_warning")
             if live_warning:
-                warnings.append(str(live_warning))
+                missing_warnings.append(str(live_warning))
             return AgentOutput(
                 agent=AgentName.MARKET,
                 ok=False,
-                warnings=warnings,
+                warnings=missing_warnings,
             )
 
         market_evidence = [item for item in agent_input.evidence if item.source_type == "market_data"]
@@ -102,7 +104,7 @@ class LiveMarketAgent:
         )
 
 
-def _number(value: object) -> float | None:
+def _number(value: Any) -> float | None:
     try:
         return None if value is None else float(value)
     except (TypeError, ValueError):
@@ -110,7 +112,7 @@ def _number(value: object) -> float | None:
 
 
 def _pct_change(current: float | None, previous: float | None) -> float | None:
-    if current is None or previous in {None, 0}:
+    if current is None or previous is None or previous == 0:
         return None
     return (current / previous - 1.0) * 100.0
 
@@ -120,4 +122,6 @@ def _subtract(left: float | None, right: float | None) -> float | None:
 
 
 def _divide(left: float | None, right: float | None) -> float | None:
-    return None if left is None or right in {None, 0} else left / right
+    if left is None or right is None or right == 0:
+        return None
+    return left / right
