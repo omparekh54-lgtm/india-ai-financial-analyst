@@ -83,7 +83,9 @@ class TechnicalDerivativesAgent:
         if not evidence_ids:
             warnings.append("Technical calculations lack market-data provenance")
         if derivatives and not any("derivative" in item.source_type.lower() for item in evidence):
-            warnings.append("Derivatives calculations are present but no derivatives-specific evidence is linked")
+            warnings.append(
+                "Derivatives calculations are present but no derivatives-specific evidence is linked"
+            )
         return AgentOutput(
             agent=AgentName.TECHNICAL,
             claims=claims,
@@ -102,12 +104,16 @@ def _derivatives_metrics(value: object) -> dict[str, object]:
     futures = value.get("futures")
     futures_data = futures if isinstance(futures, dict) else {}
     futures_price = _number(futures_data.get("price"))
-    if spot not in {None, 0} and futures_price is not None:
+    if spot is not None and spot != 0.0 and futures_price is not None:
         metrics["futures_basis_pct"] = (futures_price / spot - 1.0) * 100.0
 
     open_interest = _number(futures_data.get("open_interest"))
     previous_open_interest = _number(futures_data.get("previous_open_interest"))
-    if open_interest is not None and previous_open_interest not in {None, 0}:
+    if (
+        open_interest is not None
+        and previous_open_interest is not None
+        and previous_open_interest != 0.0
+    ):
         metrics["futures_oi_change_pct"] = (
             open_interest / previous_open_interest - 1.0
         ) * 100.0
@@ -116,25 +122,17 @@ def _derivatives_metrics(value: object) -> dict[str, object]:
         metrics["rollover_pct"] = rollover
 
     options_value = value.get("options")
-    options = [item for item in options_value if isinstance(item, dict)] if isinstance(options_value, list) else []
+    options = (
+        [item for item in options_value if isinstance(item, dict)]
+        if isinstance(options_value, list)
+        else []
+    )
     if not options:
         return metrics
 
-    call_oi = sum(
-        parsed
-        for option in options
-        if _option_type(option) == "call"
-        for parsed in [_number(option.get("open_interest"))]
-        if parsed is not None and parsed >= 0
-    )
-    put_oi = sum(
-        parsed
-        for option in options
-        if _option_type(option) == "put"
-        for parsed in [_number(option.get("open_interest"))]
-        if parsed is not None and parsed >= 0
-    )
-    if call_oi > 0:
+    call_oi = _sum_open_interest(options, "call")
+    put_oi = _sum_open_interest(options, "put")
+    if call_oi > 0.0:
         metrics["put_call_oi_ratio"] = put_oi / call_oi
 
     if spot is not None:
@@ -149,19 +147,30 @@ def _derivatives_metrics(value: object) -> dict[str, object]:
                 parsed
                 for option in atm_options
                 for parsed in [_number(option.get("implied_volatility"))]
-                if parsed is not None and parsed >= 0
+                if parsed is not None and parsed >= 0.0
             ]
             if ivs:
-                metrics["atm_implied_volatility"] = sum(ivs) / len(ivs)
+                metrics["atm_implied_volatility"] = sum(ivs) / float(len(ivs))
             metrics.update(_atm_greeks(atm_options))
 
         max_pain = _max_pain_strike(options)
         if max_pain is not None:
             metrics["max_pain_strike"] = max_pain
-            if spot != 0:
+            if spot != 0.0:
                 metrics["max_pain_distance_pct"] = (max_pain / spot - 1.0) * 100.0
 
     return metrics
+
+
+def _sum_open_interest(options: list[dict[str, Any]], side: str) -> float:
+    total = 0.0
+    for option in options:
+        if _option_type(option) != side:
+            continue
+        parsed = _number(option.get("open_interest"))
+        if parsed is not None and parsed >= 0.0:
+            total += parsed
+    return total
 
 
 def _atm_greeks(options: list[dict[str, Any]]) -> dict[str, float]:
@@ -179,26 +188,23 @@ def _atm_greeks(options: list[dict[str, Any]]) -> dict[str, float]:
 
 
 def _nearest_strike(options: list[dict[str, Any]], spot: float) -> float | None:
-    strikes = {
-        strike
-        for option in options
-        for strike in [_number(option.get("strike"))]
-        if strike is not None
-    }
+    strikes: set[float] = set()
+    for option in options:
+        strike = _number(option.get("strike"))
+        if strike is not None:
+            strikes.add(strike)
     if not strikes:
         return None
     return min(strikes, key=lambda strike: abs(strike - spot))
 
 
 def _max_pain_strike(options: list[dict[str, Any]]) -> float | None:
-    strikes = sorted(
-        {
-            strike
-            for option in options
-            for strike in [_number(option.get("strike"))]
-            if strike is not None
-        }
-    )
+    strike_values: set[float] = set()
+    for option in options:
+        strike = _number(option.get("strike"))
+        if strike is not None:
+            strike_values.add(strike)
+    strikes = sorted(strike_values)
     if not strikes:
         return None
 
@@ -208,14 +214,14 @@ def _max_pain_strike(options: list[dict[str, Any]]) -> float | None:
         for option in options:
             strike = _number(option.get("strike"))
             open_interest = _number(option.get("open_interest"))
-            if strike is None or open_interest is None or open_interest < 0:
+            if strike is None or open_interest is None or open_interest < 0.0:
                 continue
             if _option_type(option) == "call":
                 total += max(settlement - strike, 0.0) * open_interest
             elif _option_type(option) == "put":
                 total += max(strike - settlement, 0.0) * open_interest
         pain_by_settlement[settlement] = total
-    return min(pain_by_settlement, key=pain_by_settlement.get)
+    return min(pain_by_settlement, key=lambda settlement: pain_by_settlement[settlement])
 
 
 def _option_type(option: dict[str, Any]) -> str:
