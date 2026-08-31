@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from statistics import median
 from typing import Any
+from uuid import UUID
 
 from app.agents.contracts import AgentInput, AgentName, AgentOutput, Claim
 from app.calculations.valuation import DcfAssumptions, discounted_cash_flow
@@ -85,12 +86,23 @@ class ValuationScenarioAgent:
             confidence=0.9 if evidence_ids else 0.75,
             evidence_ids=evidence_ids,
             status="pending",
+            metric="fair_value_scenarios",
+            period=_valuation_period(data, agent_input.context),
+            assumptions=_valuation_assumptions(selected, data),
+            calculation_version=f"valuation.{selected.value}.v2",
+            input_metric_ids=_valuation_input_ids(selected, data),
+            materiality=0.95,
             data={
                 "method": method_label,
                 "method_code": selected.value,
                 "sector_family": route.sector_family,
                 "scenarios": scenarios,
                 "upside_pct": upside_pct,
+                "calculation": {
+                    "operation": "valuation_scenarios",
+                    "method": selected.value,
+                    "inputs": _auditable_inputs(selected, data),
+                },
             },
         )
         warnings = [] if evidence_ids else ["Valuation calculation has no linked input evidence"]
@@ -112,6 +124,7 @@ class ValuationScenarioAgent:
                     "target_pe_source": data.get("target_pe_source"),
                     "target_pb_source": data.get("target_pb_source"),
                     "target_ev_ebitda_source": data.get("target_ev_ebitda_source"),
+                    "input_metric_ids": [str(item) for item in _valuation_input_ids(selected, data)],
                 },
             },
             warnings=warnings,
@@ -136,6 +149,10 @@ def _enrich_from_context(data: dict[str, object], context: dict[str, object]) ->
             if value is not None:
                 data[target] = value
                 break
+
+    market_quote = context.get("market_quote")
+    if isinstance(market_quote, dict) and market_quote.get("as_of"):
+        data.setdefault("as_of", market_quote["as_of"])
 
     peers_value = context.get("peers")
     peers = peers_value if isinstance(peers_value, list) else []
@@ -283,6 +300,89 @@ def _calculate(method: ValuationMethod, data: dict[str, object]) -> dict[str, fl
         "base": base,
         "bull": discounted_cash_flow(bull_assumptions).value_per_share,
     }
+
+
+def _valuation_input_ids(method: ValuationMethod, data: dict[str, object]) -> list[UUID]:
+    raw = data.get("_input_metric_ids")
+    if not isinstance(raw, dict):
+        return []
+    candidates: dict[ValuationMethod, tuple[str, ...]] = {
+        ValuationMethod.DCF: ("free_cash_flow", "total_debt", "cash", "shares_outstanding"),
+        ValuationMethod.PE: ("eps", "earnings_per_share", "diluted_eps"),
+        ValuationMethod.PB: ("book_value_per_share",),
+        ValuationMethod.RESIDUAL_INCOME: ("book_value_per_share",),
+        ValuationMethod.PRICE_TO_EMBEDDED_VALUE: ("embedded_value_per_share",),
+        ValuationMethod.EV_EBITDA: ("ebitda", "total_debt", "cash", "shares_outstanding"),
+        ValuationMethod.EV_SALES: ("sales_per_share",),
+        ValuationMethod.NAV: ("nav_per_share",),
+        ValuationMethod.SOTP: (),
+        ValuationMethod.DIVIDEND_YIELD: ("distribution_per_share", "dividend_per_share"),
+    }
+    result: list[UUID] = []
+    for key in candidates[method]:
+        value = raw.get(key)
+        if value is None:
+            continue
+        try:
+            parsed = UUID(str(value))
+        except ValueError:
+            continue
+        if parsed not in result:
+            result.append(parsed)
+    return result
+
+
+def _valuation_assumptions(method: ValuationMethod, data: dict[str, object]) -> list[str]:
+    assumptions: list[str] = ["Bear/base/bull scenarios use deterministic method-specific sensitivities."]
+    for key in (
+        "target_pe",
+        "target_pb",
+        "target_pev",
+        "target_ev_ebitda",
+        "target_ev_sales",
+        "target_yield",
+        "wacc",
+        "terminal_growth",
+        "sustainable_roe",
+        "cost_of_equity",
+        "holding_company_discount",
+        "nav_discount",
+    ):
+        if data.get(key) is not None:
+            source = data.get(f"{key}_source")
+            suffix = f" ({source})" if source else ""
+            assumptions.append(f"{key}={data[key]}{suffix}")
+    if method in {ValuationMethod.PE, ValuationMethod.PB, ValuationMethod.EV_EBITDA, ValuationMethod.EV_SALES}:
+        assumptions.append("Multiple-based bear/base/bull sensitivities use 0.85x/1.00x/1.15x of the target multiple.")
+    return assumptions
+
+
+def _auditable_inputs(method: ValuationMethod, data: dict[str, object]) -> dict[str, object]:
+    keys = _missing_inputs(method, {})
+    del keys
+    requirements: dict[ValuationMethod, tuple[str, ...]] = {
+        ValuationMethod.DCF: ("base_fcf", "growth_rates", "wacc", "terminal_growth", "net_debt", "shares_outstanding"),
+        ValuationMethod.PE: ("earnings_per_share", "target_pe"),
+        ValuationMethod.PB: ("book_value_per_share", "target_pb"),
+        ValuationMethod.RESIDUAL_INCOME: ("book_value_per_share", "sustainable_roe", "cost_of_equity", "terminal_growth"),
+        ValuationMethod.PRICE_TO_EMBEDDED_VALUE: ("embedded_value_per_share", "target_pev"),
+        ValuationMethod.EV_EBITDA: ("ebitda", "target_ev_ebitda", "net_debt", "shares_outstanding"),
+        ValuationMethod.EV_SALES: ("sales_per_share", "target_ev_sales"),
+        ValuationMethod.NAV: ("nav_per_share", "nav_discount"),
+        ValuationMethod.SOTP: ("sotp_value_per_share", "holding_company_discount"),
+        ValuationMethod.DIVIDEND_YIELD: ("distribution_per_share", "target_yield"),
+    }
+    return {key: data.get(key) for key in requirements[method] if data.get(key) is not None}
+
+
+def _valuation_period(data: dict[str, object], context: dict[str, object]) -> str | None:
+    value = data.get("as_of")
+    if value:
+        return str(value)
+    quote = context.get("market_quote")
+    if isinstance(quote, dict) and quote.get("as_of"):
+        return str(quote["as_of"])
+    return None
 
 
 def _justified_book_value(book: float, roe: float, cost: float, growth: float) -> float:
