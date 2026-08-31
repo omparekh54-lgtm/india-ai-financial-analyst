@@ -29,8 +29,10 @@ async def test_load_probe_runs_only_selected_get_endpoints() -> None:
     assert set(seen) == {("GET", "/health"), ("GET", "/v1/system/agents")}
     payload = report.as_dict()
     assert payload["status_counts"] == {"200": 8}
-    assert payload["latency_ms"]["p50"] is not None
-    assert payload["latency_ms"]["p95"] is not None
+    latency = payload["latency_ms"]
+    assert isinstance(latency, dict)
+    assert latency["p50"] is not None
+    assert latency["p95"] is not None
 
 
 @pytest.mark.asyncio
@@ -72,6 +74,38 @@ async def test_load_probe_does_not_put_token_in_url() -> None:
             api_base_url="https://api.example.com",
             endpoints=("/v1/system/data-readiness",),
             request_count=2,
+            concurrency=1,
+            access_token="secret-token",
+        )
+    assert report.passed is True
+
+
+@pytest.mark.asyncio
+async def test_load_probe_rejects_plain_http_when_token_is_present() -> None:
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200))) as client:
+        with pytest.raises(ValueError, match="require HTTPS"):
+            await run_read_only_load_probe(
+                client,
+                api_base_url="http://api.example.com",
+                endpoints=("/v1/auth/me",),
+                request_count=1,
+                concurrency=1,
+                access_token="secret-token",
+            )
+
+
+@pytest.mark.asyncio
+async def test_load_probe_allows_loopback_http_with_token() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers.get("authorization") == "Bearer secret-token"
+        return httpx.Response(200, json={"id": "user"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        report = await run_read_only_load_probe(
+            client,
+            api_base_url="http://localhost:8000",
+            endpoints=("/v1/auth/me",),
+            request_count=1,
             concurrency=1,
             access_token="secret-token",
         )
