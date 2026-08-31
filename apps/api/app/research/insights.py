@@ -107,14 +107,15 @@ def why_did_it_move(
     context: dict[str, Any],
     grouped_claims: dict[str, list[dict[str, Any]]],
 ) -> dict[str, Any]:
-    market_value = context.get("market_metrics")
-    macro_value = context.get("macro_metrics")
-    market: dict[str, Any] = market_value if isinstance(market_value, dict) else {}
-    macro: dict[str, Any] = macro_value if isinstance(macro_value, dict) else {}
+    market = _mapping(context.get("market_metrics"))
+    macro = _mapping(context.get("macro_metrics"))
+    technical = _mapping(context.get("technical_metrics"))
+    derivatives = _mapping(technical.get("derivatives"))
     drivers: list[dict[str, Any]] = []
 
-    relative = _number(market.get("relative_to_sector_pct")) or _number(
-        market.get("relative_to_benchmark_pct")
+    relative = _first_number(
+        market.get("relative_to_sector_pct"),
+        market.get("relative_to_benchmark_pct"),
     )
     if relative is not None and abs(relative) >= 0.75:
         drivers.append(
@@ -154,13 +155,68 @@ def why_did_it_move(
             }
         )
 
+    rsi_value = _number(technical.get("rsi_14"))
+    if rsi_value is not None and (rsi_value <= 30 or rsi_value >= 70):
+        drivers.append(
+            {
+                "type": "technical_momentum_condition",
+                "score": 0.3,
+                "direction": "context_dependent",
+                "detail": f"RSI(14) is {rsi_value:.1f}, indicating an extreme momentum condition.",
+            }
+        )
+
+    realized_vol = _number(technical.get("realized_volatility_20d"))
+    if realized_vol is not None and realized_vol >= 0.45:
+        drivers.append(
+            {
+                "type": "elevated_realized_volatility",
+                "score": 0.35,
+                "direction": "context_dependent",
+                "detail": f"20-day realized volatility is elevated at {realized_vol:.2%}.",
+            }
+        )
+
+    basis = _number(derivatives.get("futures_basis_pct"))
+    if basis is not None and abs(basis) >= 0.5:
+        drivers.append(
+            {
+                "type": "futures_basis_context",
+                "score": min(0.5, 0.25 + abs(basis) / 10.0),
+                "direction": "positive" if basis > 0 else "negative",
+                "detail": f"Near futures basis is {basis:.2f}% versus spot.",
+            }
+        )
+
+    oi_change = _number(derivatives.get("futures_oi_change_pct"))
+    if oi_change is not None and abs(oi_change) >= 10:
+        drivers.append(
+            {
+                "type": "futures_open_interest_change",
+                "score": min(0.45, 0.25 + abs(oi_change) / 100.0),
+                "direction": "context_dependent",
+                "detail": f"Futures open interest changed {oi_change:.2f}% from the prior snapshot.",
+            }
+        )
+
+    pcr = _number(derivatives.get("put_call_oi_ratio"))
+    if pcr is not None and (pcr <= 0.7 or pcr >= 1.5):
+        drivers.append(
+            {
+                "type": "options_positioning_context",
+                "score": 0.3,
+                "direction": "context_dependent",
+                "detail": f"Put/call open-interest ratio is {pcr:.2f}, an extreme positioning reading.",
+            }
+        )
+
     drivers.sort(key=lambda item: _number(item.get("score")) or 0.0, reverse=True)
     return {
         "candidate_drivers": drivers[:8],
         "causality_status": "candidate_explanation_not_proven_causality",
         "note": (
-            "Drivers are ranked evidence-based candidates. Market moves can have multiple causes, "
-            "so the system does not present correlation as proven causation."
+            "Drivers are ranked evidence-based candidates. Technical and derivatives conditions are "
+            "context, not proof of cause; market moves can have multiple causes."
         ),
     }
 
@@ -223,7 +279,9 @@ def _metric_changes(
             }
         )
     changes.sort(
-        key=lambda item: abs(_number(item.get("pct_change")) or _number(item["absolute_change"]) or 0.0),
+        key=lambda item: abs(
+            _number(item.get("pct_change")) or _number(item["absolute_change"]) or 0.0
+        ),
         reverse=True,
     )
     return changes[:limit]
@@ -262,6 +320,14 @@ def _flag_direction(flag: dict[str, Any]) -> str:
     if direction in {"inr strength", "lower crude", "net buying"}:
         return "positive_for_exposed_companies"
     return "context_dependent"
+
+
+def _first_number(*values: object) -> float | None:
+    for value in values:
+        parsed = _number(value)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _number(value: Any) -> float | None:
