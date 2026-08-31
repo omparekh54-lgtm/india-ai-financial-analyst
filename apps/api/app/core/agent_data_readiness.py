@@ -133,7 +133,7 @@ async def load_agent_data_coverage(engine: AsyncEngine) -> AgentDataCoverage:
     statement = text(
         """
         with nse_eq as (
-          select id, sector, industry
+          select id, sector, industry, metadata
           from securities
           where primary_exchange = 'NSE'
             and coalesce(metadata->>'nse_series', 'EQ') = 'EQ'
@@ -196,9 +196,24 @@ async def load_agent_data_coverage(engine: AsyncEngine) -> AgentDataCoverage:
             from provider_instruments pi join nse_eq n on n.id = pi.security_id
           ) as provider_mapped_securities,
           (
-            select count(*) from nse_eq
-            where nullif(btrim(coalesce(sector, '')), '') is not null
-              and nullif(btrim(coalesce(industry, '')), '') is not null
+            select count(*)
+            from nse_eq n
+            where nullif(btrim(coalesce(n.sector, '')), '') is not null
+              and nullif(btrim(coalesce(n.industry, '')), '') is not null
+              and n.metadata->>'classification_taxonomy' = 'NSE_INDICES_4_TIER'
+              and n.metadata->>'classification_provenance_class' = 'official_source'
+              and n.metadata->>'classification_source_type' = 'nse_industry_classification'
+              and nullif(btrim(coalesce(n.metadata->>'classification_sha256', '')), '') is not null
+              and exists (
+                select 1
+                from sources src
+                where src.id::text = n.metadata->>'classification_source_id'
+                  and src.security_id = n.id
+                  and src.source_type = 'nse_industry_classification'
+                  and src.metadata->>'provenance_class' = 'official_source'
+                  and coalesce(src.metadata->>'production_approved', 'false') = 'true'
+                  and src.checksum = n.metadata->>'classification_sha256'
+              )
           ) as classified_securities,
           (select count(*) from financial_history) as financial_history_securities,
           (select count(*) from recent_filings) as recent_filing_evidence_securities,
@@ -343,7 +358,10 @@ def evaluate_agent_readiness(
         ),
     )
     agent_errors[AgentName.INDUSTRY] = errors_for(
-        (classified_ready, "Every supported security needs sector and industry classification."),
+        (
+            classified_ready,
+            "Every supported security needs provenance-linked official NSE sector and industry classification.",
+        ),
         (
             peer_ready,
             "Every supported security needs at least 3 recent sourced comparable metrics.",
