@@ -115,6 +115,12 @@ def main() -> int:
     )
     parser.add_argument("--nse-benchmark-min-rows", type=int, default=30)
     parser.add_argument(
+        "--run-nse-flows",
+        action="store_true",
+        help="Fetch and ingest official NSE FII/FPI and DII capital-market cash flows.",
+    )
+    parser.add_argument("--nse-flow-max-age-days", type=int, default=7)
+    parser.add_argument(
         "--financial",
         action="append",
         default=[],
@@ -208,6 +214,8 @@ def main() -> int:
             nse_min_rows=args.nse_min_rows,
             run_nse_benchmarks=args.run_nse_benchmarks,
             nse_benchmark_min_rows=args.nse_benchmark_min_rows,
+            run_nse_flows=args.run_nse_flows,
+            nse_flow_max_age_days=args.nse_flow_max_age_days,
             financials=financials,
             financial_min_rows=args.financial_min_rows,
             markets=markets,
