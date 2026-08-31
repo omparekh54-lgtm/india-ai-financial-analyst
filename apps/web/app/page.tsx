@@ -7,6 +7,8 @@ import { useEffect, useMemo, useState } from "react";
 import { getSupabaseBrowserClient } from "../lib/supabase";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const JOB_POLL_INTERVAL_MS = 1000;
+const JOB_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 
 const agents = [
   "Security & Entity Intelligence",
@@ -148,6 +150,13 @@ type StoredResearchJob = ResearchJobSummary & {
   report_json?: ResearchReport | null;
 };
 
+type QueuedResearchResponse = {
+  job_id: string;
+  status: string;
+  depth?: ResearchDepth | string;
+  poll_path?: string;
+};
+
 type MetricChange = {
   metric?: unknown;
   previous?: unknown;
@@ -175,6 +184,8 @@ export default function HomePage() {
   const [historyLoadingId, setHistoryLoadingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [runStage, setRunStage] = useState("received");
+  const [runProgress, setRunProgress] = useState(0);
 
   useEffect(() => {
     if (!supabase) {
@@ -276,6 +287,8 @@ export default function HomePage() {
     setEvidenceExplorer(null);
     setHistory([]);
     setHistoryLoadingId(null);
+    setRunStage("received");
+    setRunProgress(0);
     setAuthMessage("Signed out.");
   }
 
@@ -291,8 +304,10 @@ export default function HomePage() {
     setError(null);
     setResult(null);
     setEvidenceExplorer(null);
+    setRunStage("received");
+    setRunProgress(0);
     try {
-      const response = await fetch(`${API_BASE}/v1/research/run`, {
+      const response = await fetch(`${API_BASE}/v1/research/enqueue`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${session.access_token}`,
@@ -302,7 +317,30 @@ export default function HomePage() {
       });
       const body = await response.json();
       if (!response.ok) throw new Error(apiErrorMessage(body, response.status));
-      setResult(body as ResearchResponse);
+      const queued = body as QueuedResearchResponse;
+      setRunStage("queued");
+      setRunProgress(1);
+
+      const stored = await waitForResearchJob(
+        session.access_token,
+        queued.job_id,
+        (stage, progress) => {
+          setRunStage(stage);
+          setRunProgress(progress);
+        },
+      );
+      if (!stored.report_json) throw new Error("Research completed without a persisted report.");
+      const storedDepth = resolveJobDepth(stored);
+      setResult({
+        job_id: stored.id,
+        security_id: stored.security_id ?? null,
+        depth: storedDepth,
+        report: stored.report_json,
+        agents: [],
+      });
+      setDepth(storedDepth);
+      setRunStage("complete");
+      setRunProgress(100);
       setHistory(await loadHistory(session.access_token));
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to run research");
@@ -382,7 +420,7 @@ export default function HomePage() {
             onChange={(event) => setQuery(event.target.value)}
           />
           <button type="submit" disabled={loading || !session}>
-            {loading ? "Researching…" : session ? "Analyze" : "Sign in to analyze"}
+            {loading ? `${humanize(runStage)} ${runProgress}%` : session ? "Analyze" : "Sign in to analyze"}
           </button>
         </form>
 
@@ -427,7 +465,7 @@ export default function HomePage() {
 
         {loading ? (
           <p className="runStatus">
-            Resolving security → collecting source evidence → calculating → validating → composing report…
+            {humanize(runStage)} · {runProgress}% · Durable job continues even if the request connection closes.
           </p>
         ) : null}
         {error ? <p className="errorText">{error}</p> : null}
@@ -998,10 +1036,51 @@ async function loadHistory(accessToken: string): Promise<ResearchJobSummary[]> {
 async function loadResearchJob(accessToken: string, jobId: string): Promise<StoredResearchJob> {
   const response = await fetch(`${API_BASE}/v1/research/jobs/${encodeURIComponent(jobId)}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
   });
   const body = await response.json();
   if (!response.ok) throw new Error(apiErrorMessage(body, response.status));
   return body as StoredResearchJob;
+}
+
+async function waitForResearchJob(
+  accessToken: string,
+  jobId: string,
+  onProgress: (stage: string, progress: number) => void,
+): Promise<StoredResearchJob> {
+  const deadline = Date.now() + JOB_POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const job = await loadResearchJob(accessToken, jobId);
+    const metadata = job.job_metadata ?? {};
+    const stage = typeof metadata.research_stage === "string"
+      ? metadata.research_stage
+      : job.status === "queued"
+        ? "queued"
+        : job.status;
+    const rawProgress = metadata.progress_pct;
+    const progress = typeof rawProgress === "number"
+      ? Math.max(0, Math.min(100, rawProgress))
+      : job.status === "queued"
+        ? 1
+        : job.status === "running"
+          ? 5
+          : job.status === "completed" || job.status === "failed"
+            ? 100
+            : 0;
+    onProgress(stage, progress);
+
+    if (job.status === "completed") return job;
+    if (job.status === "failed") {
+      const errorType = metadata.worker_error_type;
+      throw new Error(
+        typeof errorType === "string"
+          ? `Research worker failed (${errorType}).`
+          : "Research worker failed before completing the report.",
+      );
+    }
+    await delay(JOB_POLL_INTERVAL_MS);
+  }
+  throw new Error("Research job did not complete within the client polling window. The durable job remains saved and can be reopened from history.");
 }
 
 async function loadEvidenceExplorer(
@@ -1087,4 +1166,8 @@ function formatDate(value: string) {
 function formatCoverage(value: unknown) {
   if (typeof value !== "number") return "—";
   return `${Math.round(value * 100)}%`;
+}
+
+function delay(milliseconds: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
 }
