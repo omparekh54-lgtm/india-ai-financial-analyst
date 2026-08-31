@@ -18,15 +18,17 @@ _MAX_EXCHANGE_DOCUMENTS_PER_RUN = 12
 
 
 class OfficialFeedWorker:
-    """Runs due official-source feeds with leases, checkpoints and an external-data kill switch."""
+    """Runs due official-source feeds with leases, checkpoints and source-governance gates."""
 
     def __init__(
         self,
         engine: AsyncEngine,
         *,
         external_data_enabled: bool,
+        app_env: str = "development",
     ) -> None:
         self.external_data_enabled = external_data_enabled
+        self.app_env = app_env.strip().lower()
         self.repository = OfficialFeedRepository(engine)
         self.fetcher = SafeHttpFetcher(allowed_domains=OFFICIAL_INDIA_DOMAINS)
         self.nse_public = NsePublicAnnouncementsFetcher()
@@ -46,9 +48,28 @@ class OfficialFeedWorker:
         results: list[dict[str, object]] = []
         success_count = 0
         failed_count = 0
+        blocked_count = 0
         not_modified_count = 0
 
         for claim in claims:
+            block_reason = production_feed_block_reason(
+                claim.feed.parser_config,
+                app_env=self.app_env,
+            )
+            if block_reason:
+                await self.repository.block(claim, reason=block_reason)
+                blocked_count += 1
+                results.append(
+                    {
+                        "feed_id": str(claim.feed.id),
+                        "name": claim.feed.name,
+                        "status": "blocked",
+                        "reason": block_reason,
+                        "network_request_performed": False,
+                    }
+                )
+                continue
+
             try:
                 outcome = await self._run_claim(claim)
                 results.append(outcome)
@@ -73,6 +94,7 @@ class OfficialFeedWorker:
             "claimed_count": len(claims),
             "success_count": success_count,
             "not_modified_count": not_modified_count,
+            "blocked_count": blocked_count,
             "failed_count": failed_count,
             "results": results,
         }
@@ -291,6 +313,27 @@ class OfficialFeedWorker:
             "failure_count": len(failures),
             "failures": failures[:20],
         }
+
+
+def production_feed_block_reason(
+    parser_config: dict[str, object],
+    *,
+    app_env: str,
+) -> str | None:
+    if app_env.strip().lower() != "production":
+        return None
+    if _truthy(parser_config.get("production_requires_licensing_review")):
+        return (
+            "Feed is marked production_requires_licensing_review=true; "
+            "production network access is blocked until licensing/source approval is complete."
+        )
+    return None
+
+
+def _truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _conditional_headers(claim: ClaimedFeed) -> dict[str, str]:
