@@ -89,7 +89,7 @@ def _calculate(method: str, data: dict[str, object]) -> dict[str, float]:
 
     growth_values = data.get("growth_rates", [])
     if not isinstance(growth_values, (list, tuple)):
-        raise ValueError("growth_rates must be a list or tuple")
+        raise TypeError("growth_rates must be a list or tuple")
     growth_rates: list[float] = []
     for value in growth_values:
         parsed = _number(value)
