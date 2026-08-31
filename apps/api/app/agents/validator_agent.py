@@ -26,7 +26,10 @@ class EvidenceCrossValidationAgent:
 
     async def run(self, agent_input: AgentInput) -> AgentOutput:
         raw_claims = agent_input.context.get("candidate_claims") or []
-        claims = [claim if isinstance(claim, Claim) else Claim.model_validate(claim) for claim in raw_claims]
+        claims = [
+            claim if isinstance(claim, Claim) else Claim.model_validate(claim)
+            for claim in raw_claims
+        ]
         evidence_by_id = {item.evidence_id: item for item in agent_input.evidence}
 
         initial = [self._validate_claim(claim, evidence_by_id) for claim in claims]
@@ -36,6 +39,9 @@ class EvidenceCrossValidationAgent:
         stale = sum(claim.status == "stale" for claim in validated)
         contested = sum(claim.status == "contested" for claim in validated)
         recomputed = sum(bool(claim.data.get("validator_recomputed")) for claim in validated)
+        uncorroborated = sum(
+            bool(claim.data.get("validator_needs_corroboration")) for claim in validated
+        )
         repair_tasks = _repair_tasks(validated)
 
         return AgentOutput(
@@ -48,11 +54,13 @@ class EvidenceCrossValidationAgent:
                 "unsupported_count": unsupported,
                 "stale_count": stale,
                 "contested_count": contested,
+                "uncorroborated_high_impact_count": uncorroborated,
                 "contradiction_count": conflict_metrics["contradiction_count"],
                 "unit_mismatch_count": conflict_metrics["unit_mismatch_count"],
                 "currency_mismatch_count": conflict_metrics["currency_mismatch_count"],
                 "recomputed_count": recomputed,
                 "evidence_coverage": _evidence_coverage(validated),
+                "primary_evidence_coverage": _primary_evidence_coverage(validated, evidence_by_id),
                 "repair_tasks": repair_tasks,
             },
             warnings=[
@@ -61,6 +69,11 @@ class EvidenceCrossValidationAgent:
                     f"{unsupported} claims lack evidence" if unsupported else None,
                     f"{stale} claims depend on stale evidence" if stale else None,
                     f"{contested} claims are contested" if contested else None,
+                    (
+                        f"{uncorroborated} high-impact claims rely on only one secondary source"
+                        if uncorroborated
+                        else None
+                    ),
                 )
                 if warning is not None
             ],
@@ -85,11 +98,13 @@ class EvidenceCrossValidationAgent:
         best_evidence = min(linked, key=lambda item: item.source_priority)
         audit_updates: dict[str, object] = {
             "source_tier": claim.source_tier or best_evidence.source_tier,
-            "freshness_at": claim.freshness_at or best_evidence.published_at or best_evidence.retrieved_at,
+            "freshness_at": (
+                claim.freshness_at or best_evidence.published_at or best_evidence.retrieved_at
+            ),
         }
 
-        if any(item.freshness == "historical" for item in linked) and claim.data.get(
-            "requires_current_data"
+        if claim.data.get("requires_current_data") and not any(
+            item.freshness in {"live", "near_live"} for item in linked
         ):
             audit_updates.update({"status": "stale", "confidence": min(claim.confidence, 0.5)})
             return claim.model_copy(update=audit_updates)
@@ -128,6 +143,25 @@ class EvidenceCrossValidationAgent:
                 audit_updates.update(
                     {"status": "supported", "confidence": min(claim.confidence, 0.60)}
                 )
+            return claim.model_copy(update=audit_updates)
+
+        distinct_sources = {
+            (item.source_type, item.source_uri)
+            for item in linked
+            if item.source_type != "ai_extraction"
+        }
+        high_impact = (claim.materiality or 0.0) >= 0.80 or (
+            claim.claim_type in {"risk", "catalyst"} and claim.confidence >= 0.85
+        )
+        if high_impact and not has_primary and len(distinct_sources) < 2:
+            data = dict(claim.data)
+            data["validator_needs_corroboration"] = True
+            data["validator_distinct_source_count"] = len(distinct_sources)
+            audit_updates["data"] = data
+            audit_updates["confidence"] = min(claim.confidence, 0.55)
+            audit_updates["status"] = (
+                "inferred" if claim.claim_type in {"inference", "scenario"} else "supported"
+            )
             return claim.model_copy(update=audit_updates)
 
         confidence_floor = 0.8 if has_primary else 0.6
@@ -280,7 +314,11 @@ def _comparable_value(claim: Claim) -> ComparableValue | None:
     }
     scale = amount_scales.get(unit)
     if scale is not None:
-        return ComparableValue(value=value * scale, family="currency_amount", currency=currency or "INR")
+        return ComparableValue(
+            value=value * scale,
+            family="currency_amount",
+            currency=currency or "INR",
+        )
     if unit in {"score", "shares", "units"}:
         return ComparableValue(value=value, family=unit, currency=currency)
     return None
@@ -382,6 +420,9 @@ def _repair_tasks(claims: list[Claim]) -> list[dict[str, object]]:
         elif claim.status == "stale":
             action = "refresh required current evidence and rerun originating agent"
             reason = "stale evidence"
+        elif claim.data.get("validator_needs_corroboration"):
+            action = "obtain a second independent or stronger primary source before promotion"
+            reason = "high-impact claim lacks corroboration"
         if action and reason:
             tasks.append(
                 {
@@ -398,8 +439,28 @@ def _repair_tasks(claims: list[Claim]) -> list[dict[str, object]]:
 def _evidence_coverage(claims: list[Claim]) -> float:
     if not claims:
         return 1.0
-    supported = sum(bool(claim.evidence_ids) or claim.claim_type == "scenario" for claim in claims)
+    supported = sum(
+        bool(claim.evidence_ids) or claim.claim_type == "scenario" for claim in claims
+    )
     return supported / len(claims)
+
+
+def _primary_evidence_coverage(
+    claims: list[Claim],
+    evidence_by_id: dict[UUID, EvidenceRef],
+) -> float:
+    if not claims:
+        return 1.0
+    primary = 0
+    for claim in claims:
+        linked = [
+            evidence_by_id[item]
+            for item in claim.evidence_ids
+            if item in evidence_by_id
+        ]
+        if any(item.source_priority == 1 for item in linked):
+            primary += 1
+    return primary / len(claims)
 
 
 def _number(value: object) -> float | None:
