@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.auth import AuthenticatedUser, require_authenticated_user
 from app.brokers.repository import BrokerRepository
 from app.brokers.upstox_oauth import UpstoxOAuthError, UpstoxOAuthService
+from app.core.agent_data_readiness import evaluate_agent_readiness, load_agent_data_coverage
 from app.core.config import get_settings
 from app.core.data_readiness import evaluate_data_coverage, load_data_coverage
 from app.core.readiness import assert_production_ready, audit_settings
@@ -133,15 +134,23 @@ async def agents() -> dict[str, object]:
 
 @app.get("/v1/system/data-readiness")
 async def data_readiness(_user: CurrentUser) -> dict[str, object]:
-    """Report corpus coverage separately from service/deployment readiness."""
+    """Report global corpus coverage and every agent's real-data readiness contract."""
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
     engine = create_database_engine(settings.database_url)
     try:
         coverage = await load_data_coverage(engine)
+        agent_coverage = await load_agent_data_coverage(engine)
     finally:
         await engine.dispose()
-    return evaluate_data_coverage(coverage).as_dict()
+
+    corpus_report = evaluate_data_coverage(coverage)
+    agent_report = evaluate_agent_readiness(agent_coverage, coverage, settings)
+    payload = corpus_report.as_dict()
+    payload["agent_readiness"] = agent_report.as_dict()
+    payload["blocking_agents"] = list(agent_report.blocking_agents)
+    payload["ready"] = corpus_report.ready and agent_report.ready
+    return payload
 
 
 @app.get("/v1/auth/me")
@@ -286,14 +295,22 @@ async def run_research(
 
     engine = create_database_engine(settings.database_url)
     try:
-        await enforce_research_corpus_ready(engine, app_env=settings.app_env)
+        await enforce_research_corpus_ready(
+            engine,
+            app_env=settings.app_env,
+            settings=settings,
+        )
     except ResearchCorpusNotReadyError as exc:
         raise HTTPException(
             status_code=503,
             detail={
                 "code": "research_corpus_not_ready",
-                "message": "Production research is blocked until hard corpus-readiness gates pass.",
-                "errors": list(exc.errors[:8]),
+                "message": (
+                    "Production research is blocked until the global corpus and all required "
+                    "agent data-readiness gates pass."
+                ),
+                "blocking_agents": list(exc.blocking_agents),
+                "errors": list(exc.errors[:12]),
             },
         ) from exc
 
