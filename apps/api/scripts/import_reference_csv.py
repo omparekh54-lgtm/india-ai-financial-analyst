@@ -15,6 +15,7 @@ from app.ingestion.reference_provenance import (
     parse_optional_datetime,
     upsert_reference_source,
     validate_provider_name,
+    validate_reference_approval,
     validate_source_uri,
 )
 
@@ -49,6 +50,7 @@ async def main() -> None:
     content = path.read_text(encoding="utf-8-sig")
     checksum = hashlib.sha256(content.encode("utf-8")).hexdigest()
     source_uri = validate_source_uri(args.source_uri)
+    approval = validate_reference_approval(source_uri, args.approval_reference)
     explicit_published_at = parse_optional_datetime(args.published_at)
 
     if args.kind == "benchmark":
@@ -66,6 +68,8 @@ async def main() -> None:
             "kind": "benchmark",
             "file": str(path.resolve()),
             "source_uri": source_uri,
+            "provenance_class": approval.provenance_class,
+            "approval_reference": approval.approval_reference,
             "sha256": checksum,
             "benchmark_code": benchmark_code,
             "provider": provider,
@@ -92,6 +96,7 @@ async def main() -> None:
                 title=args.source_title or f"Approved benchmark export — {benchmark_code}",
                 published_at=published_at,
                 checksum=checksum,
+                approval_reference=args.approval_reference,
                 metadata={
                     "importer": "import_reference_csv",
                     "kind": "benchmark",
@@ -121,6 +126,8 @@ async def main() -> None:
         "kind": "macro",
         "file": str(path.resolve()),
         "source_uri": source_uri,
+        "provenance_class": approval.provenance_class,
+        "approval_reference": approval.approval_reference,
         "sha256": checksum,
         "row_count": len(observations),
         "minimum_rows": args.min_rows,
@@ -145,6 +152,7 @@ async def main() -> None:
             title=args.source_title or "Approved macro export",
             published_at=published_at,
             checksum=checksum,
+            approval_reference=args.approval_reference,
             metadata={
                 "importer": "import_reference_csv",
                 "kind": "macro",
@@ -166,6 +174,13 @@ async def main() -> None:
 
 def _add_provenance_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--source-uri", required=True)
+    parser.add_argument(
+        "--approval-reference",
+        help=(
+            "Required for non-official sources: license, contract, internal approval, or "
+            "source-governance record identifier."
+        ),
+    )
     parser.add_argument("--source-title")
     parser.add_argument("--published-at")
 
