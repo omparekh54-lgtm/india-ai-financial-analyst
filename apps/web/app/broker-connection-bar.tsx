@@ -22,10 +22,23 @@ type BrokerStatusResponse = {
   connections: BrokerConnection[];
 };
 
+type AgentReadinessItem = {
+  agent: string;
+  ready: boolean;
+  errors: string[];
+  warnings: string[];
+};
+
 type DataReadinessResponse = {
   ready: boolean;
   errors: string[];
   warnings: string[];
+  blocking_agents?: string[];
+  agent_readiness?: {
+    ready: boolean;
+    blocking_agents: string[];
+    agents: AgentReadinessItem[];
+  };
   coverage: {
     nse_eq_securities: number;
     provider_instruments: number;
@@ -107,17 +120,22 @@ export function BrokerConnectionBar() {
   const upstox = status?.connections.find((item) => item.provider === "upstox") ?? null;
   const connected = Boolean(upstox?.connected);
   const corpusComplete = Boolean(dataReadiness?.ready && dataReadiness.warnings.length === 0);
+  const blockingAgents =
+    dataReadiness?.blocking_agents ?? dataReadiness?.agent_readiness?.blocking_agents ?? [];
+  const blockedAgentDetail = blockingAgents.length
+    ? `Blocked agents: ${blockingAgents.slice(0, 3).map(prettyAgentName).join(", ")}${blockingAgents.length > 3 ? ` +${blockingAgents.length - 3}` : ""}`
+    : null;
   const corpusDetail = dataReadiness
     ? dataReadiness.ready
-      ? dataReadiness.warnings[0] ?? "Coverage and freshness checks passed"
-      : dataReadiness.errors[0] ?? "Production data bootstrap is required"
-    : "Checking security universe, evidence and market coverage…";
+      ? dataReadiness.warnings[0] ?? "All 16 agent data contracts and freshness checks passed"
+      : blockedAgentDetail ?? dataReadiness.errors[0] ?? "Production data bootstrap is required"
+    : "Checking security universe, evidence and agent-level data coverage…";
   const corpusBadge = dataReadiness
     ? corpusComplete
-      ? "CORPUS READY"
+      ? "16/16 AGENTS READY"
       : dataReadiness.ready
         ? "COVERAGE INCOMPLETE"
-        : "BOOTSTRAP REQUIRED"
+        : "AGENTS BLOCKED"
     : "CHECKING CORPUS";
 
   async function connect() {
@@ -223,6 +241,12 @@ async function loadDataReadiness(accessToken: string): Promise<DataReadinessResp
     throw new Error(body?.detail ?? "Unable to load research data readiness");
   }
   return body as DataReadinessResponse;
+}
+
+function prettyAgentName(value: string) {
+  return value
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function formatDate(value: string) {
