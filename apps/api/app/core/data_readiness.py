@@ -16,6 +16,7 @@ class DataCoverage:
     corporate_events: int
     sourced_corporate_events: int
     sources: int
+    nonproduction_sources: int
     evidence_chunks: int
     embedded_evidence_chunks: int
     market_bars: int
@@ -42,6 +43,7 @@ class DataCoverage:
             "corporate_events": self.corporate_events,
             "sourced_corporate_events": self.sourced_corporate_events,
             "sources": self.sources,
+            "nonproduction_sources": self.nonproduction_sources,
             "evidence_chunks": self.evidence_chunks,
             "embedded_evidence_chunks": self.embedded_evidence_chunks,
             "market_bars": self.market_bars,
@@ -95,6 +97,19 @@ async def load_data_coverage(engine: AsyncEngine) -> DataCoverage:
           (select count(*) from corporate_events where source_id is not null)
             as sourced_corporate_events,
           (select count(*) from sources) as sources,
+          (
+            select count(*)
+            from sources
+            where lower(
+              concat_ws(
+                ' ',
+                coalesce(source_uri, ''),
+                coalesce(source_type, ''),
+                coalesce(title, ''),
+                coalesce(metadata::text, '')
+              )
+            ) ~ '(^|[^a-z0-9])(synthetic|mock|fake|dummy|fixture|sample|generated|placeholder)([^a-z0-9]|$)'
+          ) as nonproduction_sources,
           (select count(*) from evidence_chunks) as evidence_chunks,
           (select count(*) from evidence_chunks where embedding is not null) as embedded_evidence_chunks,
           (select count(*) from market_bars) as market_bars,
@@ -125,6 +140,7 @@ async def load_data_coverage(engine: AsyncEngine) -> DataCoverage:
         corporate_events=int(row["corporate_events"] or 0),
         sourced_corporate_events=int(row["sourced_corporate_events"] or 0),
         sources=int(row["sources"] or 0),
+        nonproduction_sources=int(row["nonproduction_sources"] or 0),
         evidence_chunks=int(row["evidence_chunks"] or 0),
         embedded_evidence_chunks=int(row["embedded_evidence_chunks"] or 0),
         market_bars=int(row["market_bars"] or 0),
@@ -168,6 +184,11 @@ def evaluate_data_coverage(
         warnings.append(
             "Provider instrument coverage is lower than the NSE security universe; "
             "some symbols may not resolve to market-data adapters."
+        )
+    if coverage.nonproduction_sources > 0:
+        errors.append(
+            "Non-production provenance is present in the research corpus: "
+            f"{coverage.nonproduction_sources} source row(s) contain synthetic/mock/sample markers."
         )
     if coverage.financial_facts == 0:
         warnings.append("No normalized financial facts are populated.")
