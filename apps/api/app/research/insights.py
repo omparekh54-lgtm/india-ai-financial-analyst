@@ -56,8 +56,10 @@ def why_did_it_move(
     context: dict[str, Any],
     grouped_claims: dict[str, list[dict[str, Any]]],
 ) -> dict[str, Any]:
-    market = context.get("market_metrics") if isinstance(context.get("market_metrics"), dict) else {}
-    macro = context.get("macro_metrics") if isinstance(context.get("macro_metrics"), dict) else {}
+    market_value = context.get("market_metrics")
+    macro_value = context.get("macro_metrics")
+    market: dict[str, Any] = market_value if isinstance(market_value, dict) else {}
+    macro: dict[str, Any] = macro_value if isinstance(macro_value, dict) else {}
     drivers: list[dict[str, Any]] = []
 
     relative = _number(market.get("relative_to_sector_pct")) or _number(
@@ -74,7 +76,9 @@ def why_did_it_move(
         )
 
     for claim in grouped_claims.get(AgentName.NEWS.value, []):
-        materiality = str((claim.get("data") or {}).get("materiality") or "low")
+        claim_data = claim.get("data")
+        data = claim_data if isinstance(claim_data, dict) else {}
+        materiality = str(data.get("materiality") or "low")
         if materiality not in {"high", "medium"}:
             continue
         drivers.append(
@@ -87,7 +91,7 @@ def why_did_it_move(
             }
         )
 
-    for flag in macro.get("material_macro_flags", []) if isinstance(macro, dict) else []:
+    for flag in macro.get("material_macro_flags", []):
         if not isinstance(flag, dict):
             continue
         drivers.append(
@@ -99,7 +103,7 @@ def why_did_it_move(
             }
         )
 
-    drivers.sort(key=lambda item: float(item.get("score", 0)), reverse=True)
+    drivers.sort(key=lambda item: _number(item.get("score")) or 0.0, reverse=True)
     return {
         "candidate_drivers": drivers[:8],
         "causality_status": "candidate_explanation_not_proven_causality",
@@ -147,7 +151,7 @@ def _flag_direction(flag: dict[str, Any]) -> str:
     return "context_dependent"
 
 
-def _number(value: object) -> float | None:
+def _number(value: Any) -> float | None:
     try:
         return None if value is None else float(value)
     except (TypeError, ValueError):
