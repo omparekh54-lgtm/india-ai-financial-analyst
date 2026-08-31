@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+from dataclasses import dataclass
 from datetime import date, datetime
 from urllib.parse import quote
 
@@ -12,6 +14,13 @@ UPSTOX_HISTORY_BASE_URL = "https://api.upstox.com/v3/historical-candle"
 
 class UpstoxHistoricalDataError(RuntimeError):
     """Raised when Upstox historical data cannot be safely normalized."""
+
+
+@dataclass(frozen=True)
+class UpstoxHistoricalResult:
+    source_url: str
+    response_sha256: str
+    bars: tuple[MarketBarInput, ...]
 
 
 class UpstoxHistoricalClient:
@@ -49,7 +58,7 @@ class UpstoxHistoricalClient:
         *,
         from_date: date,
         to_date: date,
-    ) -> tuple[str, list[MarketBarInput]]:
+    ) -> UpstoxHistoricalResult:
         url = self.request_url(instrument_key, from_date=from_date, to_date=to_date)
         headers = {
             "Accept": "application/json",
@@ -71,7 +80,12 @@ class UpstoxHistoricalClient:
             payload = response.json()
         except ValueError as exc:
             raise UpstoxHistoricalDataError("Upstox historical-data response is not JSON") from exc
-        return url, parse_daily_candles(payload)
+        bars = parse_daily_candles(payload)
+        return UpstoxHistoricalResult(
+            source_url=url,
+            response_sha256=hashlib.sha256(response.content).hexdigest(),
+            bars=tuple(bars),
+        )
 
 
 def parse_daily_candles(payload: object) -> list[MarketBarInput]:
