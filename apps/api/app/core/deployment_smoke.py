@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import httpx
+
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 @dataclass(frozen=True)
@@ -61,10 +64,10 @@ async def verify_deployment_smoke(
     require_corpus_ready: bool = False,
 ) -> DeploymentSmokeReport:
     """Run GET-only deployment checks without creating research or mutating data."""
-    base = api_base_url.rstrip("/")
     token = access_token.strip()
     if not token:
         raise ValueError("access token cannot be empty")
+    base = _validate_authenticated_target(api_base_url)
     auth_headers = {"Authorization": f"Bearer {token}"}
 
     health = await client.get(f"{base}/health")
@@ -111,6 +114,21 @@ async def verify_deployment_smoke(
         ),
         require_corpus_ready=require_corpus_ready,
     )
+
+
+def _validate_authenticated_target(value: str) -> str:
+    cleaned = value.strip().rstrip("/")
+    parsed = urlparse(cleaned)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("api_base_url must be an absolute http(s) URL")
+    if parsed.username or parsed.password:
+        raise ValueError("api_base_url must not contain embedded credentials")
+    if parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
+        raise ValueError("api_base_url must not contain a path, query, or fragment")
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" and host not in _LOOPBACK_HOSTS:
+        raise ValueError("authenticated deployment smoke requires HTTPS outside localhost")
+    return cleaned
 
 
 def _mapping(response: httpx.Response) -> dict[str, object]:
