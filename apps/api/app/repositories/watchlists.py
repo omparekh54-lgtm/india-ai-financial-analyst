@@ -94,6 +94,21 @@ class WatchlistRepository:
             "items": [],
         }
 
+    async def delete(self, user_id: UUID, watchlist_id: UUID) -> bool:
+        statement = text(
+            """
+            delete from watchlists
+            where id = :watchlist_id and user_id = :user_id
+            returning id
+            """
+        )
+        async with self.engine.begin() as connection:
+            removed = await connection.scalar(
+                statement,
+                {"watchlist_id": watchlist_id, "user_id": user_id},
+            )
+        return removed is not None
+
     async def add_item(
         self,
         user_id: UUID,
