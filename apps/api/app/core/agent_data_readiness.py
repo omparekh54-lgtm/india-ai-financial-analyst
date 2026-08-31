@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from app.agents.contracts import AgentName
 from app.core.config import Settings
 from app.core.data_readiness import DataCoverage
+from app.core.market_history_coverage import load_market_history_coverage
 
 _REQUIRED_MACRO_SERIES = frozenset(
     {
@@ -51,6 +52,7 @@ class AgentDataCoverage:
     peer_metric_securities: int
     benchmark_codes_with_sourced_bars: frozenset[str]
     macro_series_with_sourced_observations: frozenset[str]
+    history_limited_recent_securities: int = 0
 
     def as_dict(self) -> dict[str, object]:
         total = self.nse_eq_securities
@@ -77,6 +79,7 @@ class AgentDataCoverage:
                 self.technical_history_securities,
                 total,
             ),
+            "history_limited_recent_securities": self.history_limited_recent_securities,
             "peer_metric_securities": self.peer_metric_securities,
             "peer_metric_coverage_pct": _coverage_pct(self.peer_metric_securities, total),
             "benchmark_codes_with_sourced_bars": sorted(self.benchmark_codes_with_sourced_bars),
@@ -171,15 +174,6 @@ async def load_agent_data_coverage(engine: AsyncEngine) -> AgentDataCoverage:
             )
             and coalesce(src.published_at, ce.event_at, src.retrieved_at)
                 >= now() - interval '220 days'
-        ), technical_history as (
-          select mb.security_id
-          from market_bars mb
-          join nse_eq n on n.id = mb.security_id
-          where mb.source_id is not null
-            and mb.interval in ('1d', 'day', 'daily')
-            and mb.ts >= now() - interval '500 days'
-          group by mb.security_id
-          having count(distinct mb.ts::date) >= 200
         ), peer_metrics as (
           select sm.security_id
           from security_metrics sm
@@ -218,7 +212,6 @@ async def load_agent_data_coverage(engine: AsyncEngine) -> AgentDataCoverage:
           (select count(*) from financial_history) as financial_history_securities,
           (select count(*) from recent_filings) as recent_filing_evidence_securities,
           (select count(*) from recent_earnings) as recent_earnings_evidence_securities,
-          (select count(*) from technical_history) as technical_history_securities,
           (select count(*) from peer_metrics) as peer_metric_securities
         """
     )
@@ -248,6 +241,7 @@ async def load_agent_data_coverage(engine: AsyncEngine) -> AgentDataCoverage:
             )
         ).scalars().all()
 
+    market_history = await load_market_history_coverage(engine)
     return AgentDataCoverage(
         nse_eq_securities=_int(row.get("nse_eq_securities")),
         provider_mapped_securities=_int(row.get("provider_mapped_securities")),
@@ -255,10 +249,11 @@ async def load_agent_data_coverage(engine: AsyncEngine) -> AgentDataCoverage:
         financial_history_securities=_int(row.get("financial_history_securities")),
         recent_filing_evidence_securities=_int(row.get("recent_filing_evidence_securities")),
         recent_earnings_evidence_securities=_int(row.get("recent_earnings_evidence_securities")),
-        technical_history_securities=_int(row.get("technical_history_securities")),
+        technical_history_securities=market_history.complete_securities,
         peer_metric_securities=_int(row.get("peer_metric_securities")),
         benchmark_codes_with_sourced_bars=frozenset(str(value).upper() for value in benchmark_rows),
         macro_series_with_sourced_observations=frozenset(str(value) for value in macro_rows),
+        history_limited_recent_securities=market_history.history_limited_recent_listings,
     )
 
 
@@ -284,6 +279,19 @@ def evaluate_agent_readiness(
         errors = list(global_errors)
         errors.extend(message for condition, message in requirements if not condition)
         return tuple(dict.fromkeys(errors))
+
+    def warnings_for(agent: AgentName) -> tuple[str, ...]:
+        warnings = list(_agent_warnings(agent, settings))
+        if (
+            agent in {AgentName.MARKET, AgentName.TECHNICAL, AgentName.VALUATION}
+            and agent_coverage.history_limited_recent_securities > 0
+        ):
+            warnings.append(
+                f"{agent_coverage.history_limited_recent_securities} recent NSE listing(s) have "
+                "complete available market history but fewer than 30 sessions; technical indicators "
+                "must report a listing-age limitation for those securities."
+            )
+        return tuple(warnings)
 
     universe_ready = total >= min_nse_eq_securities
     mapped_ready = total > 0 and agent_coverage.provider_mapped_securities == total
@@ -313,7 +321,10 @@ def evaluate_agent_readiness(
         (mapped_ready, "Provider-instrument mapping coverage must be 100%."),
         (
             technical_ready,
-            "Every supported security needs at least 200 sourced daily market bars.",
+            (
+                "Every supported security needs complete listing-age-aware sourced daily history: "
+                "200 bars for mature listings and complete available history for recent listings."
+            ),
         ),
         (benchmarks_ready, "Sourced NIFTY 50 and India VIX histories are required."),
         (market_fresh, "Security market history is stale beyond 7 days."),
@@ -384,7 +395,10 @@ def evaluate_agent_readiness(
     agent_errors[AgentName.TECHNICAL] = errors_for(
         (
             technical_ready,
-            "Technical analysis requires at least 200 sourced daily bars for every supported security.",
+            (
+                "Technical analysis requires complete listing-age-aware sourced daily history: "
+                "200 bars for mature listings and complete available history for recent listings."
+            ),
         ),
         (benchmarks_ready, "Technical context requires sourced NIFTY 50 and India VIX history."),
         (market_fresh, "Technical market history is stale beyond 7 days."),
@@ -437,7 +451,7 @@ def evaluate_agent_readiness(
             agent=agent,
             ready=not agent_errors[agent],
             errors=agent_errors[agent],
-            warnings=_agent_warnings(agent, settings),
+            warnings=warnings_for(agent),
         )
         for agent in AgentName
     )
