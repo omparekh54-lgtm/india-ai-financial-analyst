@@ -47,6 +47,7 @@ class FakeGateway:
         self.enabled = enabled
         self.content = content
         self.fail = fail
+        self.budget_keys: list[str | None] = []
 
     async def complete(
         self,
@@ -55,8 +56,10 @@ class FakeGateway:
         *,
         temperature: float = 0.2,
         max_tokens: int = 2048,
+        budget_key: str | None = None,
     ) -> ChatResult:
         del capability, messages, temperature, max_tokens
+        self.budget_keys.append(budget_key)
         if self.fail:
             raise ProviderCallError("test failure")
         return ChatResult(
@@ -66,6 +69,16 @@ class FakeGateway:
             input_tokens=10,
             output_tokens=5,
         )
+
+    def job_usage(self, budget_key: str) -> dict[str, object]:
+        return {
+            "calls": sum(key == budget_key for key in self.budget_keys),
+            "reserved_tokens": 100,
+            "actual_tokens": 15,
+            "provider_attempts": {"test": 1},
+            "max_calls": 10,
+            "max_reserved_tokens": 24000,
+        }
 
 
 def _evidence() -> EvidenceRef:
@@ -94,10 +107,9 @@ async def test_llm_enrichment_adds_only_evidence_linked_pending_claims() -> None
         gateway=gateway,  # type: ignore[arg-type]
         capability=Capability.FAST_REASONING,
     )
+    job_id = uuid4()
 
-    result = await agent.run(
-        AgentInput(job_id=uuid4(), query="EXAMPLE", evidence=[evidence])
-    )
+    result = await agent.run(AgentInput(job_id=job_id, query="EXAMPLE", evidence=[evidence]))
 
     assert len(result.claims) == 2
     enriched = result.claims[-1]
@@ -106,6 +118,7 @@ async def test_llm_enrichment_adds_only_evidence_linked_pending_claims() -> None
     assert enriched.evidence_ids == [evidence.evidence_id]
     assert enriched.confidence == 0.78
     assert result.metrics["llm_enrichment"]["provider"] == "test"
+    assert gateway.budget_keys == [str(job_id)]
 
 
 @pytest.mark.asyncio
@@ -179,3 +192,4 @@ async def test_llm_synthesis_adds_prose_without_new_claims() -> None:
     assert report["executive_summary"].startswith("Validated evidence")
     assert result.claims == []
     assert result.metrics["llm_synthesis"]["provider"] == "test"
+    assert result.metrics["llm_synthesis"]["job_budget"]["calls"] == 1
