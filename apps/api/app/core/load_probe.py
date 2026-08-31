@@ -19,6 +19,7 @@ SAFE_LOAD_PROBE_ENDPOINTS = frozenset(
     }
 )
 _AUTH_REQUIRED_ENDPOINTS = frozenset({"/v1/auth/me", "/v1/system/data-readiness"})
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 @dataclass(frozen=True)
@@ -86,14 +87,14 @@ async def run_read_only_load_probe(
     access_token: str | None = None,
 ) -> LoadProbeReport:
     """Exercise only allow-listed GET endpoints; never creates research or mutates data."""
-    base = _validate_base_url(api_base_url)
-    selected = _validate_endpoints(endpoints, access_token=access_token)
+    token = (access_token or "").strip()
+    base = _validate_base_url(api_base_url, authenticated=bool(token))
+    selected = _validate_endpoints(endpoints, access_token=token)
     if request_count < 1 or request_count > 500:
         raise ValueError("request_count must be between 1 and 500")
     if concurrency < 1 or concurrency > 25:
         raise ValueError("concurrency must be between 1 and 25")
 
-    token = (access_token or "").strip()
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     semaphore = asyncio.Semaphore(concurrency)
 
@@ -124,7 +125,7 @@ async def run_read_only_load_probe(
     )
 
 
-def _validate_base_url(value: str) -> str:
+def _validate_base_url(value: str, *, authenticated: bool) -> str:
     cleaned = value.strip().rstrip("/")
     parsed = urlparse(cleaned)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -133,6 +134,9 @@ def _validate_base_url(value: str) -> str:
         raise ValueError("api_base_url must not contain embedded credentials")
     if parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
         raise ValueError("api_base_url must not contain a path, query, or fragment")
+    host = (parsed.hostname or "").lower()
+    if authenticated and parsed.scheme != "https" and host not in _LOOPBACK_HOSTS:
+        raise ValueError("authenticated load probes require HTTPS outside localhost")
     return cleaned
 
 
