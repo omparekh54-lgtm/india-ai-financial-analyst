@@ -95,16 +95,22 @@ def main() -> int:
         "--financial",
         action="append",
         default=[],
-        metavar="SECURITY,FILE,SOURCE_URI",
-        help="Repeat for each approved/licensed one-security financial CSV export.",
+        metavar="SECURITY,FILE,SOURCE_URI[,APPROVAL_REFERENCE]",
+        help=(
+            "Repeat for each one-security financial CSV export. Non-official sources require "
+            "a license/contract/source-governance approval reference."
+        ),
     )
     parser.add_argument("--financial-min-rows", type=int, default=5)
     parser.add_argument(
         "--market",
         action="append",
         default=[],
-        metavar="SECURITY,PROVIDER,FILE,SOURCE_URI",
-        help="Repeat for each approved/licensed one-security OHLCV history CSV export.",
+        metavar="SECURITY,PROVIDER,FILE,SOURCE_URI[,APPROVAL_REFERENCE]",
+        help=(
+            "Repeat for each one-security OHLCV history export. Non-official sources require "
+            "a license/contract/source-governance approval reference."
+        ),
     )
     parser.add_argument("--market-interval", default="1d")
     parser.add_argument("--market-timezone", default="Asia/Kolkata")
@@ -113,8 +119,11 @@ def main() -> int:
         "--metrics",
         action="append",
         default=[],
-        metavar="SECURITY,FILE,SOURCE_URI",
-        help="Repeat for each approved/licensed one-security comparable-metrics CSV export.",
+        metavar="SECURITY,FILE,SOURCE_URI[,APPROVAL_REFERENCE]",
+        help=(
+            "Repeat for each one-security comparable-metrics export. Non-official sources "
+            "require a license/contract/source-governance approval reference."
+        ),
     )
     parser.add_argument("--metrics-min-rows", type=int, default=3)
     parser.add_argument(
