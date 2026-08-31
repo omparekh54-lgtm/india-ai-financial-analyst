@@ -15,6 +15,12 @@ class AnalysisMode(StrEnum):
     RISK = "risk"
 
 
+class ResearchDepth(StrEnum):
+    QUICK = "quick"
+    STANDARD = "standard"
+    DEEP = "deep"
+
+
 class ExecutionStage(BaseModel):
     name: str
     agents: list[AgentName]
@@ -23,6 +29,7 @@ class ExecutionStage(BaseModel):
 
 class ResearchPlan(BaseModel):
     mode: AnalysisMode
+    depth: ResearchDepth = ResearchDepth.STANDARD
     stages: list[ExecutionStage]
 
 
@@ -45,7 +52,10 @@ ANALYSIS_AGENTS = [
 ]
 
 
-def build_research_plan(mode: AnalysisMode) -> ResearchPlan:
+def build_research_plan(
+    mode: AnalysisMode,
+    depth: ResearchDepth = ResearchDepth.STANDARD,
+) -> ResearchPlan:
     if mode == AnalysisMode.WHY_MOVE:
         collection = [AgentName.MARKET, AgentName.NEWS, AgentName.WEB, AgentName.MACRO]
         analysis = [AgentName.TECHNICAL, AgentName.SENTIMENT, AgentName.RISK]
@@ -78,11 +88,16 @@ def build_research_plan(mode: AnalysisMode) -> ResearchPlan:
         ]
         analysis = [AgentName.SENTIMENT, AgentName.RISK]
     else:
-        collection = COLLECTION_AGENTS
-        analysis = ANALYSIS_AGENTS
+        collection = list(COLLECTION_AGENTS)
+        analysis = list(ANALYSIS_AGENTS)
+
+    if depth == ResearchDepth.QUICK:
+        collection = [agent for agent in collection if agent != AgentName.WEB]
+        analysis = [agent for agent in analysis if agent != AgentName.SENTIMENT]
 
     return ResearchPlan(
         mode=mode,
+        depth=depth,
         stages=[
             ExecutionStage(name="resolve", agents=[AgentName.ENTITY], parallel=False),
             ExecutionStage(name="collect", agents=collection, parallel=True),
