@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -17,6 +18,8 @@ from app.connectors.nse_financial_results import NseFinancialResultsFetcher
 from app.connectors.nse_xbrl import NseFinancialXbrlFetcher
 from app.core.agent_data_readiness import load_agent_data_coverage
 from app.core.config import get_settings
+from app.core.financial_history_policy import required_financial_periods
+from app.core.market_history_coverage import parse_listing_date
 from app.db import create_database_engine
 from app.ingestion.exchange import ExchangeDisclosure, ExchangeDisclosureIngestor
 from app.ingestion.financials import FinancialFactIngestor
@@ -37,22 +40,32 @@ class FinancialTarget:
     security_id: UUID
     symbol: str
     legal_name: str
+    listing_date: date | None
 
 
 async def _target_for_identifier(engine: AsyncEngine, identifier: str) -> FinancialTarget:
     security_id, legal_name = await resolve_security(engine, identifier)
     async with engine.connect() as connection:
-        nse_symbol = await connection.scalar(
-            text("select nse_symbol from securities where id = :security_id"),
-            {"security_id": security_id},
-        )
-    symbol = str(nse_symbol or "").strip().upper()
+        row = (
+            await connection.execute(
+                text(
+                    """
+                    select nse_symbol, metadata->>'date_of_listing' as date_of_listing
+                    from securities
+                    where id = :security_id
+                    """
+                ),
+                {"security_id": security_id},
+            )
+        ).mappings().one()
+    symbol = str(row.get("nse_symbol") or "").strip().upper()
     if not symbol:
         raise ValueError(f"security has no NSE symbol: {identifier}")
     return FinancialTarget(
         security_id=security_id,
         symbol=symbol,
         legal_name=legal_name,
+        listing_date=parse_listing_date(row.get("date_of_listing")),
     )
 
 
@@ -66,7 +79,7 @@ async def _all_targets(
     statement = text(
         """
         with nse_eq as (
-          select id, nse_symbol, legal_name
+          select id, nse_symbol, legal_name, metadata->>'date_of_listing' as date_of_listing
           from securities
           where primary_exchange = 'NSE'
             and coalesce(metadata->>'nse_series', 'EQ') = 'EQ'
@@ -106,7 +119,7 @@ async def _all_targets(
             and coalesce(src.published_at, ce.event_at, src.retrieved_at)
                 >= now() - interval '220 days'
         )
-        select n.id, n.nse_symbol, n.legal_name
+        select n.id, n.nse_symbol, n.legal_name, n.date_of_listing
         from nse_eq n
         left join financial_ready f on f.security_id = n.id
         left join filing_ready fi on fi.security_id = n.id
@@ -138,6 +151,7 @@ async def _all_targets(
             security_id=UUID(str(row["id"])),
             symbol=str(row["nse_symbol"]).strip().upper(),
             legal_name=str(row["legal_name"]),
+            listing_date=parse_listing_date(row.get("date_of_listing")),
         )
         for row in rows
     ]
@@ -166,17 +180,26 @@ async def _process_target(
 ) -> dict[str, object]:
     records = await results_fetcher.fetch_history(target.symbol)
     selected = select_financial_result_records(records, max_periods=max_periods)
-    if len(selected) < min_selected_periods:
+    policy_required = required_financial_periods(
+        target.listing_date,
+        as_of=datetime.now(UTC).date(),
+    )
+    required_selected = max(policy_required, min_selected_periods)
+    if len(selected) < required_selected:
         raise ValueError(
             f"{target.symbol} exposes only {len(selected)} distinct NSE XBRL result periods; "
-            f"minimum required is {min_selected_periods}"
+            f"minimum required is {required_selected} "
+            f"(listing-age policy requires {policy_required})"
         )
 
     if dry_run:
         return {
             "symbol": target.symbol,
             "legal_name": target.legal_name,
+            "listing_date": target.listing_date.isoformat() if target.listing_date else None,
             "status": "dry_run",
+            "required_periods": required_selected,
+            "listing_age_policy_periods": policy_required,
             "selected_periods": [
                 {
                     "period_end": item.record.period_end.isoformat()
@@ -259,7 +282,10 @@ async def _process_target(
     return {
         "symbol": target.symbol,
         "legal_name": target.legal_name,
+        "listing_date": target.listing_date.isoformat() if target.listing_date else None,
         "status": "completed",
+        "required_periods": required_selected,
+        "listing_age_policy_periods": policy_required,
         "selected_period_count": len(selected),
         "documents": documents,
     }
@@ -279,7 +305,12 @@ async def _run() -> int:
     parser.add_argument("--limit", type=int, default=25)
     parser.add_argument("--after-symbol")
     parser.add_argument("--max-periods", type=int, default=10)
-    parser.add_argument("--min-selected-periods", type=int, default=8)
+    parser.add_argument(
+        "--min-selected-periods",
+        type=int,
+        default=0,
+        help="0 uses the listing-age-aware policy; positive values can only make it stricter.",
+    )
     parser.add_argument("--request-delay-seconds", type=float, default=0.35)
     parser.add_argument("--document-delay-seconds", type=float, default=0.10)
     parser.add_argument("--refresh-all", action="store_true")
@@ -290,8 +321,8 @@ async def _run() -> int:
         parser.error("--limit must be between 1 and 100")
     if args.max_periods < 1 or args.max_periods > 20:
         parser.error("--max-periods must be between 1 and 20")
-    if args.min_selected_periods < 1 or args.min_selected_periods > args.max_periods:
-        parser.error("--min-selected-periods must be between 1 and --max-periods")
+    if args.min_selected_periods < 0 or args.min_selected_periods > args.max_periods:
+        parser.error("--min-selected-periods must be between 0 and --max-periods")
     if args.request_delay_seconds < 0 or args.request_delay_seconds > 10:
         parser.error("--request-delay-seconds must be between 0 and 10")
     if args.document_delay_seconds < 0 or args.document_delay_seconds > 10:
