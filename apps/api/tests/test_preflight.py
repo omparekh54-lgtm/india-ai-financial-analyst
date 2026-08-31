@@ -10,6 +10,7 @@ def _preflight(**overrides: object) -> DatabasePreflight:
         "semantic_index": True,
         "research_ownership_column": True,
         "benchmark_source_column": True,
+        "reference_source_approval_constraint": True,
         "missing_tables": (),
         "rls_disabled_tables": (),
         "missing_owner_policies": (),
@@ -33,6 +34,12 @@ def test_missing_benchmark_source_column_fails_preflight() -> None:
     report = _preflight(benchmark_source_column=False)
     assert report.ready is False
     assert report.as_dict()["benchmark_source_column"] is False
+
+
+def test_missing_reference_approval_constraint_fails_preflight() -> None:
+    report = _preflight(reference_source_approval_constraint=False)
+    assert report.ready is False
+    assert report.as_dict()["reference_source_approval_constraint"] is False
 
 
 def test_disabled_rls_fails_preflight() -> None:
