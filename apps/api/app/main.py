@@ -47,7 +47,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.7.0",
+    version="0.8.0",
     default_response_class=ORJSONResponse,
     lifespan=lifespan,
 )
@@ -94,6 +94,8 @@ async def health() -> dict[str, object]:
         "live_market_enabled": settings.enable_live_market,
         "external_llm_calls_enabled": settings.enable_external_llm_calls,
         "external_data_calls_enabled": settings.enable_external_data_calls,
+        "free_only": settings.free_only,
+        "research_queue": "postgres_worker",
     }
 
 
@@ -317,15 +319,9 @@ async def research_job_export(
     )
 
 
-@app.post("/v1/research/run")
-async def run_research(
-    request: ResearchRunRequest,
-    user: CurrentUser,
-) -> dict[str, object]:
-    """Execute the authenticated DB-backed research pipeline at the requested depth."""
+async def _enforce_research_ready_or_503() -> None:
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
-
     engine = create_database_engine(settings.database_url)
     try:
         await enforce_research_corpus_ready(
@@ -346,7 +342,51 @@ async def run_research(
                 "errors": list(exc.errors[:12]),
             },
         ) from exc
+    finally:
+        await engine.dispose()
 
+
+@app.post("/v1/research/enqueue", status_code=202)
+async def enqueue_research(
+    request: ResearchRunRequest,
+    user: CurrentUser,
+) -> dict[str, object]:
+    """Create a durable job and return immediately; the research worker performs the analysis."""
+    await _enforce_research_ready_or_503()
+    assert settings.database_url is not None
+    engine = create_database_engine(settings.database_url)
+    service = ResearchService(
+        engine,
+        max_concurrency=settings.max_agent_concurrency,
+        settings=settings,
+    )
+    try:
+        job_id = await service.enqueue(
+            query=request.query,
+            mode=request.mode,
+            depth=request.depth,
+            requested_by=user.id,
+        )
+    finally:
+        await engine.dispose()
+    return {
+        "job_id": str(job_id),
+        "status": "queued",
+        "depth": request.depth.value,
+        "poll_path": f"/v1/research/jobs/{job_id}",
+        "evidence_explorer_path": f"/v1/research/jobs/{job_id}/evidence",
+    }
+
+
+@app.post("/v1/research/run")
+async def run_research(
+    request: ResearchRunRequest,
+    user: CurrentUser,
+) -> dict[str, object]:
+    """Compatibility path for immediate internal execution; product UI uses /enqueue."""
+    await _enforce_research_ready_or_503()
+    assert settings.database_url is not None
+    engine = create_database_engine(settings.database_url)
     service = ResearchService(
         engine,
         max_concurrency=settings.max_agent_concurrency,
@@ -364,6 +404,8 @@ async def run_research(
             status_code=500,
             detail=f"Research execution failed: {type(exc).__name__}",
         ) from exc
+    finally:
+        await engine.dispose()
 
     return {
         "job_id": str(execution.job_id),
