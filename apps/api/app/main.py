@@ -265,11 +265,11 @@ async def research_job_evidence(
     if job is None:
         raise HTTPException(status_code=404, detail="Research job not found")
     claims = await repository.get_user_job_evidence(user.id, job_id)
-    linked_evidence_count = sum(
-        len(claim.get("evidence", []))
-        for claim in claims
-        if isinstance(claim.get("evidence"), list)
-    )
+    linked_evidence_count = 0
+    for claim in claims:
+        evidence = claim.get("evidence")
+        if isinstance(evidence, list):
+            linked_evidence_count += len(evidence)
     return {
         "job_id": str(job_id),
         "claim_count": len(claims),
