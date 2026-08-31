@@ -165,3 +165,27 @@ def test_recent_listing_history_limit_warns_without_falsely_blocking_ready_corpu
             "fewer than 30 sessions" in warning
             for warning in by_agent[agent].warnings  # type: ignore[attr-defined]
         )
+
+
+def test_recent_listing_financial_limit_warns_without_falsely_blocking_ready_corpus() -> None:
+    as_of = datetime(2026, 8, 31, tzinfo=UTC)
+    report = evaluate_agent_readiness(
+        _agent_coverage(financial_history_limited_recent_securities=3),
+        _corpus(as_of),
+        _settings(),
+        as_of=as_of,
+    )
+    by_agent = _by_agent(report)
+
+    assert report.ready is True
+    for agent in (
+        AgentName.FINANCIALS,
+        AgentName.EARNINGS,
+        AgentName.VALUATION,
+        AgentName.RISK,
+    ):
+        assert by_agent[agent].ready is True  # type: ignore[attr-defined]
+        assert any(
+            "fewer than eight reporting periods" in warning
+            for warning in by_agent[agent].warnings  # type: ignore[attr-defined]
+        )
