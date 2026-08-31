@@ -36,7 +36,12 @@ class ChiefAnalystAgent:
         confidence = _confidence_framework(claims)
         mode = str(agent_input.context.get("analysis_mode") or "full_analysis")
         depth = str(agent_input.context.get("analysis_depth") or "standard")
-        special = special_mode_insights(mode, agent_input.context, dict(grouped))
+        special = special_mode_insights(
+            mode,
+            agent_input.context,
+            dict(grouped),
+            current_confidence=confidence,
+        )
         evidence_catalog = {
             str(item.evidence_id): item.model_dump(mode="json")
             for item in agent_input.evidence
