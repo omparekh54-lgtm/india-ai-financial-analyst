@@ -21,6 +21,15 @@ class ResearchDepth(StrEnum):
     DEEP = "deep"
 
 
+class EventTrigger(StrEnum):
+    QUARTERLY_RESULT = "quarterly_result"
+    LARGE_PRICE_MOVE = "large_price_move"
+    GOVERNANCE_FILING = "governance_filing"
+    RBI_POLICY = "rbi_policy"
+    ANNUAL_REPORT = "annual_report"
+    NO_MATERIAL_CHANGE = "no_material_change"
+
+
 class ExecutionStage(BaseModel):
     name: str
     agents: list[AgentName]
@@ -52,14 +61,55 @@ ANALYSIS_AGENTS = [
 ]
 
 
+EVENT_AGENT_MAP: dict[EventTrigger, tuple[list[AgentName], list[AgentName]]] = {
+    EventTrigger.QUARTERLY_RESULT: (
+        [AgentName.FINANCIALS, AgentName.EARNINGS],
+        [AgentName.VALUATION, AgentName.RISK],
+    ),
+    EventTrigger.LARGE_PRICE_MOVE: (
+        [AgentName.MARKET, AgentName.NEWS, AgentName.INDUSTRY, AgentName.MACRO],
+        [AgentName.TECHNICAL, AgentName.SENTIMENT],
+    ),
+    EventTrigger.GOVERNANCE_FILING: (
+        [AgentName.FILINGS],
+        [AgentName.RISK],
+    ),
+    EventTrigger.RBI_POLICY: (
+        [AgentName.MACRO, AgentName.INDUSTRY],
+        [AgentName.RISK],
+    ),
+    EventTrigger.ANNUAL_REPORT: (
+        [
+            AgentName.FINANCIALS,
+            AgentName.FILINGS,
+            AgentName.EARNINGS,
+            AgentName.INDUSTRY,
+        ],
+        [AgentName.VALUATION, AgentName.RISK],
+    ),
+    EventTrigger.NO_MATERIAL_CHANGE: (
+        [AgentName.MARKET],
+        [AgentName.TECHNICAL],
+    ),
+}
+
+
 def build_research_plan(
     mode: AnalysisMode,
     depth: ResearchDepth = ResearchDepth.STANDARD,
 ) -> ResearchPlan:
     if mode == AnalysisMode.WHY_MOVE:
-        collection = [AgentName.MARKET, AgentName.NEWS, AgentName.WEB, AgentName.MACRO]
+        collection = [
+            AgentName.MARKET,
+            AgentName.NEWS,
+            AgentName.WEB,
+            AgentName.INDUSTRY,
+            AgentName.MACRO,
+        ]
         analysis = [AgentName.TECHNICAL, AgentName.SENTIMENT, AgentName.RISK]
     elif mode == AnalysisMode.WHAT_CHANGED:
+        # This is the safe manual fallback when no machine-classified event trigger is supplied.
+        # Automated refreshes should use build_event_research_plan() for the smallest safe DAG.
         collection = [
             AgentName.MARKET,
             AgentName.FINANCIALS,
@@ -93,9 +143,43 @@ def build_research_plan(
         analysis = list(ANALYSIS_AGENTS)
 
     if depth == ResearchDepth.QUICK:
-        collection = [agent for agent in collection if agent != AgentName.WEB]
-        analysis = [agent for agent in analysis if agent != AgentName.SENTIMENT]
+        if mode == AnalysisMode.FULL:
+            collection = [
+                AgentName.MARKET,
+                AgentName.FINANCIALS,
+                AgentName.FILINGS,
+                AgentName.EARNINGS,
+                AgentName.NEWS,
+            ]
+            analysis = [AgentName.TECHNICAL, AgentName.RISK]
+        else:
+            collection = [agent for agent in collection if agent != AgentName.WEB]
+            analysis = [agent for agent in analysis if agent != AgentName.SENTIMENT]
 
+    return _build_plan(mode=mode, depth=depth, collection=collection, analysis=analysis)
+
+
+def build_event_research_plan(
+    trigger: EventTrigger,
+    depth: ResearchDepth = ResearchDepth.STANDARD,
+) -> ResearchPlan:
+    """Map a classified new event to the smallest safe v2 dependency subgraph."""
+    collection, analysis = EVENT_AGENT_MAP[trigger]
+    return _build_plan(
+        mode=AnalysisMode.WHAT_CHANGED,
+        depth=depth,
+        collection=list(collection),
+        analysis=list(analysis),
+    )
+
+
+def _build_plan(
+    *,
+    mode: AnalysisMode,
+    depth: ResearchDepth,
+    collection: list[AgentName],
+    analysis: list[AgentName],
+) -> ResearchPlan:
     return ResearchPlan(
         mode=mode,
         depth=depth,
