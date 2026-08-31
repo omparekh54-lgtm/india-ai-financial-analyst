@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from app.agents.contracts import AgentInput, AgentName, AgentOutput, Claim
 from app.calculations.financials import growth_rate, margin
 
@@ -66,7 +68,7 @@ class EarningsManagementAgent:
         return AgentOutput(agent=AgentName.EARNINGS, claims=claims, metrics=metrics)
 
 
-def _number(value: object) -> float | None:
+def _number(value: Any) -> float | None:
     try:
         if value is None:
             return None
