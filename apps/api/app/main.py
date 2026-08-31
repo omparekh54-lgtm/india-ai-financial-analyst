@@ -25,6 +25,7 @@ from app.providers.router import Capability, ProviderRouter
 from app.repositories.research import ResearchRepository
 from app.research.export import render_research_markdown, research_export_payload
 from app.research.service import ResearchService
+from app.watchlists_api import router as watchlists_router
 
 settings = get_settings()
 CurrentUser = Annotated[AuthenticatedUser, Depends(require_authenticated_user)]
@@ -47,7 +48,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.8.0",
+    version="0.9.0",
     default_response_class=ORJSONResponse,
     lifespan=lifespan,
 )
@@ -58,6 +59,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
+app.include_router(watchlists_router)
 
 
 class ResearchPlanRequest(BaseModel):
