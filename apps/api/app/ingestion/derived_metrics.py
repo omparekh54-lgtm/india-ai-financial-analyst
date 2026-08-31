@@ -9,16 +9,14 @@ from uuid import UUID
 
 from app.ingestion.metrics import SecurityMetricInput
 
+INDUSTRY_COMPARABLE_METRICS = frozenset(
+    {"revenue_growth", "ebitda_margin", "roce", "pe", "pb", "ev_ebitda"}
+)
 PEER_USABLE_METRICS = frozenset(
     {
-        "revenue_growth",
-        "ebitda_margin",
-        "roce",
+        *INDUSTRY_COMPARABLE_METRICS,
         "roe",
         "roa",
-        "pe",
-        "pb",
-        "ev_ebitda",
         "market_cap",
         "gross_npa_pct",
         "net_npa_pct",
@@ -76,6 +74,10 @@ class DerivedMetricBundle:
     upstream_source_ids: tuple[UUID, ...]
     checksum: str
 
+    @property
+    def industry_comparable_count(self) -> int:
+        return sum(item.metric_name in INDUSTRY_COMPARABLE_METRICS for item in self.metrics)
+
 
 def derive_peer_metrics(
     facts: list[MetricFinancialFact],
@@ -84,12 +86,9 @@ def derive_peer_metrics(
 ) -> DerivedMetricBundle:
     """Derive comparable metrics only from source-linked normalized facts and market data.
 
-    The function is deterministic and intentionally conservative. It refuses calculations whose
-    periods or units do not align rather than estimating missing inputs. Each metric records its
-    formula/basis and upstream source IDs so a persisted derived source can remain auditable.
+    Calculations fail closed when periods or units cannot be reconciled. Every persisted metric
+    carries exact upstream source IDs so the result is reproducible and citable without an LLM.
     """
-    if any(fact.source_id is None for fact in facts):  # pragma: no cover - UUID type guard
-        raise ValueError("all financial facts must be source-linked")
     if market is not None and market.price <= 0:
         raise ValueError("market price must be positive")
 
@@ -120,16 +119,14 @@ def derive_peer_metrics(
         latest = _latest(by_name, fact_name)
         if latest is None:
             continue
-        value = latest.value
-        unit = latest.unit
         _put(
             derived,
             source_ids,
             _metric(
                 metric_name,
                 latest.period_end,
-                value,
-                unit,
+                latest.value,
+                latest.unit,
                 "source_fact_passthrough",
                 [latest],
                 basis_fact=fact_name,
@@ -175,23 +172,28 @@ def _growth_metric(
     by_name: dict[str, list[MetricFinancialFact]],
 ) -> SecurityMetricInput | None:
     for basis in _GROWTH_BASES:
-        latest = _latest(by_name, basis)
-        if latest is None or latest.value == 0:
-            continue
-        previous = _comparable_previous(by_name.get(basis, []), latest)
-        if previous is None or previous.value == 0 or not _units_compatible(latest.unit, previous.unit):
-            continue
-        value = latest.value / previous.value - Decimal("1")
-        return _metric(
-            "revenue_growth",
-            latest.period_end,
-            value,
-            "ratio",
-            "current_over_comparable_previous_minus_one",
-            [latest, previous],
-            basis_fact=basis,
-            comparison_period_end=previous.period_end.isoformat(),
-        )
+        for latest in by_name.get(basis, []):
+            if latest.value == 0:
+                continue
+            previous = _comparable_previous(by_name.get(basis, []), latest)
+            if (
+                previous is None
+                or previous.value == 0
+                or not _units_compatible(latest.unit, previous.unit)
+            ):
+                continue
+            value = latest.value / previous.value - Decimal(1)
+            return _metric(
+                "revenue_growth",
+                latest.period_end,
+                value,
+                "ratio",
+                "current_over_comparable_previous_minus_one",
+                [latest, previous],
+                basis_fact=basis,
+                comparison_period_end=previous.period_end.isoformat(),
+                comparison_period_type=latest.period_type,
+            )
     return None
 
 
@@ -291,22 +293,24 @@ def _return_metric(
 
 
 def _aum_growth_metric(by_name: dict[str, list[MetricFinancialFact]]) -> SecurityMetricInput | None:
-    rows = by_name.get("aum", [])
-    latest = rows[0] if rows else None
-    if latest is None:
-        return None
-    previous = _comparable_previous(rows, latest)
-    if previous is None or previous.value == 0 or not _units_compatible(latest.unit, previous.unit):
-        return None
-    return _metric(
-        "aum_growth",
-        latest.period_end,
-        latest.value / previous.value - Decimal("1"),
-        "ratio",
-        "aum_current_over_comparable_previous_minus_one",
-        [latest, previous],
-        comparison_period_end=previous.period_end.isoformat(),
-    )
+    for latest in by_name.get("aum", []):
+        previous = _comparable_previous(by_name.get("aum", []), latest)
+        if (
+            previous is None
+            or previous.value == 0
+            or not _units_compatible(latest.unit, previous.unit)
+        ):
+            continue
+        return _metric(
+            "aum_growth",
+            latest.period_end,
+            latest.value / previous.value - Decimal(1),
+            "ratio",
+            "aum_current_over_comparable_previous_minus_one",
+            [latest, previous],
+            comparison_period_end=previous.period_end.isoformat(),
+        )
+    return None
 
 
 def _pe_metric(
@@ -321,17 +325,38 @@ def _pe_metric(
         ),
         None,
     )
-    if eps is None:
+    source_ids: list[UUID]
+    period_end: date
+    if eps is not None:
+        eps_value = eps.value
+        source_ids = [eps.source_id, market.source_id]
+        period_end = eps.period_end
+        formula = "market_price_divided_by_annual_or_ttm_eps"
+    else:
+        pat = next(
+            (fact for fact in by_name.get("pat", []) if fact.period_type in {"annual", "ttm"}),
+            None,
+        )
+        shares = _latest(by_name, "shares_outstanding")
+        if pat is None or shares is None or pat.value <= 0 or shares.value <= 0:
+            return None
+        if not _units_compatible_for_per_share(pat.unit, shares.unit):
+            return None
+        eps_value = pat.value / shares.value
+        source_ids = [pat.source_id, shares.source_id, market.source_id]
+        period_end = pat.period_end
+        formula = "market_price_divided_by_pat_per_share"
+    if eps_value <= 0:
         return None
     return SecurityMetricInput(
         metric_name="pe",
         as_of_date=market.as_of_date,
-        value=market.price / eps.value,
+        value=market.price / eps_value,
         unit="multiple",
         metadata=_metadata(
-            "market_price_divided_by_annual_or_ttm_eps",
-            [eps.source_id, market.source_id],
-            financial_period_end=eps.period_end.isoformat(),
+            formula,
+            source_ids,
+            financial_period_end=period_end.isoformat(),
         ),
     )
 
@@ -340,17 +365,33 @@ def _pb_metric(
     by_name: dict[str, list[MetricFinancialFact]], market: MetricMarketClose
 ) -> SecurityMetricInput | None:
     bvps = _latest(by_name, "book_value_per_share")
-    if bvps is None or bvps.value <= 0:
-        return None
+    source_ids: list[UUID]
+    period_end: date
+    if bvps is not None and bvps.value > 0:
+        book_value = bvps.value
+        source_ids = [bvps.source_id, market.source_id]
+        period_end = bvps.period_end
+        formula = "market_price_divided_by_book_value_per_share"
+    else:
+        equity = _latest(by_name, "total_equity") or _latest(by_name, "net_worth")
+        shares = _latest(by_name, "shares_outstanding")
+        if equity is None or shares is None or equity.value <= 0 or shares.value <= 0:
+            return None
+        if not _units_compatible_for_per_share(equity.unit, shares.unit):
+            return None
+        book_value = equity.value / shares.value
+        source_ids = [equity.source_id, shares.source_id, market.source_id]
+        period_end = equity.period_end
+        formula = "market_price_divided_by_equity_per_share"
     return SecurityMetricInput(
         metric_name="pb",
         as_of_date=market.as_of_date,
-        value=market.price / bvps.value,
+        value=market.price / book_value,
         unit="multiple",
         metadata=_metadata(
-            "market_price_divided_by_book_value_per_share",
-            [bvps.source_id, market.source_id],
-            financial_period_end=bvps.period_end.isoformat(),
+            formula,
+            source_ids,
+            financial_period_end=period_end.isoformat(),
         ),
     )
 
@@ -370,6 +411,7 @@ def _market_cap_metric(
             "market_price_times_shares_outstanding",
             [shares.source_id, market.source_id],
             financial_period_end=shares.period_end.isoformat(),
+            shares_unit=shares.unit,
         ),
     )
 
@@ -409,8 +451,11 @@ def _put(
 ) -> None:
     if metric.metric_name not in PEER_USABLE_METRICS:
         return
+    raw_upstream = metric.metadata.get("upstream_source_ids")
+    if not isinstance(raw_upstream, list) or not raw_upstream:
+        raise ValueError("derived metric is missing upstream source IDs")
     output[metric.metric_name] = metric
-    source_ids.update(UUID(value) for value in metric.metadata["upstream_source_ids"])
+    source_ids.update(UUID(str(value)) for value in raw_upstream)
 
 
 def _latest(
@@ -423,9 +468,11 @@ def _latest(
 def _same_period_pair(
     by_name: dict[str, list[MetricFinancialFact]], left: str, right: str
 ) -> tuple[MetricFinancialFact, MetricFinancialFact] | None:
-    right_by_period = {item.period_end: item for item in by_name.get(right, [])}
+    right_by_period = {
+        (item.period_end, item.period_type): item for item in by_name.get(right, [])
+    }
     for left_fact in by_name.get(left, []):
-        right_fact = right_by_period.get(left_fact.period_end)
+        right_fact = right_by_period.get((left_fact.period_end, left_fact.period_type))
         if right_fact is not None:
             return left_fact, right_fact
     return None
@@ -442,8 +489,10 @@ def _comparable_previous(
 ) -> MetricFinancialFact | None:
     candidates = [
         item
-        for item in rows[1:]
-        if item.period_type == latest.period_type and item.period_end < latest.period_end
+        for item in rows
+        if item is not latest
+        and item.period_type == latest.period_type
+        and item.period_end < latest.period_end
     ]
     if latest.period_type in {"quarterly", "half_year", "nine_month"}:
         annual_comparable = [
@@ -461,8 +510,25 @@ def _units_compatible(*units: str | None) -> bool:
     return len(normalized) <= 1
 
 
+def _units_compatible_for_per_share(value_unit: str | None, shares_unit: str | None) -> bool:
+    value_text = str(value_unit or "").lower()
+    shares_text = str(shares_unit or "").lower()
+    if not value_text or not shares_text:
+        return True
+    value_scale = _scale_token(value_text)
+    share_scale = _scale_token(shares_text)
+    return value_scale is None or share_scale is None or value_scale == share_scale
+
+
+def _scale_token(value: str) -> str | None:
+    for token in ("crore", "million", "billion", "lakh", "thousand"):
+        if token in value:
+            return token
+    return None
+
+
 def _percent_to_ratio(value: Decimal, unit: str | None) -> Decimal:
     normalized = str(unit or "").strip().lower()
-    if normalized in {"%", "percent", "percentage", "pct"} or abs(value) > Decimal("2"):
-        return value / Decimal("100")
+    if normalized in {"%", "percent", "percentage", "pct"} or abs(value) > Decimal(2):
+        return value / Decimal(100)
     return value
