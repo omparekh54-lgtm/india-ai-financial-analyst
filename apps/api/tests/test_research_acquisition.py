@@ -12,7 +12,7 @@ from app.research.acquisition import FreshResearchAcquisitionService
 
 class FakeTavily:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, str, int]] = []
 
     async def search(
         self,
@@ -23,7 +23,7 @@ class FakeTavily:
         include_domains: list[str] | None = None,
         exclude_domains: list[str] | None = None,
     ) -> list[SourceEnvelope]:
-        self.calls.append((query, topic))
+        self.calls.append((query, topic, max_results))
         return [
             SourceEnvelope(
                 source_type="web_search",
@@ -63,7 +63,7 @@ def _cached_item(index: int) -> SourceEnvelope:
 
 
 @pytest.mark.asyncio
-async def test_cache_hit_uses_zero_tavily_calls() -> None:
+async def test_standard_cache_hit_uses_zero_tavily_calls() -> None:
     settings = Settings(
         enable_external_data_calls=True,
         tavily_api_key="configured",
@@ -76,17 +76,21 @@ async def test_cache_hit_uses_zero_tavily_calls() -> None:
         security_id=uuid4(),
         security={"legal_name": "Example Limited", "nse_symbol": "EXAMPLE"},
         mode="full_analysis",
+        depth="standard",
         context={},
         evidence=[],
     )
 
     assert tavily.calls == []
-    assert context["research_acquisition"]["status"] == "cache_hit"  # type: ignore[index]
+    acquisition = context["research_acquisition"]
+    assert isinstance(acquisition, dict)
+    assert acquisition["status"] == "cache_hit"
+    assert acquisition["depth"] == "standard"
     assert len(evidence) == 4
 
 
 @pytest.mark.asyncio
-async def test_cache_miss_never_exceeds_configured_search_limit() -> None:
+async def test_standard_cache_miss_never_exceeds_configured_search_limit() -> None:
     settings = Settings(
         enable_external_data_calls=True,
         tavily_api_key="configured",
@@ -100,10 +104,68 @@ async def test_cache_miss_never_exceeds_configured_search_limit() -> None:
         security_id=uuid4(),
         security={"legal_name": "Example Limited", "nse_symbol": "EXAMPLE"},
         mode="why_did_it_move",
+        depth="standard",
         context={},
         evidence=[],
     )
 
     assert len(tavily.calls) == 2
+    assert all(max_results <= 5 for _query, _topic, max_results in tavily.calls)
     assert len(service.persisted) == 2
-    assert context["research_acquisition"]["status"] == "fresh"  # type: ignore[index]
+    acquisition = context["research_acquisition"]
+    assert isinstance(acquisition, dict)
+    assert acquisition["status"] == "fresh"
+
+
+@pytest.mark.asyncio
+async def test_quick_depth_uses_one_small_search() -> None:
+    settings = Settings(
+        enable_external_data_calls=True,
+        tavily_api_key="configured",
+        web_research_max_searches_per_job=4,
+        web_research_max_results_per_search=8,
+    )
+    tavily = FakeTavily()
+    service = StubAcquisition(settings, tavily, [])
+
+    context, _evidence = await service.enrich(
+        security_id=uuid4(),
+        security={"legal_name": "Example Limited", "nse_symbol": "EXAMPLE"},
+        mode="full_analysis",
+        depth="quick",
+        context={},
+        evidence=[],
+    )
+
+    assert len(tavily.calls) == 1
+    assert tavily.calls[0][2] == 3
+    acquisition = context["research_acquisition"]
+    assert isinstance(acquisition, dict)
+    assert acquisition["depth"] == "quick"
+
+
+@pytest.mark.asyncio
+async def test_deep_depth_uses_configured_hard_caps() -> None:
+    settings = Settings(
+        enable_external_data_calls=True,
+        tavily_api_key="configured",
+        web_research_max_searches_per_job=4,
+        web_research_max_results_per_search=7,
+    )
+    tavily = FakeTavily()
+    service = StubAcquisition(settings, tavily, [])
+
+    context, _evidence = await service.enrich(
+        security_id=uuid4(),
+        security={"legal_name": "Example Limited", "nse_symbol": "EXAMPLE"},
+        mode="full_analysis",
+        depth="deep",
+        context={},
+        evidence=[],
+    )
+
+    assert len(tavily.calls) == 4
+    assert all(max_results == 7 for _query, _topic, max_results in tavily.calls)
+    acquisition = context["research_acquisition"]
+    assert isinstance(acquisition, dict)
+    assert acquisition["depth"] == "deep"
