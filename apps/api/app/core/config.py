@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     cerebras_route_cost: ProviderRouteCost = "free"
     provider_circuit_failure_threshold: int = Field(default=2, ge=1, le=10)
     provider_circuit_cooldown_seconds: int = Field(default=60, ge=5, le=3600)
+    # A single research job cannot fan out indefinitely across free LLM routes. The gateway
+    # reserves a conservative token estimate before every provider request, including fallbacks.
+    llm_max_calls_per_job: int = Field(default=10, ge=1, le=64)
+    llm_max_reserved_tokens_per_job: int = Field(default=24000, ge=1000, le=250000)
 
     tavily_api_key: str | None = None
     fred_api_key: str | None = None
