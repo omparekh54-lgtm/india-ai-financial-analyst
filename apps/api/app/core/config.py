@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     gemini_route_cost: ProviderRouteCost = "free"
     nvidia_route_cost: ProviderRouteCost = "free"
     cerebras_route_cost: ProviderRouteCost = "free"
+    provider_circuit_failure_threshold: int = Field(default=2, ge=1, le=10)
+    provider_circuit_cooldown_seconds: int = Field(default=60, ge=5, le=3600)
 
     tavily_api_key: str | None = None
     fred_api_key: str | None = None
