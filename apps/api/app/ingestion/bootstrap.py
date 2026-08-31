@@ -171,6 +171,8 @@ def build_bootstrap_plan(
     upstox_url: str | None,
     upstox_approval_reference: str | None,
     nse_min_rows: int,
+    run_nse_benchmarks: bool,
+    nse_benchmark_min_rows: int,
     financials: tuple[FinancialBootstrapSpec, ...],
     financial_min_rows: int,
     markets: tuple[MarketBootstrapSpec, ...],
@@ -196,6 +198,8 @@ def build_bootstrap_plan(
         raise ValueError("security_master_provider must be nse or upstox")
     if nse_min_rows < 1000:
         raise ValueError("nse_min_rows must be >= 1000 for the production NSE universe")
+    if nse_benchmark_min_rows < 2:
+        raise ValueError("nse_benchmark_min_rows must be >= 2")
     if financial_min_rows < 1:
         raise ValueError("financial_min_rows must be >= 1")
     if market_min_rows < 1:
@@ -248,6 +252,17 @@ def build_bootstrap_plan(
         if dry_run:
             command.append("--dry-run")
         stages.append(BootstrapStage(name="nse_universe", command=tuple(command)))
+
+    if run_nse_benchmarks:
+        command = [
+            python_executable,
+            str(scripts_dir / "backfill_nse_benchmarks.py"),
+            "--min-rows",
+            str(nse_benchmark_min_rows),
+        ]
+        if dry_run:
+            command.append("--dry-run")
+        stages.append(BootstrapStage(name="nse_benchmarks", command=tuple(command)))
 
     for index, financial_spec in enumerate(financials, start=1):
         command = [
