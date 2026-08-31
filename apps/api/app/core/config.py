@@ -1,7 +1,11 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+ProviderRouteCost = Literal["free", "paid"]
 
 
 class Settings(BaseSettings):
@@ -38,6 +42,13 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.5-flash"
     gemini_multimodal_model: str | None = None
     gemini_audio_model: str = "gemini-3.7-flash"
+
+    # v2 cost guardrail. A route marked paid is never eligible while FREE_ONLY is enabled.
+    free_only: bool = True
+    groq_route_cost: ProviderRouteCost = "free"
+    gemini_route_cost: ProviderRouteCost = "free"
+    nvidia_route_cost: ProviderRouteCost = "free"
+    cerebras_route_cost: ProviderRouteCost = "free"
 
     tavily_api_key: str | None = None
     fred_api_key: str | None = None
@@ -111,6 +122,15 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    def provider_route_cost(self, provider: str) -> ProviderRouteCost:
+        costs: dict[str, ProviderRouteCost] = {
+            "groq": self.groq_route_cost,
+            "gemini": self.gemini_route_cost,
+            "nvidia": self.nvidia_route_cost,
+            "cerebras": self.cerebras_route_cost,
+        }
+        return costs.get(provider, "paid")
 
 
 @lru_cache
