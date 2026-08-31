@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from app.agents.contracts import AgentName
 from app.core.config import Settings
 from app.core.data_readiness import DataCoverage
+from app.core.financial_history_coverage import load_financial_history_coverage
 from app.core.market_history_coverage import load_market_history_coverage
 
 _REQUIRED_MACRO_SERIES = frozenset(
@@ -53,6 +54,7 @@ class AgentDataCoverage:
     benchmark_codes_with_sourced_bars: frozenset[str]
     macro_series_with_sourced_observations: frozenset[str]
     history_limited_recent_securities: int = 0
+    financial_history_limited_recent_securities: int = 0
 
     def as_dict(self) -> dict[str, object]:
         total = self.nse_eq_securities
@@ -64,6 +66,9 @@ class AgentDataCoverage:
             "classification_coverage_pct": _coverage_pct(self.classified_securities, total),
             "financial_history_securities": self.financial_history_securities,
             "financial_history_coverage_pct": _coverage_pct(self.financial_history_securities, total),
+            "financial_history_limited_recent_securities": (
+                self.financial_history_limited_recent_securities
+            ),
             "recent_filing_evidence_securities": self.recent_filing_evidence_securities,
             "recent_filing_coverage_pct": _coverage_pct(
                 self.recent_filing_evidence_securities,
@@ -140,14 +145,6 @@ async def load_agent_data_coverage(engine: AsyncEngine) -> AgentDataCoverage:
           from securities
           where primary_exchange = 'NSE'
             and coalesce(metadata->>'nse_series', 'EQ') = 'EQ'
-        ), financial_history as (
-          select ff.security_id
-          from financial_facts ff
-          join nse_eq n on n.id = ff.security_id
-          where ff.source_id is not null
-          group by ff.security_id
-          having count(distinct ff.period_end) >= 8
-             and count(distinct ff.fact_name) >= 6
         ), recent_filings as (
           select distinct src.security_id
           from sources src
@@ -209,7 +206,6 @@ async def load_agent_data_coverage(engine: AsyncEngine) -> AgentDataCoverage:
                   and src.checksum = n.metadata->>'classification_sha256'
               )
           ) as classified_securities,
-          (select count(*) from financial_history) as financial_history_securities,
           (select count(*) from recent_filings) as recent_filing_evidence_securities,
           (select count(*) from recent_earnings) as recent_earnings_evidence_securities,
           (select count(*) from peer_metrics) as peer_metric_securities
@@ -241,12 +237,13 @@ async def load_agent_data_coverage(engine: AsyncEngine) -> AgentDataCoverage:
             )
         ).scalars().all()
 
+    financial_history = await load_financial_history_coverage(engine)
     market_history = await load_market_history_coverage(engine)
     return AgentDataCoverage(
         nse_eq_securities=_int(row.get("nse_eq_securities")),
         provider_mapped_securities=_int(row.get("provider_mapped_securities")),
         classified_securities=_int(row.get("classified_securities")),
-        financial_history_securities=_int(row.get("financial_history_securities")),
+        financial_history_securities=financial_history.complete_securities,
         recent_filing_evidence_securities=_int(row.get("recent_filing_evidence_securities")),
         recent_earnings_evidence_securities=_int(row.get("recent_earnings_evidence_securities")),
         technical_history_securities=market_history.complete_securities,
@@ -254,6 +251,9 @@ async def load_agent_data_coverage(engine: AsyncEngine) -> AgentDataCoverage:
         benchmark_codes_with_sourced_bars=frozenset(str(value).upper() for value in benchmark_rows),
         macro_series_with_sourced_observations=frozenset(str(value) for value in macro_rows),
         history_limited_recent_securities=market_history.history_limited_recent_listings,
+        financial_history_limited_recent_securities=(
+            financial_history.history_limited_recent_listings
+        ),
     )
 
 
@@ -291,6 +291,21 @@ def evaluate_agent_readiness(
                 "complete available market history but fewer than 30 sessions; technical indicators "
                 "must report a listing-age limitation for those securities."
             )
+        if (
+            agent
+            in {
+                AgentName.FINANCIALS,
+                AgentName.EARNINGS,
+                AgentName.VALUATION,
+                AgentName.RISK,
+            }
+            and agent_coverage.financial_history_limited_recent_securities > 0
+        ):
+            warnings.append(
+                f"{agent_coverage.financial_history_limited_recent_securities} recent NSE listing(s) "
+                "have complete available post-listing financial history but fewer than eight "
+                "reporting periods; analysis must state the listing-age limitation."
+            )
         return tuple(warnings)
 
     universe_ready = total >= min_nse_eq_securities
@@ -306,7 +321,6 @@ def evaluate_agent_readiness(
     market_fresh = _datetime_age_days(now, corpus_coverage.latest_market_bar) <= 7
     benchmark_fresh = _datetime_age_days(now, corpus_coverage.latest_benchmark_bar) <= 7
     macro_fresh = _date_age_days(now, corpus_coverage.latest_macro_observation) <= 45
-    financial_fresh = _date_age_days(now, corpus_coverage.latest_financial_period) <= 200
     web_acquisition_ready = bool(settings.enable_external_data_calls and settings.tavily_api_key)
 
     agent_errors: dict[AgentName, tuple[str, ...]] = {}
@@ -334,11 +348,10 @@ def evaluate_agent_readiness(
         (
             financial_ready,
             (
-                "Every supported security needs sourced financial history across at least 8 periods "
-                "and 6 canonical fact types."
+                "Every supported security needs complete listing-age-aware sourced financial "
+                "history, at least 6 canonical fact types, and a latest period within 200 days."
             ),
         ),
-        (financial_fresh, "Financial history is stale beyond the 200-day production window."),
     )
     agent_errors[AgentName.FILINGS] = errors_for(
         (
