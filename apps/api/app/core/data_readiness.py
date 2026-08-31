@@ -28,6 +28,7 @@ class DataCoverage:
     security_metrics: int
     sourced_security_metrics: int
     enabled_official_feeds: int
+    enabled_unapproved_official_feeds: int
     latest_financial_period: date | None = None
     latest_corporate_event: datetime | None = None
     latest_market_bar: datetime | None = None
@@ -55,6 +56,7 @@ class DataCoverage:
             "security_metrics": self.security_metrics,
             "sourced_security_metrics": self.sourced_security_metrics,
             "enabled_official_feeds": self.enabled_official_feeds,
+            "enabled_unapproved_official_feeds": self.enabled_unapproved_official_feeds,
             "latest_financial_period": _iso(self.latest_financial_period),
             "latest_corporate_event": _iso(self.latest_corporate_event),
             "latest_market_bar": _iso(self.latest_market_bar),
@@ -123,6 +125,13 @@ async def load_data_coverage(engine: AsyncEngine) -> DataCoverage:
           (select count(*) from security_metrics where source_id is not null)
             as sourced_security_metrics,
           (select count(*) from official_data_feeds where enabled) as enabled_official_feeds,
+          (
+            select count(*)
+            from official_data_feeds
+            where enabled
+              and lower(coalesce(parser_config->>'production_requires_licensing_review', 'false'))
+                in ('true', '1', 'yes', 'y', 'on')
+          ) as enabled_unapproved_official_feeds,
           (select max(period_end) from financial_facts) as latest_financial_period,
           (select max(event_at) from corporate_events) as latest_corporate_event,
           (select max(ts) from market_bars) as latest_market_bar,
@@ -152,6 +161,7 @@ async def load_data_coverage(engine: AsyncEngine) -> DataCoverage:
         security_metrics=int(row["security_metrics"] or 0),
         sourced_security_metrics=int(row["sourced_security_metrics"] or 0),
         enabled_official_feeds=int(row["enabled_official_feeds"] or 0),
+        enabled_unapproved_official_feeds=int(row["enabled_unapproved_official_feeds"] or 0),
         latest_financial_period=row["latest_financial_period"],
         latest_corporate_event=row["latest_corporate_event"],
         latest_market_bar=row["latest_market_bar"],
@@ -189,6 +199,11 @@ def evaluate_data_coverage(
         errors.append(
             "Non-production provenance is present in the research corpus: "
             f"{coverage.nonproduction_sources} source row(s) contain synthetic/mock/sample markers."
+        )
+    if coverage.enabled_unapproved_official_feeds > 0:
+        errors.append(
+            "Official feeds are enabled before production licensing/source approval is complete: "
+            f"{coverage.enabled_unapproved_official_feeds} feed(s) still require licensing review."
         )
     if coverage.financial_facts == 0:
         warnings.append("No normalized financial facts are populated.")
