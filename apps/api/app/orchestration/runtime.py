@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Protocol
 from uuid import UUID
 
 from app.agents.contracts import AgentInput, AgentName, AgentOutput, EvidenceRef
 from app.orchestration.plan import ResearchPlan
+
+StageProgressCallback = Callable[[str, int], Awaitable[None]]
 
 
 class AgentHandler(Protocol):
@@ -56,13 +58,23 @@ class OrchestratorRuntime:
         self.semaphore = asyncio.Semaphore(max_concurrency)
         self.context_loader = context_loader
 
-    async def run(self, plan: ResearchPlan, agent_input: AgentInput) -> list[AgentOutput]:
+    async def run(
+        self,
+        plan: ResearchPlan,
+        agent_input: AgentInput,
+        *,
+        on_stage: StageProgressCallback | None = None,
+    ) -> list[AgentOutput]:
         outputs: list[AgentOutput] = []
         working_input = agent_input.model_copy(deep=True)
         working_input.context["analysis_mode"] = plan.mode.value
         working_input.context["analysis_depth"] = plan.depth.value
 
         for stage in plan.stages:
+            if on_stage is not None:
+                stage_name, progress = _progress_for_stage(stage.name)
+                await on_stage(stage_name, progress)
+
             if stage.name == "validate":
                 working_input.context["candidate_claims"] = [
                     claim.model_dump(mode="json")
@@ -142,6 +154,16 @@ class OrchestratorRuntime:
         handler = self.registry.get(agent)
         async with self.semaphore:
             return await handler.run(agent_input.model_copy(deep=True))
+
+
+def _progress_for_stage(stage_name: str) -> tuple[str, int]:
+    return {
+        "resolve": ("resolving", 10),
+        "collect": ("collecting", 30),
+        "analyze": ("analyzing", 55),
+        "validate": ("validating", 75),
+        "synthesize": ("synthesizing", 90),
+    }.get(stage_name, (stage_name, 25))
 
 
 def _promote_stage_metrics(context: dict[str, object], outputs: list[AgentOutput]) -> None:
