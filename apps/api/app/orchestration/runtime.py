@@ -76,12 +76,7 @@ class OrchestratorRuntime:
                 await on_stage(stage_name, progress)
 
             if stage.name == "validate":
-                working_input.context["candidate_claims"] = [
-                    claim.model_dump(mode="json")
-                    for output in outputs
-                    for claim in output.claims
-                    if output.agent != AgentName.VALIDATOR
-                ]
+                working_input.context["candidate_claims"] = _candidate_claims(outputs)
 
             if stage.name == "synthesize":
                 validator_output = _latest_output(outputs, AgentName.VALIDATOR)
@@ -105,21 +100,91 @@ class OrchestratorRuntime:
                     stage_outputs.append(await self._run_one(agent, working_input))
 
             outputs.extend(stage_outputs)
-            working_input.evidence = _dedupe_evidence(
-                [*working_input.evidence, *(item for output in stage_outputs for item in output.evidence)]
-            )
-            working_input.context.setdefault("agent_outputs", {}).update(
-                {
-                    output.agent.value: output.model_dump(mode="json")
-                    for output in stage_outputs
-                }
-            )
-            _promote_stage_metrics(working_input.context, stage_outputs)
+            self._promote_outputs(working_input, stage_outputs)
 
             if stage.name == "resolve":
                 await self._hydrate_after_resolution(working_input, plan)
+            elif stage.name == "validate":
+                outputs = await self._execute_bounded_repairs(
+                    outputs,
+                    working_input,
+                    on_stage=on_stage,
+                )
 
         return outputs
+
+    async def _execute_bounded_repairs(
+        self,
+        outputs: list[AgentOutput],
+        working_input: AgentInput,
+        *,
+        on_stage: StageProgressCallback | None,
+    ) -> list[AgentOutput]:
+        validator_output = _latest_output(outputs, AgentName.VALIDATOR)
+        if validator_output is None:
+            return outputs
+        raw_tasks = validator_output.metrics.get("repair_tasks")
+        if not isinstance(raw_tasks, list):
+            return outputs
+
+        repair_agents: list[AgentName] = []
+        for raw_task in raw_tasks:
+            if not isinstance(raw_task, dict) or raw_task.get("retryable") is not True:
+                continue
+            try:
+                agent = AgentName(str(raw_task.get("agent")))
+            except ValueError:
+                continue
+            if agent in {
+                AgentName.ORCHESTRATOR,
+                AgentName.ENTITY,
+                AgentName.VALIDATOR,
+                AgentName.SYNTHESIS,
+            }:
+                continue
+            if agent not in repair_agents:
+                repair_agents.append(agent)
+
+        if not repair_agents:
+            return outputs
+        if on_stage is not None:
+            await on_stage("repairing", 82)
+
+        working_input.context["repair_iteration"] = 1
+        working_input.context["repair_tasks"] = raw_tasks
+        repaired_outputs = await asyncio.gather(
+            *(self._run_one(agent, working_input) for agent in repair_agents)
+        )
+
+        retained = [
+            output
+            for output in outputs
+            if output.agent not in set(repair_agents) | {AgentName.VALIDATOR}
+        ]
+        retained.extend(repaired_outputs)
+        self._promote_outputs(working_input, repaired_outputs)
+        working_input.context["candidate_claims"] = _candidate_claims(retained)
+        repaired_validator = await self._run_one(AgentName.VALIDATOR, working_input)
+        retained.append(repaired_validator)
+        self._promote_outputs(working_input, [repaired_validator])
+        working_input.context["repair_completed"] = True
+        return retained
+
+    def _promote_outputs(
+        self,
+        working_input: AgentInput,
+        stage_outputs: list[AgentOutput],
+    ) -> None:
+        working_input.evidence = _dedupe_evidence(
+            [*working_input.evidence, *(item for output in stage_outputs for item in output.evidence)]
+        )
+        working_input.context.setdefault("agent_outputs", {}).update(
+            {
+                output.agent.value: output.model_dump(mode="json")
+                for output in stage_outputs
+            }
+        )
+        _promote_stage_metrics(working_input.context, stage_outputs)
 
     async def _hydrate_after_resolution(
         self,
@@ -154,6 +219,15 @@ class OrchestratorRuntime:
         handler = self.registry.get(agent)
         async with self.semaphore:
             return await handler.run(agent_input.model_copy(deep=True))
+
+
+def _candidate_claims(outputs: list[AgentOutput]) -> list[dict[str, object]]:
+    return [
+        claim.model_dump(mode="json")
+        for output in outputs
+        for claim in output.claims
+        if output.agent != AgentName.VALIDATOR
+    ]
 
 
 def _progress_for_stage(stage_name: str) -> tuple[str, int]:
