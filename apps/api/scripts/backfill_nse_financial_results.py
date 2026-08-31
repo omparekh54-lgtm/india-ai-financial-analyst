@@ -25,9 +25,9 @@ from app.ingestion.nse_financial_corpus import (
     financial_result_metadata,
     select_financial_result_records,
 )
+from app.ingestion.reference_provenance import resolve_security
 from app.ingestion.xbrl_evidence import XbrlEvidenceIngestor
 from app.ingestion.xbrl_financials import parse_financial_xbrl
-from app.securities.repository import SecurityMasterRepository
 
 API_ROOT = Path(__file__).resolve().parents[1]
 
@@ -40,16 +40,19 @@ class FinancialTarget:
 
 
 async def _target_for_identifier(engine: AsyncEngine, identifier: str) -> FinancialTarget:
-    repository = SecurityMasterRepository(engine)
-    record = await repository.resolve(identifier)
-    if record is None:
-        raise ValueError(f"security not found: {identifier}")
-    if not record.nse_symbol:
+    security_id, legal_name = await resolve_security(engine, identifier)
+    async with engine.connect() as connection:
+        nse_symbol = await connection.scalar(
+            text("select nse_symbol from securities where id = :security_id"),
+            {"security_id": security_id},
+        )
+    symbol = str(nse_symbol or "").strip().upper()
+    if not symbol:
         raise ValueError(f"security has no NSE symbol: {identifier}")
     return FinancialTarget(
-        security_id=record.id,
-        symbol=record.nse_symbol.strip().upper(),
-        legal_name=record.legal_name,
+        security_id=security_id,
+        symbol=symbol,
+        legal_name=legal_name,
     )
 
 
