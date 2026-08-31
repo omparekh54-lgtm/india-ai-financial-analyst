@@ -224,7 +224,7 @@ class XbrlEvidenceIngestor:
         }
 
 
-def _value_text(value: int | float | Decimal | str) -> str:
+def _value_text(value: float | Decimal | str) -> str:
     if isinstance(value, Decimal):
         return format(value, "f")
     return str(value).strip()
