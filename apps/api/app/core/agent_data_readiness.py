@@ -410,8 +410,9 @@ def evaluate_agent_readiness(
     downstream_errors = tuple(
         f"{agent.value} is not data-ready" for agent in specialists if agent_errors[agent]
     )
-    agent_errors[AgentName.ORCHESTRATOR] = downstream_errors
-    agent_errors[AgentName.SYNTHESIS] = downstream_errors
+    propagated_downstream_errors = tuple(dict.fromkeys((*global_errors, *downstream_errors)))
+    agent_errors[AgentName.ORCHESTRATOR] = propagated_downstream_errors
+    agent_errors[AgentName.SYNTHESIS] = propagated_downstream_errors
 
     agents = tuple(
         AgentReadiness(
