@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Self
 
 import httpx
@@ -95,7 +95,7 @@ def parse_nse_fii_dii_cash_flows(payload: object) -> list[MacroObservation]:
         raise TypeError("NSE FII/DII response must contain a row list")
 
     parsed: dict[str, MacroObservation] = {}
-    dates = set()
+    dates: set[date] = set()
     for raw in rows:
         if not isinstance(raw, dict):
             continue
@@ -140,7 +140,7 @@ def parse_nse_fii_dii_cash_flows(payload: object) -> list[MacroObservation]:
     return [parsed["fii_cash_net_cr"], parsed["dii_cash_net_cr"]]
 
 
-def _parse_date(value: object):
+def _parse_date(value: object) -> date:
     if not isinstance(value, str) or not value.strip():
         raise ValueError("NSE FII/DII row is missing its date")
     cleaned = value.strip().upper()
