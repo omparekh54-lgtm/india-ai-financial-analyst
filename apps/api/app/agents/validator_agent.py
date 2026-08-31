@@ -14,6 +14,13 @@ class RecomputeResult:
     value: float | None = None
 
 
+@dataclass(frozen=True)
+class ComparableValue:
+    value: float
+    family: str
+    currency: str | None
+
+
 class EvidenceCrossValidationAgent:
     """Recompute, source-grade, reconcile contradictions, and emit targeted repair tasks."""
 
@@ -23,16 +30,12 @@ class EvidenceCrossValidationAgent:
         evidence_by_id = {item.evidence_id: item for item in agent_input.evidence}
 
         initial = [self._validate_claim(claim, evidence_by_id) for claim in claims]
-        validated, contradiction_count = self._reconcile_conflicts(initial, evidence_by_id)
+        validated, conflict_metrics = self._reconcile_conflicts(initial, evidence_by_id)
 
         unsupported = sum(claim.status == "unsupported" for claim in validated)
         stale = sum(claim.status == "stale" for claim in validated)
         contested = sum(claim.status == "contested" for claim in validated)
-        recomputed = sum(
-            bool(claim.data.get("validator_recomputed"))
-            for claim in validated
-            if isinstance(claim.data, dict)
-        )
+        recomputed = sum(bool(claim.data.get("validator_recomputed")) for claim in validated)
         repair_tasks = _repair_tasks(validated)
 
         return AgentOutput(
@@ -45,7 +48,9 @@ class EvidenceCrossValidationAgent:
                 "unsupported_count": unsupported,
                 "stale_count": stale,
                 "contested_count": contested,
-                "contradiction_count": contradiction_count,
+                "contradiction_count": conflict_metrics["contradiction_count"],
+                "unit_mismatch_count": conflict_metrics["unit_mismatch_count"],
+                "currency_mismatch_count": conflict_metrics["currency_mismatch_count"],
                 "recomputed_count": recomputed,
                 "evidence_coverage": _evidence_coverage(validated),
                 "repair_tasks": repair_tasks,
@@ -147,7 +152,7 @@ class EvidenceCrossValidationAgent:
         self,
         claims: list[Claim],
         evidence_by_id: dict[UUID, EvidenceRef],
-    ) -> tuple[list[Claim], int]:
+    ) -> tuple[list[Claim], dict[str, int]]:
         groups: dict[tuple[str, str], list[int]] = {}
         for index, claim in enumerate(claims):
             metric = _claim_metric(claim)
@@ -159,12 +164,33 @@ class EvidenceCrossValidationAgent:
 
         reconciled = list(claims)
         contradiction_count = 0
+        unit_mismatch_count = 0
+        currency_mismatch_count = 0
         for indices in groups.values():
             if len(indices) < 2:
                 continue
-            values = [_claim_value(reconciled[index]) for index in indices]
-            numeric_values = [value for value in values if value is not None]
-            if len(numeric_values) < 2 or _values_agree(numeric_values):
+
+            comparable = [_comparable_value(reconciled[index]) for index in indices]
+            valid = [item for item in comparable if item is not None]
+            if len(valid) < 2:
+                unit_mismatch_count += 1
+                _mark_contested(reconciled, indices, "validator_unit_mismatch")
+                continue
+
+            families = {item.family for item in valid}
+            if len(families) != 1:
+                unit_mismatch_count += 1
+                _mark_contested(reconciled, indices, "validator_unit_mismatch")
+                continue
+
+            currencies = {item.currency for item in valid if item.currency}
+            if len(currencies) > 1:
+                currency_mismatch_count += 1
+                _mark_contested(reconciled, indices, "validator_currency_mismatch")
+                continue
+
+            numeric_values = [item.value for item in valid]
+            if _values_agree(numeric_values):
                 continue
 
             contradiction_count += 1
@@ -187,20 +213,27 @@ class EvidenceCrossValidationAgent:
                 losing = [index for index in indices if index != winner]
             else:
                 losing = indices
+            _mark_contested(reconciled, losing, "validator_conflict")
 
-            for index in losing:
-                claim = reconciled[index]
-                data = dict(claim.data)
-                data["validator_conflict"] = True
-                reconciled[index] = claim.model_copy(
-                    update={
-                        "status": "contested",
-                        "confidence": min(claim.confidence, 0.50),
-                        "data": data,
-                    }
-                )
+        return reconciled, {
+            "contradiction_count": contradiction_count,
+            "unit_mismatch_count": unit_mismatch_count,
+            "currency_mismatch_count": currency_mismatch_count,
+        }
 
-        return reconciled, contradiction_count
+
+def _mark_contested(claims: list[Claim], indices: list[int], reason_key: str) -> None:
+    for index in indices:
+        claim = claims[index]
+        data = dict(claim.data)
+        data[reason_key] = True
+        claims[index] = claim.model_copy(
+            update={
+                "status": "contested",
+                "confidence": min(claim.confidence, 0.50),
+                "data": data,
+            }
+        )
 
 
 def _claim_metric(claim: Claim) -> str | None:
@@ -214,6 +247,43 @@ def _claim_value(claim: Claim) -> float | None:
     if claim.value is not None:
         return claim.value
     return _number(claim.data.get("value"))
+
+
+def _comparable_value(claim: Claim) -> ComparableValue | None:
+    value = _claim_value(claim)
+    if value is None:
+        return None
+    unit = str(claim.unit or claim.data.get("unit") or "").strip().lower()
+    currency = str(claim.currency or claim.data.get("currency") or "").strip().upper() or None
+
+    if unit in {"%", "percent", "percentage", "pct"}:
+        return ComparableValue(value=value / 100.0, family="ratio", currency=None)
+    if unit in {"bps", "basis_points", "basis points"}:
+        return ComparableValue(value=value / 10_000.0, family="ratio", currency=None)
+    if unit in {"ratio", "multiple", "x", ""}:
+        return ComparableValue(value=value, family=unit or "scalar", currency=currency)
+    if unit in {"day", "days"}:
+        return ComparableValue(value=value, family="days", currency=None)
+
+    amount_scales = {
+        "inr": 1.0,
+        "rupee": 1.0,
+        "rupees": 1.0,
+        "rs": 1.0,
+        "₹": 1.0,
+        "lakh": 100_000.0,
+        "lakhs": 100_000.0,
+        "crore": 10_000_000.0,
+        "crores": 10_000_000.0,
+        "million": 1_000_000.0,
+        "billion": 1_000_000_000.0,
+    }
+    scale = amount_scales.get(unit)
+    if scale is not None:
+        return ComparableValue(value=value * scale, family="currency_amount", currency=currency or "INR")
+    if unit in {"score", "shares", "units"}:
+        return ComparableValue(value=value, family=unit, currency=currency)
+    return None
 
 
 def _claim_source_priority(claim: Claim, evidence_by_id: dict[UUID, EvidenceRef]) -> int:
@@ -253,7 +323,7 @@ def _recompute_claim(claim: Claim) -> RecomputeResult:
         previous = _number(calculation.get("previous"))
         if current is not None and previous not in {None, 0.0}:
             assert previous is not None
-            result = current / previous - 1.0
+            result = (current - previous) / abs(previous)
     elif operation == "difference":
         left = _number(calculation.get("left"))
         right = _number(calculation.get("right"))
@@ -265,6 +335,27 @@ def _recompute_claim(claim: Claim) -> RecomputeResult:
             parsed = [_number(value) for value in raw_values]
             if all(value is not None for value in parsed):
                 result = sum(value for value in parsed if value is not None)
+    elif operation == "net_debt_to_ebitda":
+        debt = _number(calculation.get("total_debt"))
+        cash = _number(calculation.get("cash"))
+        ebitda = _number(calculation.get("ebitda"))
+        if debt is not None and cash is not None and ebitda not in {None, 0.0}:
+            assert ebitda is not None
+            result = (debt - cash) / ebitda
+    elif operation == "roce":
+        ebit = _number(calculation.get("ebit"))
+        assets = _number(calculation.get("total_assets"))
+        current_liabilities = _number(calculation.get("current_liabilities"))
+        if ebit is not None and assets is not None and current_liabilities is not None:
+            denominator = assets - current_liabilities
+            if denominator != 0:
+                result = ebit / denominator
+    elif operation == "cash_conversion_cycle":
+        receivable = _number(calculation.get("receivable_days"))
+        inventory = _number(calculation.get("inventory_days"))
+        payable = _number(calculation.get("payable_days"))
+        if receivable is not None and inventory is not None and payable is not None:
+            result = receivable + inventory - payable
 
     if result is None:
         return RecomputeResult(attempted=False, matches=True)
@@ -275,17 +366,19 @@ def _recompute_claim(claim: Claim) -> RecomputeResult:
     )
 
 
-def _repair_tasks(claims: list[Claim]) -> list[dict[str, str]]:
-    tasks: list[dict[str, str]] = []
+def _repair_tasks(claims: list[Claim]) -> list[dict[str, object]]:
+    tasks: list[dict[str, object]] = []
     for claim in claims:
         action: str | None = None
         reason: str | None = None
+        retryable = False
         if claim.status == "unsupported":
             action = "fetch stronger evidence and rerun originating agent"
             reason = "missing evidence"
         elif claim.status == "contested":
             action = "reconcile source period/unit/calculation inputs and rerun originating agent"
             reason = "contradiction or recomputation mismatch"
+            retryable = claim.agent not in {AgentName.VALIDATOR, AgentName.SYNTHESIS}
         elif claim.status == "stale":
             action = "refresh required current evidence and rerun originating agent"
             reason = "stale evidence"
@@ -296,6 +389,7 @@ def _repair_tasks(claims: list[Claim]) -> list[dict[str, str]]:
                     "agent": claim.agent.value,
                     "reason": reason,
                     "required_action": action,
+                    "retryable": retryable,
                 }
             )
     return tasks
