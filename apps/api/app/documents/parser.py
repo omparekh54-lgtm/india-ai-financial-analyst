@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib.util
 import re
+from io import BytesIO
 
 import fitz
 from bs4 import BeautifulSoup
@@ -24,11 +26,56 @@ def parse_document(data: bytes, media_type: str, *, title: str | None = None) ->
             media_type=normalized,
             title=title,
             pages=[ParsedPage(page_number=1, text=_clean_text(text))],
+            metadata={"parser": "text"},
         )
     raise DocumentParseError(f"Unsupported media type: {normalized}")
 
 
 def parse_pdf(data: bytes, *, title: str | None = None) -> ParsedDocument:
+    """Prefer Docling structural extraction when installed, with PyMuPDF as safe fallback."""
+    if importlib.util.find_spec("docling") is not None:
+        try:
+            return _parse_pdf_docling(data, title=title)
+        except Exception:
+            # Parsing availability must degrade gracefully. Gemini/page-level visual analysis can
+            # still enrich the PyMuPDF fallback downstream and Agent 15 will source-grade it.
+            pass
+    return _parse_pdf_pymupdf(data, title=title)
+
+
+def _parse_pdf_docling(data: bytes, *, title: str | None = None) -> ParsedDocument:
+    from docling.datamodel.base_models import DocumentStream
+    from docling.document_converter import DocumentConverter
+
+    stream = DocumentStream(name=title or "document.pdf", stream=BytesIO(data))
+    result = DocumentConverter().convert(stream)
+    document = result.document
+    page_count = len(document.pages)
+    pages: list[ParsedPage] = []
+    for page_number in range(1, page_count + 1):
+        page_markdown = document.export_to_markdown(page_no=page_number)
+        pages.append(
+            ParsedPage(
+                page_number=page_number,
+                text=_clean_text(page_markdown),
+            )
+        )
+
+    return ParsedDocument(
+        media_type="application/pdf",
+        title=title,
+        pages=pages,
+        metadata={
+            "parser": "docling",
+            "structural_markdown": True,
+            "table_count": len(document.tables),
+            "picture_count": len(document.pictures),
+            "page_count": page_count,
+        },
+    )
+
+
+def _parse_pdf_pymupdf(data: bytes, *, title: str | None = None) -> ParsedDocument:
     try:
         document = fitz.open(stream=data, filetype="pdf")
     except Exception as exc:
@@ -39,8 +86,12 @@ def parse_pdf(data: bytes, *, title: str | None = None) -> ParsedDocument:
             ParsedPage(page_number=index + 1, text=_clean_text(page.get_text("text")))
             for index, page in enumerate(document)
         ]
-        metadata = {key: value for key, value in (document.metadata or {}).items() if value}
-        inferred_title = title or metadata.get("title")
+        metadata: dict[str, object] = {
+            key: value for key, value in (document.metadata or {}).items() if value
+        }
+        metadata["parser"] = "pymupdf_fallback"
+        metadata["structural_markdown"] = False
+        inferred_title = title or str(metadata.get("title") or "") or None
         return ParsedDocument(
             media_type="application/pdf",
             title=inferred_title,
@@ -66,6 +117,7 @@ def parse_html(data: bytes, *, title: str | None = None) -> ParsedDocument:
         media_type="text/html",
         title=inferred_title,
         pages=[ParsedPage(page_number=1, text=text)],
+        metadata={"parser": "beautifulsoup"},
     )
 
 
