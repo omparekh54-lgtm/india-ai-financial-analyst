@@ -3,7 +3,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.agents.contracts import AgentInput, AgentName, AgentOutput
-from app.orchestration.plan import AnalysisMode, ExecutionStage, ResearchPlan
+from app.orchestration.plan import AnalysisMode, ExecutionStage, ResearchDepth, ResearchPlan
 from app.orchestration.runtime import AgentRegistry, OrchestratorRuntime
 
 
@@ -29,16 +29,23 @@ class ResolvingAgent:
 class RecordingContextLoader:
     def __init__(self) -> None:
         self.user_id: UUID | None = None
+        self.depth: str | None = None
 
     async def load(
         self,
         security_id: UUID,
         *,
         mode: str,
+        depth: str,
         user_id: UUID | None = None,
     ):
         self.user_id = user_id
-        return {"hydrated_security_id": str(security_id), "mode": mode}, []
+        self.depth = depth
+        return {
+            "hydrated_security_id": str(security_id),
+            "mode": mode,
+            "depth": depth,
+        }, []
 
 
 @pytest.mark.asyncio
@@ -65,7 +72,7 @@ async def test_runtime_executes_stages_in_order() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runtime_passes_authenticated_user_to_context_loader() -> None:
+async def test_runtime_passes_authenticated_user_and_depth_to_context_loader() -> None:
     security_id = uuid4()
     user_id = uuid4()
     loader = RecordingContextLoader()
@@ -77,6 +84,7 @@ async def test_runtime_passes_authenticated_user_to_context_loader() -> None:
     )
     plan = ResearchPlan(
         mode=AnalysisMode.FULL,
+        depth=ResearchDepth.DEEP,
         stages=[
             ExecutionStage(name="resolve", agents=[AgentName.ENTITY], parallel=False),
             ExecutionStage(name="collect", agents=[AgentName.MARKET], parallel=False),
@@ -89,3 +97,4 @@ async def test_runtime_passes_authenticated_user_to_context_loader() -> None:
     )
 
     assert loader.user_id == user_id
+    assert loader.depth == "deep"
