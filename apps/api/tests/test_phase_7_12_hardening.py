@@ -23,7 +23,7 @@ async def test_provider_gateway_enforces_shared_per_job_call_budget() -> None:
         llm_max_reserved_tokens_per_job=10000,
     )
     gateway = ProviderGateway(settings)
-    await gateway._reserve_job_budget(  # noqa: SLF001 - explicit unit test of hard budget boundary
+    await gateway._reserve_job_budget(
         "job-1",
         provider="groq",
         messages=[ChatMessage(role="user", content="test")],
@@ -31,7 +31,7 @@ async def test_provider_gateway_enforces_shared_per_job_call_budget() -> None:
     )
 
     with pytest.raises(ProviderCallError, match="call budget exhausted"):
-        await gateway._reserve_job_budget(  # noqa: SLF001
+        await gateway._reserve_job_budget(
             "job-1",
             provider="gemini",
             messages=[ChatMessage(role="user", content="fallback")],
