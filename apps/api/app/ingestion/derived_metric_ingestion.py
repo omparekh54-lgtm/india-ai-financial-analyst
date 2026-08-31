@@ -175,7 +175,7 @@ def render_derived_metric_evidence(symbol: str, metrics: list[SecurityMetricInpu
         formula = str(metadata.get("formula") or "source_fact_passthrough")
         raw_upstream = metadata.get("upstream_source_ids")
         if not isinstance(raw_upstream, list):
-            raise ValueError("derived metric evidence requires upstream source IDs")
+            raise TypeError("derived metric evidence requires upstream source IDs")
         upstream = ",".join(str(value) for value in raw_upstream)
         lines.append(
             f"- {item.metric_name}: {item.value} {item.unit or 'unit_unspecified'} "
