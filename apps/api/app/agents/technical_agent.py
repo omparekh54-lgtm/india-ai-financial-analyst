@@ -32,6 +32,7 @@ class TechnicalDerivativesAgent:
         close = pd.to_numeric(frame["close"], errors="coerce")
         high = pd.to_numeric(frame["high"], errors="coerce")
         low = pd.to_numeric(frame["low"], errors="coerce")
+        period = str(frame.iloc[-1].get("ts") or "latest_bar")
 
         macd_frame = macd(close)
         metrics: dict[str, object] = {
@@ -59,6 +60,10 @@ class TechnicalDerivativesAgent:
                 confidence=0.99,
                 evidence_ids=evidence_ids,
                 status="pending",
+                metric=name,
+                value=float(value),
+                period=period,
+                calculation_version="technical.indicator.v1",
                 data={"metric": name, "value": value},
             )
             for name, value in metrics.items()
@@ -75,6 +80,10 @@ class TechnicalDerivativesAgent:
                     confidence=0.97,
                     evidence_ids=evidence_ids,
                     status="pending",
+                    metric=name,
+                    value=float(value),
+                    period=period,
+                    calculation_version="technical.derivatives.v1",
                     data={"metric": name, "value": value, "category": "derivatives"},
                 )
             )
