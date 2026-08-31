@@ -11,20 +11,24 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 class DataCoverage:
     nse_eq_securities: int
     provider_instruments: int
+    nse_securities_with_financial_facts: int
     financial_facts: int
     sourced_financial_facts: int
+    nse_securities_with_corporate_events: int
     corporate_events: int
     sourced_corporate_events: int
     sources: int
     nonproduction_sources: int
     evidence_chunks: int
     embedded_evidence_chunks: int
+    nse_securities_with_market_bars: int
     market_bars: int
     sourced_market_bars: int
     benchmark_bars: int
     sourced_benchmark_bars: int
     macro_observations: int
     sourced_macro_observations: int
+    nse_securities_with_security_metrics: int
     security_metrics: int
     sourced_security_metrics: int
     enabled_official_feeds: int
@@ -39,20 +43,40 @@ class DataCoverage:
         return {
             "nse_eq_securities": self.nse_eq_securities,
             "provider_instruments": self.provider_instruments,
+            "nse_securities_with_financial_facts": self.nse_securities_with_financial_facts,
+            "financial_security_coverage_pct": _coverage_pct(
+                self.nse_securities_with_financial_facts,
+                self.nse_eq_securities,
+            ),
             "financial_facts": self.financial_facts,
             "sourced_financial_facts": self.sourced_financial_facts,
+            "nse_securities_with_corporate_events": self.nse_securities_with_corporate_events,
+            "corporate_event_security_coverage_pct": _coverage_pct(
+                self.nse_securities_with_corporate_events,
+                self.nse_eq_securities,
+            ),
             "corporate_events": self.corporate_events,
             "sourced_corporate_events": self.sourced_corporate_events,
             "sources": self.sources,
             "nonproduction_sources": self.nonproduction_sources,
             "evidence_chunks": self.evidence_chunks,
             "embedded_evidence_chunks": self.embedded_evidence_chunks,
+            "nse_securities_with_market_bars": self.nse_securities_with_market_bars,
+            "market_security_coverage_pct": _coverage_pct(
+                self.nse_securities_with_market_bars,
+                self.nse_eq_securities,
+            ),
             "market_bars": self.market_bars,
             "sourced_market_bars": self.sourced_market_bars,
             "benchmark_bars": self.benchmark_bars,
             "sourced_benchmark_bars": self.sourced_benchmark_bars,
             "macro_observations": self.macro_observations,
             "sourced_macro_observations": self.sourced_macro_observations,
+            "nse_securities_with_security_metrics": self.nse_securities_with_security_metrics,
+            "metric_security_coverage_pct": _coverage_pct(
+                self.nse_securities_with_security_metrics,
+                self.nse_eq_securities,
+            ),
             "security_metrics": self.security_metrics,
             "sourced_security_metrics": self.sourced_security_metrics,
             "enabled_official_feeds": self.enabled_official_feeds,
@@ -92,9 +116,23 @@ async def load_data_coverage(engine: AsyncEngine) -> DataCoverage:
              where primary_exchange = 'NSE'
                and coalesce(metadata->>'nse_series', 'EQ') = 'EQ') as nse_eq_securities,
           (select count(*) from provider_instruments) as provider_instruments,
+          (
+            select count(distinct ff.security_id)
+            from financial_facts ff
+            join securities s on s.id = ff.security_id
+            where s.primary_exchange = 'NSE'
+              and coalesce(s.metadata->>'nse_series', 'EQ') = 'EQ'
+          ) as nse_securities_with_financial_facts,
           (select count(*) from financial_facts) as financial_facts,
           (select count(*) from financial_facts where source_id is not null)
             as sourced_financial_facts,
+          (
+            select count(distinct ce.security_id)
+            from corporate_events ce
+            join securities s on s.id = ce.security_id
+            where s.primary_exchange = 'NSE'
+              and coalesce(s.metadata->>'nse_series', 'EQ') = 'EQ'
+          ) as nse_securities_with_corporate_events,
           (select count(*) from corporate_events) as corporate_events,
           (select count(*) from corporate_events where source_id is not null)
             as sourced_corporate_events,
@@ -114,6 +152,13 @@ async def load_data_coverage(engine: AsyncEngine) -> DataCoverage:
           ) as nonproduction_sources,
           (select count(*) from evidence_chunks) as evidence_chunks,
           (select count(*) from evidence_chunks where embedding is not null) as embedded_evidence_chunks,
+          (
+            select count(distinct mb.security_id)
+            from market_bars mb
+            join securities s on s.id = mb.security_id
+            where s.primary_exchange = 'NSE'
+              and coalesce(s.metadata->>'nse_series', 'EQ') = 'EQ'
+          ) as nse_securities_with_market_bars,
           (select count(*) from market_bars) as market_bars,
           (select count(*) from market_bars where source_id is not null) as sourced_market_bars,
           (select count(*) from benchmark_bars) as benchmark_bars,
@@ -121,6 +166,13 @@ async def load_data_coverage(engine: AsyncEngine) -> DataCoverage:
           (select count(*) from macro_observations) as macro_observations,
           (select count(*) from macro_observations where source_id is not null)
             as sourced_macro_observations,
+          (
+            select count(distinct sm.security_id)
+            from security_metrics sm
+            join securities s on s.id = sm.security_id
+            where s.primary_exchange = 'NSE'
+              and coalesce(s.metadata->>'nse_series', 'EQ') = 'EQ'
+          ) as nse_securities_with_security_metrics,
           (select count(*) from security_metrics) as security_metrics,
           (select count(*) from security_metrics where source_id is not null)
             as sourced_security_metrics,
@@ -144,20 +196,24 @@ async def load_data_coverage(engine: AsyncEngine) -> DataCoverage:
     return DataCoverage(
         nse_eq_securities=int(row["nse_eq_securities"] or 0),
         provider_instruments=int(row["provider_instruments"] or 0),
+        nse_securities_with_financial_facts=int(row["nse_securities_with_financial_facts"] or 0),
         financial_facts=int(row["financial_facts"] or 0),
         sourced_financial_facts=int(row["sourced_financial_facts"] or 0),
+        nse_securities_with_corporate_events=int(row["nse_securities_with_corporate_events"] or 0),
         corporate_events=int(row["corporate_events"] or 0),
         sourced_corporate_events=int(row["sourced_corporate_events"] or 0),
         sources=int(row["sources"] or 0),
         nonproduction_sources=int(row["nonproduction_sources"] or 0),
         evidence_chunks=int(row["evidence_chunks"] or 0),
         embedded_evidence_chunks=int(row["embedded_evidence_chunks"] or 0),
+        nse_securities_with_market_bars=int(row["nse_securities_with_market_bars"] or 0),
         market_bars=int(row["market_bars"] or 0),
         sourced_market_bars=int(row["sourced_market_bars"] or 0),
         benchmark_bars=int(row["benchmark_bars"] or 0),
         sourced_benchmark_bars=int(row["sourced_benchmark_bars"] or 0),
         macro_observations=int(row["macro_observations"] or 0),
         sourced_macro_observations=int(row["sourced_macro_observations"] or 0),
+        nse_securities_with_security_metrics=int(row["nse_securities_with_security_metrics"] or 0),
         security_metrics=int(row["security_metrics"] or 0),
         sourced_security_metrics=int(row["sourced_security_metrics"] or 0),
         enabled_official_feeds=int(row["enabled_official_feeds"] or 0),
@@ -214,6 +270,12 @@ def evaluate_data_coverage(
             sourced=coverage.sourced_financial_facts,
             total=coverage.financial_facts,
         )
+        _warn_partial_security_coverage(
+            warnings,
+            label="Normalized financial facts",
+            covered=coverage.nse_securities_with_financial_facts,
+            total=coverage.nse_eq_securities,
+        )
         if _date_age_days(now, coverage.latest_financial_period) > financial_period_max_age_days:
             warnings.append(
                 "Normalized financial facts appear stale; latest period is "
@@ -245,6 +307,12 @@ def evaluate_data_coverage(
             label="stored security market bars",
             sourced=coverage.sourced_market_bars,
             total=coverage.market_bars,
+        )
+        _warn_partial_security_coverage(
+            warnings,
+            label="Stored security market bars",
+            covered=coverage.nse_securities_with_market_bars,
+            total=coverage.nse_eq_securities,
         )
         if _datetime_age_days(now, coverage.latest_market_bar) > market_max_age_days:
             warnings.append(
@@ -288,6 +356,12 @@ def evaluate_data_coverage(
             sourced=coverage.sourced_security_metrics,
             total=coverage.security_metrics,
         )
+        _warn_partial_security_coverage(
+            warnings,
+            label="Comparable/security metrics",
+            covered=coverage.nse_securities_with_security_metrics,
+            total=coverage.nse_eq_securities,
+        )
     if coverage.sources > 0 and coverage.evidence_chunks > 0 and coverage.embedded_evidence_chunks == 0:
         warnings.append("Evidence exists but semantic embedding backfill has not populated vectors.")
     if coverage.enabled_official_feeds == 0:
@@ -314,6 +388,23 @@ def _require_full_provenance(
         errors.append(
             f"{label} contain rows without source provenance: {sourced}/{total} are source-linked."
         )
+
+
+def _warn_partial_security_coverage(
+    warnings: list[str],
+    *,
+    label: str,
+    covered: int,
+    total: int,
+) -> None:
+    if total > 0 and covered < total:
+        warnings.append(f"{label} cover only {covered}/{total} NSE EQ securities.")
+
+
+def _coverage_pct(covered: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    return round((covered / total) * 100.0, 2)
 
 
 def _datetime_age_days(now: datetime, value: datetime | None) -> int:
