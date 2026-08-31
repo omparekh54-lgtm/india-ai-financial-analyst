@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from app.agents.contracts import EvidenceRef
+from app.agents.contracts import EvidenceRef, normalize_evidence_freshness
 
 
 async def load_exchange_filing_evidence(
@@ -94,7 +94,7 @@ async def load_exchange_filing_evidence(
                     else row["event_at"].isoformat() if row["event_at"] else None
                 ),
                 retrieved_at=row["retrieved_at"].isoformat() if row["retrieved_at"] else now,
-                freshness=str(row["freshness"] or "near_live"),
+                freshness=normalize_evidence_freshness(row["freshness"] or "near_live"),
                 excerpt=str(row["content"]),
                 page_number=row["page_number"],
                 section="multimodal_extraction" if is_ai else event_section,
