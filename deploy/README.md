@@ -15,6 +15,8 @@ The production research corpus must never be filled with generated, synthetic, m
 
 Material production data must be traceable to NSE/BSE or an approved/licensed exchange product, SEBI/RBI/NSDL or another authoritative institution, an issuer's official material, an authenticated broker/market-data provider, or an approved/licensed data vendor. Where the schema supports `source_id`, populated material rows must be source-linked. See `docs/DATA_PROVENANCE_POLICY.md` for the complete contract.
 
+Recognized official/regulatory URLs can enter through their governed official path. Any non-official reference import must also provide an approval reference identifying the applicable license, contract, procurement/source-governance approval or equivalent audit record. PostgreSQL constraint `sources_reference_production_approved_chk` prevents a generic `reference_*` row from bypassing this policy.
+
 ## Web environment
 
 Set these on the Next.js deployment only:
@@ -56,10 +58,13 @@ The API distinguishes liveness, runtime readiness and corpus readiness:
 - `GET /health` checks whether the process is alive and reports basic database/configuration state.
 - `GET /ready` is the traffic-admission check. It audits feature dependencies and database reachability and returns HTTP `503` when the runtime is unsafe to serve production traffic.
 - `GET /v1/system/data-readiness` is authenticated and reports the research-corpus gate separately, including NSE-universe coverage, missing datasets, provenance failures and stale-data warnings.
+- `POST /v1/research/run` independently enforces the hard corpus gate when `APP_ENV=production`. If the real-data corpus is not ready, it returns HTTP `503` with `research_corpus_not_ready` **before a research job is created**. Development/test environments may still use their deliberately small fixtures.
+
+This separation is intentional: a container can be runtime-healthy enough to receive operational traffic while production research remains disabled until real data satisfies the hard corpus contract.
 
 When `APP_ENV=production`, critical configuration errors also fail application startup. Examples include missing database/Auth configuration, non-HTTPS production origins, enabled LLM features without their providers, semantic retrieval without its local runtime, or live market without encrypted broker OAuth configuration.
 
-Warnings such as a missing Sentry DSN do not block startup but appear in `/ready`. Configure the API host/load balancer to use `/ready` for readiness and `/health` only for liveness. Do not weaken readiness checks to make a deployment green; fix the production configuration instead.
+Warnings such as a missing Sentry DSN do not block startup but appear in `/ready`. Configure the API host/load balancer to use `/ready` for readiness and `/health` only for liveness. Do not weaken readiness or corpus checks to make a deployment green; fix the production configuration/data instead.
 
 Before rollout, run the zero-external-call structural preflight:
 
@@ -67,7 +72,7 @@ Before rollout, run the zero-external-call structural preflight:
 python scripts/run_production_preflight.py
 ```
 
-This verifies configuration, database connectivity, pgvector, the semantic HNSW index, required tables, research ownership, RLS enablement and required owner-read policies. It does not call an LLM, broker, exchange or market-data API.
+This verifies configuration, database connectivity, pgvector, the semantic HNSW index, required tables, research ownership, RLS enablement, required owner-read policies and the validated generic-reference approval constraint. It does not call an LLM, broker, exchange or market-data API.
 
 After reference/data bootstrap, run the data coverage audit:
 
@@ -95,19 +100,22 @@ Do not substitute an unofficial mirror or generated security list merely to make
 
 ## Approved financial-facts CSVs
 
-`import_financial_csv.py` provides a guarded path for approved/licensed one-security financial exports while automated exchange ingestion remains source-governed. Expected columns are `fact_name`, `period_end`, `period_type`, `value`, with optional `unit`, `period_start` and `metadata_json`.
+`import_financial_csv.py` provides a guarded path for one-security financial exports while automated exchange/XBRL ingestion remains source-governed. Expected columns are `fact_name`, `period_end`, `period_type`, `value`, with optional `unit`, `period_start` and `metadata_json`.
 
-Validate first, replacing `LICENSED_FINANCIAL_SOURCE_URI` with the actual source URI for the export:
+For a non-official licensed source, validate with its actual source URI **and** approval reference:
 
 ```bash
 python scripts/import_financial_csv.py \
   --file /data/reliance_financials.csv \
   --security RELIANCE \
   --source-uri "$LICENSED_FINANCIAL_SOURCE_URI" \
+  --approval-reference "$FINANCIAL_DATA_APPROVAL_REF" \
   --dry-run
 ```
 
-The target security must already exist in the canonical NSE/BSE master. Canonical alias collisions such as `PAT` versus `Profit After Tax` for the same period are rejected. Successful writes create/update a checksum-backed `reference_financials` source record and then use the canonical financial normalizer, including deterministic derived EBITDA/free-cash-flow calculations only when their real sourced components exist.
+For a recognized official source URL, the manual approval reference is not required. The target security must already exist in the canonical NSE/BSE master. Canonical alias collisions such as `PAT` versus `Profit After Tax` for the same period are rejected. Successful writes create/update a checksum-backed `reference_financials` source record and then use the canonical financial normalizer, including deterministic derived EBITDA/free-cash-flow calculations only when their real sourced components exist.
+
+Official exchange XBRL follows a separate end-to-end path: exchange disclosure → official XBRL attachment → XBRL parser → normalized source-linked `financial_facts` → source/event linkage. Do not replace that path with manually generated facts.
 
 ## Guarded one-command corpus bootstrap
 
@@ -116,24 +124,24 @@ The target security must already exist in the canonical NSE/BSE master. Canonica
 Production bootstrap provenance formats are:
 
 ```text
---financial SECURITY,FILE,SOURCE_URI
---market SECURITY,PROVIDER,FILE,SOURCE_URI
---metrics SECURITY,FILE,SOURCE_URI
+--financial SECURITY,FILE,SOURCE_URI[,APPROVAL_REFERENCE]
+--market SECURITY,PROVIDER,FILE,SOURCE_URI[,APPROVAL_REFERENCE]
+--metrics SECURITY,FILE,SOURCE_URI[,APPROVAL_REFERENCE]
 --benchmark CODE,FILE,OFFICIAL_SOURCE_URL
 --macro RBI,SERIES_KEY,FILE,OFFICIAL_SOURCE_URL
 --macro NSDL,FILE,OFFICIAL_SOURCE_URL
 ```
 
-Benchmark source URLs must be on approved official NSE/NSE Indices HTTPS domains. RBI and NSDL macro/flow source URLs must be on the corresponding approved official domains. Financial, market and comparable-metric exports require an explicit real source URI and reject source/provider identifiers marked as synthetic/mock/fake/dummy/fixture/sample/generated/placeholder.
+Benchmark source URLs must be on approved official NSE/NSE Indices HTTPS domains. RBI and NSDL macro/flow source URLs must be on the corresponding approved official domains. Financial, market and comparable-metric exports require an explicit real source URI; non-official sources additionally require the approval-reference field. Source/provider/approval identifiers marked synthetic/mock/fake/dummy/fixture/sample/generated/placeholder are rejected.
 
 Validate all files before writing anything. The following URLs are provenance pages on official domains; use the exact official source/artifact applicable to the file you obtained:
 
 ```bash
 python scripts/bootstrap_research_data.py \
   --nse-file /data/EQUITY_L.csv \
-  --financial "RELIANCE,/data/reliance_financials.csv,$LICENSED_FINANCIAL_SOURCE_URI" \
-  --market "RELIANCE,nse,/data/reliance_prices.csv,$LICENSED_MARKET_SOURCE_URI" \
-  --metrics "RELIANCE,/data/reliance_metrics.csv,$LICENSED_METRICS_SOURCE_URI" \
+  --financial "RELIANCE,/data/reliance_financials.csv,$LICENSED_FINANCIAL_SOURCE_URI,$FINANCIAL_DATA_APPROVAL_REF" \
+  --market "RELIANCE,nse,/data/reliance_prices.csv,$LICENSED_MARKET_SOURCE_URI,$MARKET_DATA_APPROVAL_REF" \
+  --metrics "RELIANCE,/data/reliance_metrics.csv,$LICENSED_METRICS_SOURCE_URI,$METRICS_DATA_APPROVAL_REF" \
   --benchmark "NIFTY50,/data/nifty50.csv,https://www.niftyindices.com/reports/historical-data" \
   --benchmark "INDIAVIX,/data/india_vix.csv,https://www.nseindia.com/market-data/india-vix" \
   --macro "RBI,repo_rate,/data/rbi_repo.csv,https://rbi.org.in/Scripts/Statistics.aspx" \
@@ -145,7 +153,7 @@ For the first write pass, remove `--dry-run`. Add `--require-ready` only when th
 
 If the NSE universe is already populated, later imports can resume with `--skip-nse`. The command is fail-fast and emits a machine-readable JSON summary with coverage before/after and the failed stage, if any. `--run-official-feeds` and `--embed-evidence` are explicit write-capable stages and cannot be combined with `--dry-run`. The bootstrap command never enables disabled feed templates; production feed activation remains a separate licensing/source-governance decision.
 
-`import_reference_csv.py` remains available for approved/licensed provider-neutral benchmark or macro exports outside the official bootstrap flow, but it now also requires `--source-uri`, creates a checksum-backed global source record and writes that `source_id` onto every imported row. It is not an anonymous-data backdoor.
+`import_reference_csv.py` remains available for approved/licensed provider-neutral benchmark or macro exports outside the official bootstrap flow. It requires `--source-uri`, and any non-official source additionally requires `--approval-reference`; it creates a checksum-backed global source record and writes that `source_id` onto every imported row. It is not an anonymous-data backdoor.
 
 ## Worker environment
 
@@ -165,9 +173,9 @@ The production image includes the optional local Sentence-Transformers runtime. 
 Safe activation order:
 
 1. Apply `0013_semantic_evidence.sql` so the HNSW cosine index exists.
-2. Start the API with `ENABLE_SEMANTIC_RETRIEVAL=false` and verify ordinary research still works.
+2. Start the API with `ENABLE_SEMANTIC_RETRIEVAL=false` and verify ordinary research still works in a non-production validation environment.
 3. Enable semantic retrieval on one backend instance and confirm the local embedding model loads successfully.
-4. Backfill existing real filing chunks in bounded batches:
+4. Backfill existing **real filing chunks** in bounded batches:
 
 ```bash
 ENABLE_SEMANTIC_RETRIEVAL=true \
@@ -244,8 +252,8 @@ The API image healthcheck uses `/ready`; worker HTTP healthchecks are disabled b
 1. Apply all database migrations and run `python scripts/run_production_preflight.py`.
 2. Configure Supabase Auth URLs/email settings.
 3. Dry-run `bootstrap_research_data.py` against the official NSE security master plus real provenance-backed financial/market/metrics/benchmark/macro files, inspect checksums/counts, then execute the write pass.
-4. Bootstrap approved real filing/evidence sources, then rerun `python scripts/run_data_coverage_audit.py` and check `/v1/system/data-readiness` from an authenticated session.
-5. Deploy API with every external-call/optional-intelligence switch **off**; verify `/health` and `/ready`.
+4. Bootstrap approved real filing/evidence sources, rerun `python scripts/run_data_coverage_audit.py`, and check `/v1/system/data-readiness` from an authenticated session. Do not expect production research to run until this hard gate passes.
+5. Deploy API with every external-call/optional-intelligence switch **off**; verify `/health` and `/ready`. Confirm an intentionally incomplete corpus receives `research_corpus_not_ready` rather than generating a report.
 6. Deploy web and test account creation/sign-in; verify one user's research is invisible to a second account.
 7. Start approved/licensed official-data ingestion only after the production data-source decision is complete.
 8. Enable semantic retrieval/backfill, then Tavily and LLM providers one at a time; verify provenance, fallback and quotas.
