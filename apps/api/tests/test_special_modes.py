@@ -18,6 +18,47 @@ def test_what_changed_detects_new_and_resolved_risks() -> None:
     assert result["resolved_risks"] == [old_risk]
 
 
+def test_what_changed_compares_disclosures_metrics_valuation_and_confidence() -> None:
+    old_disclosure = {
+        "statement": "Previous quarterly result was filed",
+        "claim_type": "fact",
+    }
+    new_disclosure = {
+        "statement": "New quarterly result shows margin expansion",
+        "claim_type": "fact",
+    }
+    result = what_changed(
+        {
+            "snapshot_at": "2026-08-20T10:00:00Z",
+            "risks": [],
+            "catalysts": [],
+            "metrics": {
+                "market": {"return_1d_pct": 1.0},
+                "financials": {"revenue_growth": 0.10},
+                "valuation": {"base_case_value": 100.0},
+                "confidence": {"data_confidence": 0.80},
+            },
+            "metadata": {"disclosure_claims": [old_disclosure]},
+        },
+        {
+            AgentName.FILINGS.value: [new_disclosure],
+            AgentName.RISK.value: [],
+        },
+        context={
+            "market_metrics": {"return_1d_pct": 2.5},
+            "financial_metrics": {"revenue_growth": 0.15},
+            "valuation_metrics": {"base_case_value": 112.0},
+        },
+        current_confidence={"data_confidence": 0.90},
+    )
+
+    assert result["new_disclosures"] == [new_disclosure]
+    assert result["market_changes"][0]["metric"] == "return_1d_pct"
+    assert result["financial_changes"][0]["current"] == 0.15
+    assert result["valuation_changes"][0]["absolute_change"] == 12.0
+    assert result["confidence_changes"][0]["current"] == 0.90
+
+
 def test_why_move_ranks_material_company_event() -> None:
     result = why_did_it_move(
         {
