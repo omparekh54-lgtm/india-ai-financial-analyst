@@ -27,6 +27,8 @@ jobs:
         run: pip install -e ".[dev,live_market]"
       - name: Ruff
         run: ruff check app tests scripts
+      - name: Typecheck
+        run: mypy app --ignore-missing-imports
       - name: Tests
         run: pytest -q
 
@@ -53,3 +55,5 @@ jobs:
         run: |
           touch .env
           docker compose -f deploy/docker-compose.production.yml config >/dev/null
+      - name: Validate API Dockerfile
+        run: docker build --check apps/api
