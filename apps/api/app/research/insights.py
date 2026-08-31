@@ -46,7 +46,7 @@ def what_changed(
     ]
 
     current_context = context or {}
-    empty_deltas = {
+    empty_deltas: dict[str, list[dict[str, Any]]] = {
         "market_changes": [],
         "financial_changes": [],
         "valuation_changes": [],
