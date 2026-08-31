@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
-from app.core.config import Settings
+from app.core.config import ProviderRouteCost, Settings
 
 
 class Capability(StrEnum):
@@ -17,10 +17,11 @@ class ProviderChoice:
     provider: str
     capability: Capability
     reason: str
+    route_cost: ProviderRouteCost | None = None
 
 
 class ProviderRouter:
-    """Deterministic provider routing with ordered fallbacks and no secret exposure."""
+    """Deterministic provider routing with a hard FREE_ONLY cost-policy gate."""
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -65,13 +66,35 @@ class ProviderRouter:
                 ("nvidia", bool(self.settings.nvidia_api_key), "Deep-reasoning fallback"),
             ]
 
-        choices = [
-            ProviderChoice(provider, capability, reason)
-            for provider, configured, reason in ordered
-            if configured
-        ]
-        if choices:
-            return choices
+        configured: list[ProviderChoice] = []
+        blocked_paid_routes: list[str] = []
+        for provider, has_credential, reason in ordered:
+            if not has_credential:
+                continue
+            route_cost = self.settings.provider_route_cost(provider)
+            if self.settings.free_only and route_cost != "free":
+                blocked_paid_routes.append(provider)
+                continue
+            configured.append(
+                ProviderChoice(
+                    provider=provider,
+                    capability=capability,
+                    reason=reason,
+                    route_cost=route_cost,
+                )
+            )
+
+        if configured:
+            return configured
+
+        if blocked_paid_routes:
+            return [
+                ProviderChoice(
+                    "unavailable",
+                    capability,
+                    "FREE_ONLY blocked configured paid routes: " + ", ".join(blocked_paid_routes),
+                )
+            ]
 
         return [ProviderChoice("unavailable", capability, "No configured provider credential")]
 
