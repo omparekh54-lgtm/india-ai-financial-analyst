@@ -166,10 +166,12 @@ def validate_xbrl_payload(
 
 def sniff_xbrl_media_type(content: bytes) -> str | None:
     sample = content[:4096].lstrip(b"\xef\xbb\xbf\x00\t\r\n ").lower()
-    if sample.startswith(b"<?xml") or b"<xbrl" in sample[:1024] or b":xbrl" in sample[:1024]:
-        return "application/xml"
+    has_html = b"<html" in sample[:2048]
+    has_inline_xbrl = b"xmlns:ix" in sample or b"<ix:" in sample or b" inline" in sample
+    if has_html and has_inline_xbrl:
+        return "application/xhtml+xml"
     if sample.startswith(b"<!doctype html") or sample.startswith(b"<html"):
         return "text/html"
-    if b"<html" in sample[:1024] and (b"inline" in sample[:4096] or b"ix:" in sample[:4096]):
-        return "text/html"
+    if sample.startswith(b"<?xml") or b"<xbrl" in sample[:1024] or b":xbrl" in sample[:1024]:
+        return "application/xml"
     return None
