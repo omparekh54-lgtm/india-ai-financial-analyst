@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings, get_settings
@@ -73,19 +74,23 @@ class EventResearchDispatcher:
             "headline": headline,
             "published_at": published_at,
         }
-        job_id = await self.service.enqueue(
-            query=query,
-            mode=AnalysisMode.WHAT_CHANGED,
-            depth=ResearchDepth.STANDARD,
-            requested_by=None,
-            metadata={
-                "system_generated": True,
-                "event_trigger": trigger.value,
-                "source_event_id": str(event_id),
-                "source_security_id": str(security_id),
-                "event_context": event_context,
-            },
-        )
+        try:
+            job_id = await self.service.enqueue(
+                query=query,
+                mode=AnalysisMode.WHAT_CHANGED,
+                depth=ResearchDepth.STANDARD,
+                requested_by=None,
+                metadata={
+                    "system_generated": True,
+                    "event_trigger": trigger.value,
+                    "source_event_id": str(event_id),
+                    "source_security_id": str(security_id),
+                    "event_context": event_context,
+                },
+            )
+        except IntegrityError:
+            # The unique expression index is the final race-safe idempotency boundary.
+            return {"status": "duplicate", "event_id": str(event_id)}
         return {
             "status": "queued",
             "job_id": str(job_id),
