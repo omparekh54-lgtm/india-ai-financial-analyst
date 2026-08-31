@@ -23,21 +23,28 @@ def test_production_blocks_feed_pending_licensing_review() -> None:
     assert "licensing" in reason.lower()
 
 
-def test_production_accepts_only_explicitly_cleared_review_flag() -> None:
+def test_production_requires_approval_reference_after_review_flag_is_cleared() -> None:
+    reason = production_feed_block_reason(
+        {"production_requires_licensing_review": False},
+        app_env="production",
+    )
+    assert reason is not None
+    assert "approval reference" in reason.lower()
+
     assert (
         production_feed_block_reason(
-            {"production_requires_licensing_review": False},
+            {
+                "production_requires_licensing_review": False,
+                "production_approval_reference": "approval-record-2026-08-31",
+            },
             app_env="production",
         )
         is None
     )
-    assert (
-        production_feed_block_reason(
-            {"production_requires_licensing_review": "false"},
-            app_env="production",
-        )
-        is None
-    )
+
+
+def test_feed_without_review_gate_is_not_artificially_blocked() -> None:
+    assert production_feed_block_reason({}, app_env="production") is None
 
 
 def test_truthy_string_review_flag_is_blocked_in_production() -> None:
