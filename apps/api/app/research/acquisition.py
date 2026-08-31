@@ -35,36 +35,49 @@ class FreshResearchAcquisitionService:
         security_id: UUID,
         security: dict[str, object],
         mode: str,
+        depth: str,
         context: dict[str, object],
         evidence: list[EvidenceRef],
     ) -> tuple[dict[str, object], list[EvidenceRef]]:
+        search_limit, result_limit = _research_budget(self.settings, depth)
         if not self.settings.enable_external_data_calls:
-            context["research_acquisition"] = {"status": "disabled", "source_count": 0}
+            context["research_acquisition"] = {
+                "status": "disabled",
+                "source_count": 0,
+                "depth": depth,
+            }
             return context, evidence
         if not self.settings.tavily_api_key:
-            context["research_acquisition"] = {"status": "unconfigured", "source_count": 0}
+            context["research_acquisition"] = {
+                "status": "unconfigured",
+                "source_count": 0,
+                "depth": depth,
+            }
             return context, evidence
 
         cache_seconds = self.settings.web_research_cache_seconds
         if mode == "why_did_it_move":
             cache_seconds = min(cache_seconds, 300)
         cached = await self._load_cached(security_id, cache_seconds=cache_seconds)
-        minimum_cached = min(4, self.settings.web_research_max_results_per_search)
+        minimum_cached = min(_minimum_cached_sources(depth), result_limit)
         if len(cached) >= minimum_cached:
             return self._apply(
                 context=context,
                 evidence=evidence,
                 envelopes=cached,
                 status="cache_hit",
+                depth=depth,
+                search_count=0,
+                result_limit=result_limit,
             )
 
-        plans = _search_plans(security, mode)[: self.settings.web_research_max_searches_per_job]
+        plans = _search_plans(security, mode, depth)[:search_limit]
         try:
             batches = await asyncio.gather(
                 *(
                     self.tavily.search(
                         query,
-                        max_results=self.settings.web_research_max_results_per_search,
+                        max_results=result_limit,
                         topic=topic,
                     )
                     for query, topic, _category in plans
@@ -74,6 +87,9 @@ class FreshResearchAcquisitionService:
             context["research_acquisition"] = {
                 "status": "degraded",
                 "source_count": len(cached),
+                "depth": depth,
+                "search_count": len(plans),
+                "result_limit_per_search": result_limit,
             }
             if cached:
                 return self._apply(
@@ -81,6 +97,9 @@ class FreshResearchAcquisitionService:
                     evidence=evidence,
                     envelopes=cached,
                     status="degraded_cache",
+                    depth=depth,
+                    search_count=len(plans),
+                    result_limit=result_limit,
                 )
             return context, evidence
 
@@ -100,6 +119,9 @@ class FreshResearchAcquisitionService:
             evidence=evidence,
             envelopes=merged,
             status="fresh" if fresh else "empty",
+            depth=depth,
+            search_count=len(plans),
+            result_limit=result_limit,
         )
 
     async def _load_cached(
@@ -119,7 +141,7 @@ class FreshResearchAcquisitionService:
                           and source_type = 'web_search'
                           and retrieved_at >= now() - make_interval(secs => :cache_seconds)
                         order by retrieved_at desc
-                        limit 20
+                        limit 30
                         """
                     ),
                     {"security_id": security_id, "cache_seconds": cache_seconds},
@@ -192,6 +214,9 @@ class FreshResearchAcquisitionService:
         evidence: list[EvidenceRef],
         envelopes: list[SourceEnvelope],
         status: str,
+        depth: str,
+        search_count: int,
+        result_limit: int,
     ) -> tuple[dict[str, object], list[EvidenceRef]]:
         web_sources = list(context.get("web_sources") or [])
         news_events = list(context.get("news_events") or [])
@@ -247,13 +272,35 @@ class FreshResearchAcquisitionService:
             "status": status,
             "source_count": len(envelopes),
             "search_provider": "tavily",
+            "depth": depth,
+            "search_count": search_count,
+            "result_limit_per_search": result_limit,
         }
         return context, _dedupe_evidence([*evidence, *acquired_evidence])
+
+
+def _research_budget(settings: Settings, depth: str) -> tuple[int, int]:
+    max_searches = max(1, settings.web_research_max_searches_per_job)
+    max_results = max(1, settings.web_research_max_results_per_search)
+    if depth == "quick":
+        return 1, min(max_results, 3)
+    if depth == "deep":
+        return max_searches, max_results
+    return min(max_searches, 2), min(max_results, 5)
+
+
+def _minimum_cached_sources(depth: str) -> int:
+    if depth == "quick":
+        return 2
+    if depth == "deep":
+        return 6
+    return 4
 
 
 def _search_plans(
     security: dict[str, object],
     mode: str,
+    depth: str,
 ) -> list[tuple[str, str, str]]:
     name = str(security.get("legal_name") or security.get("nse_symbol") or "Indian company")
     symbol = str(security.get("nse_symbol") or "").strip()
@@ -265,7 +312,8 @@ def _search_plans(
         news_query = f"{label} today stock price move news announcement results order India"
     elif mode == "what_changed":
         news_query = f"{label} latest new filing announcement results guidance India"
-    return [
+
+    plans = [
         (news_query, "news", "news"),
         (
             f"{label} investor relations strategy management commentary annual report presentation competitors",
@@ -273,13 +321,29 @@ def _search_plans(
             "web",
         ),
     ]
+    if depth == "deep":
+        plans.extend(
+            [
+                (
+                    f"{label} promoter pledge auditor resignation credit rating SEBI exchange governance related party",
+                    "news",
+                    "news",
+                ),
+                (
+                    f"{label} India industry peers market share capacity demand competitors sector outlook",
+                    "general",
+                    "web",
+                ),
+            ]
+        )
+    return plans
 
 
 def _dedupe_envelopes(items: list[SourceEnvelope]) -> list[SourceEnvelope]:
     output: dict[str, SourceEnvelope] = {}
     for item in items:
         output.setdefault(item.source_uri, item)
-    return list(output.values())[:20]
+    return list(output.values())[:30]
 
 
 def _dedupe_dicts(items: list[object], key: str) -> list[object]:
