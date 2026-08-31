@@ -80,7 +80,10 @@ async def verify_deployment_smoke(
     ready_payload = _mapping(ready)
     agents_payload = _mapping(agents)
     data_payload = _mapping(data)
-    coverage = data_payload.get("coverage") if isinstance(data_payload.get("coverage"), dict) else {}
+    agents_value = agents_payload.get("agents")
+    agent_roles = list(agents_value) if isinstance(agents_value, list) else []
+    coverage_value = data_payload.get("coverage")
+    coverage = dict(coverage_value) if isinstance(coverage_value, dict) else {}
 
     return DeploymentSmokeReport(
         health_status=health.status_code,
@@ -99,8 +102,7 @@ async def verify_deployment_smoke(
         sixteen_roles_present=bool(
             agents.status_code == 200
             and agents_payload.get("count") == 16
-            and isinstance(agents_payload.get("agents"), list)
-            and len(agents_payload["agents"]) == 16
+            and len(agent_roles) == 16
         ),
         auth_status=auth.status_code,
         authenticated=auth.status_code == 200,
@@ -136,4 +138,4 @@ def _mapping(response: httpx.Response) -> dict[str, object]:
         payload = response.json()
     except ValueError:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    return dict(payload) if isinstance(payload, dict) else {}
