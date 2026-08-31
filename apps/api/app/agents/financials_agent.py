@@ -21,12 +21,16 @@ FINANCIAL_SOURCE_TYPES = {
 }
 
 SECTOR_KPIS = (
+    # Banks / lenders
     "net_interest_income",
     "interest_income",
     "deposits",
     "advances",
     "gross_advances",
     "net_advances",
+    "loan_growth_pct",
+    "deposit_growth_pct",
+    "credit_deposit_ratio_pct",
     "provisions",
     "provision_coverage_pct",
     "gross_npa_pct",
@@ -37,10 +41,15 @@ SECTOR_KPIS = (
     "capital_adequacy_pct",
     "roa_pct",
     "roe_pct",
+    # NBFC
     "gross_stage3_pct",
     "net_stage3_pct",
     "aum",
+    "aum_growth_pct",
     "disbursements",
+    "borrowing_cost_pct",
+    "alm_gap_pct",
+    # Insurance
     "gross_written_premium",
     "new_business_premium",
     "ape",
@@ -53,15 +62,35 @@ SECTOR_KPIS = (
     "expense_ratio_pct",
     "claims_incurred",
     "persistency_ratio_pct",
+    # IT / services
     "attrition_pct",
     "utilization_pct",
     "tcv",
+    "deal_wins_value",
     "constant_currency_growth_pct",
     "employee_count",
+    # FMCG / consumer
     "volume_growth_pct",
+    "price_growth_pct",
+    "rural_growth_pct",
+    "urban_growth_pct",
+    "distribution_outlets",
+    "input_cost_inflation_pct",
+    # Auto / industrial
+    "vehicle_volume",
+    "asp",
     "market_share_pct",
+    "exports",
+    "ev_penetration_pct",
+    "inventory_days",
     "order_book",
     "capacity_utilization_pct",
+    # Metals / cyclicals
+    "realization_per_unit",
+    "production_volume",
+    "sales_volume",
+    "spread_per_unit",
+    "normalized_ebitda",
 )
 
 
