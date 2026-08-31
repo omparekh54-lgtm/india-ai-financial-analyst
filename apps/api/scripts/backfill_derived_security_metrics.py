@@ -12,10 +12,14 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import get_settings
+from app.core.peer_metric_coverage import (
+    INDUSTRY_COMPARABLE_METRICS,
+    MIN_COMPARABLE_METRICS,
+    load_peer_metric_coverage,
+)
 from app.db import create_database_engine
 from app.ingestion.derived_metric_ingestion import DerivedSecurityMetricIngestor
 from app.ingestion.derived_metrics import (
-    PEER_USABLE_METRICS,
     MetricFinancialFact,
     MetricMarketClose,
     derive_peer_metrics,
@@ -48,30 +52,28 @@ async def _target_ids(
                 targets.append((security_id, normalized, legal_name))
         return targets
 
+    if refresh_all:
+        symbols: list[str] | None = None
+    else:
+        coverage = await load_peer_metric_coverage(engine)
+        symbols = list(coverage.incomplete_symbols)
+        if after_symbol:
+            cursor = after_symbol.upper()
+            symbols = [symbol for symbol in symbols if symbol > cursor]
+        symbols = symbols[:limit]
+        if not symbols:
+            return []
+
     statement = text(
         """
-        with nse_eq as (
-          select id, nse_symbol, legal_name
-          from securities
-          where primary_exchange = 'NSE'
-            and coalesce(metadata->>'nse_series', 'EQ') = 'EQ'
-            and nse_symbol is not null
-        ), ready as (
-          select sm.security_id
-          from security_metrics sm
-          join nse_eq n on n.id = sm.security_id
-          where sm.source_id is not null
-            and sm.as_of_date >= current_date - 400
-            and sm.metric_name = any(:metric_names)
-          group by sm.security_id
-          having count(distinct sm.metric_name) >= 3
-        )
-        select n.id, n.nse_symbol, n.legal_name
-        from nse_eq n
-        left join ready r on r.security_id = n.id
-        where (:after_symbol is null or n.nse_symbol > :after_symbol)
-          and (:refresh_all or r.security_id is null)
-        order by n.nse_symbol
+        select id, nse_symbol, legal_name
+        from securities
+        where primary_exchange = 'NSE'
+          and coalesce(metadata->>'nse_series', 'EQ') = 'EQ'
+          and nse_symbol is not null
+          and (:after_symbol is null or nse_symbol > :after_symbol)
+          and (:symbols is null or nse_symbol = any(:symbols))
+        order by nse_symbol
         limit :limit
         """
     )
@@ -80,9 +82,8 @@ async def _target_ids(
             await connection.execute(
                 statement,
                 {
-                    "metric_names": sorted(PEER_USABLE_METRICS),
                     "after_symbol": after_symbol.upper() if after_symbol else None,
-                    "refresh_all": refresh_all,
+                    "symbols": symbols,
                     "limit": limit,
                 },
             )
@@ -163,33 +164,8 @@ async def _market(engine: AsyncEngine, security_id: UUID) -> MetricMarketClose |
 
 
 async def _ready_count(engine: AsyncEngine) -> tuple[int, int]:
-    async with engine.connect() as connection:
-        row = (
-            await connection.execute(
-                text(
-                    """
-                    with nse_eq as (
-                      select id from securities
-                      where primary_exchange = 'NSE'
-                        and coalesce(metadata->>'nse_series', 'EQ') = 'EQ'
-                    ), ready as (
-                      select sm.security_id
-                      from security_metrics sm join nse_eq n on n.id = sm.security_id
-                      where sm.source_id is not null
-                        and sm.as_of_date >= current_date - 400
-                        and sm.metric_name = any(:metric_names)
-                      group by sm.security_id
-                      having count(distinct sm.metric_name) >= 3
-                    )
-                    select
-                      (select count(*) from nse_eq) as total,
-                      (select count(*) from ready) as ready
-                    """
-                ),
-                {"metric_names": sorted(PEER_USABLE_METRICS)},
-            )
-        ).mappings().one()
-    return int(row["ready"] or 0), int(row["total"] or 0)
+    coverage = await load_peer_metric_coverage(engine)
+    return coverage.complete_securities, coverage.total_securities
 
 
 async def _run() -> int:
@@ -204,15 +180,15 @@ async def _run() -> int:
     group.add_argument("--all", action="store_true")
     parser.add_argument("--limit", type=int, default=50)
     parser.add_argument("--after-symbol")
-    parser.add_argument("--min-metrics", type=int, default=3)
+    parser.add_argument("--min-metrics", type=int, default=MIN_COMPARABLE_METRICS)
     parser.add_argument("--refresh-all", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     if not 1 <= args.limit <= 250:
         parser.error("--limit must be between 1 and 250")
-    if not 1 <= args.min_metrics <= len(PEER_USABLE_METRICS):
-        parser.error("--min-metrics is outside the supported metric range")
+    if not 1 <= args.min_metrics <= len(INDUSTRY_COMPARABLE_METRICS):
+        parser.error("--min-metrics is outside the Industry Agent comparable-metric range")
     if args.after_symbol and not args.all:
         parser.error("--after-symbol can only be used with --all")
 
@@ -237,15 +213,16 @@ async def _run() -> int:
                 facts = await _facts(engine, security_id)
                 market = await _market(engine, security_id)
                 bundle = derive_peer_metrics(facts, market=market)
-                if len(bundle.metrics) < args.min_metrics:
+                if bundle.industry_comparable_count < args.min_metrics:
                     raise ValueError(
-                        f"{symbol} derives only {len(bundle.metrics)} peer-usable metrics; "
-                        f"minimum required is {args.min_metrics}"
+                        f"{symbol} derives only {bundle.industry_comparable_count} Industry Agent "
+                        f"comparable metrics; minimum required is {args.min_metrics}"
                     )
                 result: dict[str, object] = {
                     "symbol": symbol,
                     "legal_name": legal_name,
                     "metric_count": len(bundle.metrics),
+                    "industry_comparable_count": bundle.industry_comparable_count,
                     "metric_names": [item.metric_name for item in bundle.metrics],
                     "checksum": bundle.checksum,
                     "upstream_source_count": len(bundle.upstream_source_ids),
