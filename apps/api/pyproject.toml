@@ -38,6 +38,9 @@ embeddings = [
 live_market = [
   "upstox-python-sdk>=2.23,<3"
 ]
+documents = [
+  "docling>=2.113,<3"
+]
 dev = [
   "pytest>=8.4,<9",
   "pytest-asyncio>=1.1,<2",
