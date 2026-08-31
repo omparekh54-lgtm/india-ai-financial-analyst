@@ -68,3 +68,36 @@ async def test_deployment_smoke_rejects_nonproduction_corpus() -> None:
         )
     assert report.passed is False
     assert report.zero_nonproduction_sources is False
+
+
+@pytest.mark.asyncio
+async def test_deployment_smoke_rejects_plain_http_remote_target() -> None:
+    async with httpx.AsyncClient(transport=_transport()) as client:
+        with pytest.raises(ValueError, match="requires HTTPS"):
+            await verify_deployment_smoke(
+                client,
+                api_base_url="http://api.example.com",
+                access_token="test-token",
+            )
+
+
+@pytest.mark.asyncio
+async def test_deployment_smoke_allows_loopback_http() -> None:
+    async with httpx.AsyncClient(transport=_transport()) as client:
+        report = await verify_deployment_smoke(
+            client,
+            api_base_url="http://127.0.0.1:8000",
+            access_token="test-token",
+        )
+    assert report.passed is True
+
+
+@pytest.mark.asyncio
+async def test_deployment_smoke_rejects_credentials_in_target_url() -> None:
+    async with httpx.AsyncClient(transport=_transport()) as client:
+        with pytest.raises(ValueError, match="embedded credentials"):
+            await verify_deployment_smoke(
+                client,
+                api_base_url="https://user:pass@api.example.com",
+                access_token="test-token",
+            )
