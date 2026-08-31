@@ -62,6 +62,7 @@ def build_research_plan(
     elif mode == AnalysisMode.WHAT_CHANGED:
         collection = [
             AgentName.MARKET,
+            AgentName.FINANCIALS,
             AgentName.FILINGS,
             AgentName.EARNINGS,
             AgentName.NEWS,
