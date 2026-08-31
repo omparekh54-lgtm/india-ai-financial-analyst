@@ -28,6 +28,8 @@ def _plan(**overrides: object):
         "nse_min_rows": 1000,
         "run_nse_benchmarks": False,
         "nse_benchmark_min_rows": 30,
+        "run_nse_flows": False,
+        "nse_flow_max_age_days": 7,
         "financials": (),
         "financial_min_rows": 5,
         "markets": (),
@@ -236,12 +238,23 @@ def test_bootstrap_plan_has_deterministic_dependency_order_and_approvals() -> No
     assert "COMPS-LICENSE-2026" in plan[3].command
 
 
-def test_bootstrap_plan_can_run_automatic_nse_benchmarks() -> None:
-    plan = _plan(run_nse_benchmarks=True, nse_benchmark_min_rows=60)
+def test_bootstrap_plan_can_run_automatic_nse_benchmarks_and_flows() -> None:
+    plan = _plan(
+        run_nse_benchmarks=True,
+        nse_benchmark_min_rows=60,
+        run_nse_flows=True,
+        nse_flow_max_age_days=3,
+    )
 
-    assert [stage.name for stage in plan] == ["nse_universe", "nse_benchmarks"]
+    assert [stage.name for stage in plan] == [
+        "nse_universe",
+        "nse_benchmarks",
+        "nse_fii_dii_flows",
+    ]
     assert "backfill_nse_benchmarks.py" in plan[1].command[1]
     assert plan[1].command[-2:] == ("--min-rows", "60")
+    assert "backfill_nse_fii_dii.py" in plan[2].command[1]
+    assert plan[2].command[-2:] == ("--max-age-days", "3")
 
 
 def test_bootstrap_plan_can_explicitly_use_upstox_master_fallback() -> None:
@@ -273,6 +286,7 @@ def test_dry_run_propagates_only_to_file_validation_stages() -> None:
     plan = _plan(
         dry_run=True,
         run_nse_benchmarks=True,
+        run_nse_flows=True,
         financials=(
             parse_financial_spec(
                 "RELIANCE,/data/reliance.csv,https://licensed.example/reliance/fy26,"
@@ -350,6 +364,9 @@ def test_bootstrap_plan_rejects_invalid_limits() -> None:
 
     with pytest.raises(ValueError, match="nse_benchmark_min_rows"):
         _plan(nse_benchmark_min_rows=1)
+
+    with pytest.raises(ValueError, match="nse_flow_max_age_days"):
+        _plan(nse_flow_max_age_days=-1)
 
     with pytest.raises(ValueError, match="financial_min_rows"):
         _plan(financial_min_rows=0)
