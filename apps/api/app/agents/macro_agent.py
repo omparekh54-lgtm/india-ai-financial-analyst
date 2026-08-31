@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from app.agents.contracts import AgentInput, AgentName, AgentOutput, Claim
 
 
@@ -102,7 +104,7 @@ class IndiaMacroPolicyFlowAgent:
         )
 
 
-def _number(value: object) -> float | None:
+def _number(value: Any) -> float | None:
     try:
         if value is None:
             return None
