@@ -40,11 +40,14 @@ class UserAwareResearchContextLoader:
         security_id: UUID,
         *,
         mode: str,
+        depth: str,
         user_id: UUID | None = None,
     ) -> tuple[dict[str, object], list[EvidenceRef]]:
         context, evidence = await self.base.load(security_id, mode=mode)
+        context["analysis_depth"] = depth
         recent_filing_evidence = await load_exchange_filing_evidence(self.engine, security_id)
         semantic_filing_evidence: list[EvidenceRef] = []
+        semantic_per_query, semantic_max_results = _semantic_budget(self.settings, depth)
 
         security = context.get("security")
         if self.semantic is not None and isinstance(security, dict):
@@ -58,14 +61,15 @@ class UserAwareResearchContextLoader:
                         security=security,
                         mode=mode,
                     ),
-                    per_query=self.settings.semantic_evidence_per_query,
-                    max_results=self.settings.semantic_evidence_max_chunks,
+                    per_query=semantic_per_query,
+                    max_results=semantic_max_results,
                 )
             except (EmbeddingError, SQLAlchemyError):
                 context["semantic_evidence"] = {
                     "enabled": True,
                     "status": "degraded",
                     "match_count": 0,
+                    "depth": depth,
                 }
             else:
                 semantic_filing_evidence = [match.evidence for match in matches]
@@ -75,12 +79,16 @@ class UserAwareResearchContextLoader:
                     "match_count": len(matches),
                     "top_similarity": round(matches[0].similarity, 4) if matches else None,
                     "queries": len({match.query for match in matches}),
+                    "per_query_budget": semantic_per_query,
+                    "max_results_budget": semantic_max_results,
+                    "depth": depth,
                 }
         else:
             context["semantic_evidence"] = {
                 "enabled": False,
                 "status": "disabled",
                 "match_count": 0,
+                "depth": depth,
             }
 
         filing_evidence = _dedupe_evidence([*semantic_filing_evidence, *recent_filing_evidence])
@@ -101,6 +109,7 @@ class UserAwareResearchContextLoader:
             security_id=security_id,
             security=security,
             mode=mode,
+            depth=depth,
             context=context,
             evidence=evidence,
         )
@@ -111,6 +120,16 @@ class UserAwareResearchContextLoader:
             context=context,
             evidence=evidence,
         )
+
+
+def _semantic_budget(settings: Settings, depth: str) -> tuple[int, int]:
+    per_query = max(1, settings.semantic_evidence_per_query)
+    max_results = max(1, settings.semantic_evidence_max_chunks)
+    if depth == "quick":
+        return max(1, per_query // 2), max(3, max_results // 2)
+    if depth == "deep":
+        return min(per_query * 2, 8), min(max_results * 2, 40)
+    return per_query, max_results
 
 
 def _build_earnings_context(
