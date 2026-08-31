@@ -4,7 +4,7 @@ from math import isfinite
 
 
 def safe_divide(numerator: float | None, denominator: float | None) -> float | None:
-    if numerator is None or denominator in {None, 0}:
+    if numerator is None or denominator is None or denominator == 0:
         return None
     value = numerator / denominator
     return value if isfinite(value) else None
@@ -15,7 +15,7 @@ def margin(profit: float | None, revenue: float | None) -> float | None:
 
 
 def growth_rate(current: float | None, previous: float | None) -> float | None:
-    if current is None or previous in {None, 0}:
+    if current is None or previous is None or previous == 0:
         return None
     return (current - previous) / abs(previous)
 
@@ -86,7 +86,7 @@ def working_capital_days(
     )
 
     cash_conversion_cycle = None
-    if all(value is not None for value in (receivable_days, inventory_days, payable_days)):
+    if receivable_days is not None and inventory_days is not None and payable_days is not None:
         cash_conversion_cycle = receivable_days + inventory_days - payable_days
 
     return {
