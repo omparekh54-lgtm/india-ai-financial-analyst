@@ -28,7 +28,7 @@ jobs:
       - name: Ruff
         run: ruff check app tests scripts
       - name: Typecheck
-        run: mypy app --ignore-missing-imports
+        run: mypy app --ignore-missing-imports --explicit-package-bases
       - name: Tests
         run: pytest -q
 
