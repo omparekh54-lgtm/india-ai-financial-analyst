@@ -11,20 +11,24 @@ def _coverage(**overrides: object) -> DataCoverage:
     values: dict[str, object] = {
         "nse_eq_securities": 1800,
         "provider_instruments": 1800,
+        "nse_securities_with_financial_facts": 1800,
         "financial_facts": 100,
         "sourced_financial_facts": 100,
+        "nse_securities_with_corporate_events": 1800,
         "corporate_events": 20,
         "sourced_corporate_events": 20,
         "sources": 20,
         "nonproduction_sources": 0,
         "evidence_chunks": 200,
         "embedded_evidence_chunks": 150,
+        "nse_securities_with_market_bars": 1800,
         "market_bars": 1000,
         "sourced_market_bars": 1000,
         "benchmark_bars": 500,
         "sourced_benchmark_bars": 500,
         "macro_observations": 100,
         "sourced_macro_observations": 100,
+        "nse_securities_with_security_metrics": 1800,
         "security_metrics": 100,
         "sourced_security_metrics": 100,
         "enabled_official_feeds": 1,
@@ -53,22 +57,44 @@ def test_enabled_feed_pending_approval_is_a_hard_readiness_failure() -> None:
     assert any("still require licensing review" in error for error in report.errors)
 
 
+def test_partial_security_coverage_is_reported_without_inflating_row_counts() -> None:
+    coverage = _coverage(
+        nse_securities_with_financial_facts=450,
+        nse_securities_with_market_bars=900,
+        nse_securities_with_security_metrics=180,
+    )
+    report = evaluate_data_coverage(coverage)
+    payload = coverage.as_dict()
+
+    assert report.ready is True
+    assert payload["financial_security_coverage_pct"] == 25.0
+    assert payload["market_security_coverage_pct"] == 50.0
+    assert payload["metric_security_coverage_pct"] == 10.0
+    assert any("450/1800 NSE EQ securities" in warning for warning in report.warnings)
+    assert any("900/1800 NSE EQ securities" in warning for warning in report.warnings)
+    assert any("180/1800 NSE EQ securities" in warning for warning in report.warnings)
+
+
 def test_empty_research_datasets_are_visible_warnings() -> None:
     report = evaluate_data_coverage(
         _coverage(
+            nse_securities_with_financial_facts=0,
             financial_facts=0,
             sourced_financial_facts=0,
+            nse_securities_with_corporate_events=0,
             corporate_events=0,
             sourced_corporate_events=0,
             sources=0,
             evidence_chunks=0,
             embedded_evidence_chunks=0,
+            nse_securities_with_market_bars=0,
             market_bars=0,
             sourced_market_bars=0,
             benchmark_bars=0,
             sourced_benchmark_bars=0,
             macro_observations=0,
             sourced_macro_observations=0,
+            nse_securities_with_security_metrics=0,
             security_metrics=0,
             sourced_security_metrics=0,
             enabled_official_feeds=0,
