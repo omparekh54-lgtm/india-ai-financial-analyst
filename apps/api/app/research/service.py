@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.agents.contracts import AgentInput, AgentName, AgentOutput
 from app.core.config import Settings, get_settings
-from app.orchestration.plan import AnalysisMode, ResearchDepth, build_research_plan
+from app.orchestration.plan import AnalysisMode, ResearchDepth, ResearchPlan, build_research_plan
 from app.orchestration.registry import build_agent_registry
 from app.orchestration.runtime import OrchestratorRuntime
 from app.repositories.research import ResearchRepository
@@ -45,6 +45,33 @@ class ResearchService:
             context_loader=UserAwareResearchContextLoader(engine, self.settings),
         )
 
+    async def enqueue(
+        self,
+        *,
+        query: str,
+        mode: AnalysisMode,
+        depth: ResearchDepth = ResearchDepth.STANDARD,
+        requested_by: UUID | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> UUID:
+        job_metadata: dict[str, object] = {
+            "analysis_depth": depth.value,
+            "execution": "queued_worker",
+        }
+        if metadata:
+            job_metadata.update(metadata)
+        job_id = await self.repository.create_job(
+            query=query,
+            mode=mode.value,
+            requested_by=requested_by,
+            metadata=job_metadata,
+        )
+        await self.telemetry.capture(
+            "research_queued",
+            {"mode": mode.value, "depth": depth.value},
+        )
+        return job_id
+
     async def execute(
         self,
         *,
@@ -54,27 +81,52 @@ class ResearchService:
         context: dict[str, Any] | None = None,
         requested_by: UUID | None = None,
     ) -> ResearchExecution:
-        started = perf_counter()
+        """Backward-compatible immediate execution used by tests/internal callers."""
         job_id = await self.repository.create_job(
             query=query,
             mode=mode.value,
             requested_by=requested_by,
-            metadata={"analysis_depth": depth.value},
+            metadata={"analysis_depth": depth.value, "execution": "inline"},
         )
+        return await self.execute_existing(
+            job_id=job_id,
+            query=query,
+            mode=mode,
+            depth=depth,
+            context=context,
+            requested_by=requested_by,
+        )
+
+    async def execute_existing(
+        self,
+        *,
+        job_id: UUID,
+        query: str,
+        mode: AnalysisMode,
+        depth: ResearchDepth = ResearchDepth.STANDARD,
+        context: dict[str, Any] | None = None,
+        requested_by: UUID | None = None,
+        plan: ResearchPlan | None = None,
+    ) -> ResearchExecution:
+        """Execute an already-durable job, suitable for a separate worker process."""
+        started = perf_counter()
         await self.repository.set_job_status(job_id, "running")
         await self.telemetry.capture(
             "research_started",
-            {"mode": mode.value, "depth": depth.value},
+            {"mode": mode.value, "depth": depth.value, "queued": True},
         )
+
+        runtime_context = dict(context or {})
+        runtime_context.setdefault("analysis_depth", depth.value)
 
         try:
             outputs = await self.runtime.run(
-                build_research_plan(mode, depth),
+                plan or build_research_plan(mode, depth),
                 AgentInput(
                     job_id=job_id,
                     user_id=requested_by,
                     query=query,
-                    context=dict(context or {}),
+                    context=runtime_context,
                 ),
             )
             security_id = _resolved_security_id(outputs)
