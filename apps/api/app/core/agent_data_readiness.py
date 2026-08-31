@@ -12,6 +12,7 @@ from app.core.config import Settings
 from app.core.data_readiness import DataCoverage
 from app.core.financial_history_coverage import load_financial_history_coverage
 from app.core.market_history_coverage import load_market_history_coverage
+from app.core.peer_metric_coverage import load_peer_metric_coverage
 
 _REQUIRED_MACRO_SERIES = frozenset(
     {
@@ -171,14 +172,6 @@ async def load_agent_data_coverage(engine: AsyncEngine) -> AgentDataCoverage:
             )
             and coalesce(src.published_at, ce.event_at, src.retrieved_at)
                 >= now() - interval '220 days'
-        ), peer_metrics as (
-          select sm.security_id
-          from security_metrics sm
-          join nse_eq n on n.id = sm.security_id
-          where sm.source_id is not null
-            and sm.as_of_date >= current_date - 400
-          group by sm.security_id
-          having count(distinct sm.metric_name) >= 3
         )
         select
           (select count(*) from nse_eq) as nse_eq_securities,
@@ -207,8 +200,7 @@ async def load_agent_data_coverage(engine: AsyncEngine) -> AgentDataCoverage:
               )
           ) as classified_securities,
           (select count(*) from recent_filings) as recent_filing_evidence_securities,
-          (select count(*) from recent_earnings) as recent_earnings_evidence_securities,
-          (select count(*) from peer_metrics) as peer_metric_securities
+          (select count(*) from recent_earnings) as recent_earnings_evidence_securities
         """
     )
     async with engine.connect() as connection:
@@ -239,6 +231,7 @@ async def load_agent_data_coverage(engine: AsyncEngine) -> AgentDataCoverage:
 
     financial_history = await load_financial_history_coverage(engine)
     market_history = await load_market_history_coverage(engine)
+    peer_metrics = await load_peer_metric_coverage(engine)
     return AgentDataCoverage(
         nse_eq_securities=_int(row.get("nse_eq_securities")),
         provider_mapped_securities=_int(row.get("provider_mapped_securities")),
@@ -247,7 +240,7 @@ async def load_agent_data_coverage(engine: AsyncEngine) -> AgentDataCoverage:
         recent_filing_evidence_securities=_int(row.get("recent_filing_evidence_securities")),
         recent_earnings_evidence_securities=_int(row.get("recent_earnings_evidence_securities")),
         technical_history_securities=market_history.complete_securities,
-        peer_metric_securities=_int(row.get("peer_metric_securities")),
+        peer_metric_securities=peer_metrics.complete_securities,
         benchmark_codes_with_sourced_bars=frozenset(str(value).upper() for value in benchmark_rows),
         macro_series_with_sourced_observations=frozenset(str(value) for value in macro_rows),
         history_limited_recent_securities=market_history.history_limited_recent_listings,
@@ -388,7 +381,10 @@ def evaluate_agent_readiness(
         ),
         (
             peer_ready,
-            "Every supported security needs at least 3 recent sourced comparable metrics.",
+            (
+                "Every supported security needs at least 3 recent, auditable comparable metrics "
+                "used by the Industry Agent."
+            ),
         ),
     )
     agent_errors[AgentName.MACRO] = errors_for(
