@@ -15,6 +15,7 @@ from app.ingestion.reference_provenance import (
     resolve_security,
     upsert_reference_source,
     validate_provider_name,
+    validate_reference_approval,
     validate_source_uri,
 )
 
@@ -32,11 +33,14 @@ async def _run(args: argparse.Namespace) -> dict[str, object]:
         min_rows=args.min_rows,
     )
     source_uri = validate_source_uri(args.source_uri)
+    approval = validate_reference_approval(source_uri, args.approval_reference)
     published_at = parse_optional_datetime(args.published_at) or max(bar.ts for bar in bars)
     summary: dict[str, object] = {
         "file": str(path.resolve()),
         "security": args.security.strip(),
         "source_uri": source_uri,
+        "provenance_class": approval.provenance_class,
+        "approval_reference": approval.approval_reference,
         "sha256": checksum,
         "provider": provider,
         "interval": args.interval.strip().lower(),
@@ -63,6 +67,7 @@ async def _run(args: argparse.Namespace) -> dict[str, object]:
             title=title,
             published_at=published_at,
             checksum=checksum,
+            approval_reference=args.approval_reference,
             metadata={
                 "importer": "import_market_csv",
                 "file_name": path.name,
@@ -101,6 +106,13 @@ def main() -> int:
         help="NSE symbol, BSE code or ISIN already present in the canonical security master.",
     )
     parser.add_argument("--source-uri", required=True)
+    parser.add_argument(
+        "--approval-reference",
+        help=(
+            "Required for non-official sources: license, contract, internal approval, or "
+            "source-governance record identifier."
+        ),
+    )
     parser.add_argument("--source-title")
     parser.add_argument("--published-at")
     parser.add_argument("--provider", required=True)
