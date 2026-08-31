@@ -62,7 +62,7 @@ class ResearchJobWorker:
                 requested_by=requested_by,
                 plan=plan,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - isolate one durable job from the worker loop
             await self.queue.mark_failed(job_id, error_type=type(exc).__name__)
         return True
 
