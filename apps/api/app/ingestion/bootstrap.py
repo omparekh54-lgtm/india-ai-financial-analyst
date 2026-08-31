@@ -164,8 +164,12 @@ def build_bootstrap_plan(
     python_executable: str,
     scripts_dir: Path,
     skip_nse: bool,
+    security_master_provider: str,
     nse_file: Path | None,
     nse_url: str | None,
+    upstox_file: Path | None,
+    upstox_url: str | None,
+    upstox_approval_reference: str | None,
     nse_min_rows: int,
     financials: tuple[FinancialBootstrapSpec, ...],
     financial_min_rows: int,
@@ -187,6 +191,9 @@ def build_bootstrap_plan(
     embed_evidence: bool,
     embedding_limit: int | None,
 ) -> tuple[BootstrapStage, ...]:
+    master_provider = security_master_provider.strip().lower()
+    if master_provider not in {"nse", "upstox"}:
+        raise ValueError("security_master_provider must be nse or upstox")
     if nse_min_rows < 1:
         raise ValueError("nse_min_rows must be >= 1")
     if financial_min_rows < 1:
@@ -212,19 +219,41 @@ def build_bootstrap_plan(
 
     stages: list[BootstrapStage] = []
     if not skip_nse:
-        command = [
-            python_executable,
-            str(scripts_dir / "import_nse_security_master.py"),
-            "--min-rows",
-            str(nse_min_rows),
-        ]
-        if nse_file is not None:
-            command.extend(["--file", str(nse_file)])
-        elif nse_url:
-            command.extend(["--url", nse_url])
-        if dry_run:
-            command.append("--dry-run")
-        stages.append(BootstrapStage(name="nse_security_master", command=tuple(command)))
+        if master_provider == "nse":
+            if upstox_file is not None or upstox_url:
+                raise ValueError("Upstox security-master options require provider=upstox")
+            command = [
+                python_executable,
+                str(scripts_dir / "import_nse_security_master.py"),
+                "--min-rows",
+                str(nse_min_rows),
+            ]
+            if nse_file is not None:
+                command.extend(["--file", str(nse_file)])
+            elif nse_url:
+                command.extend(["--url", nse_url])
+            if dry_run:
+                command.append("--dry-run")
+            stages.append(BootstrapStage(name="nse_security_master", command=tuple(command)))
+        else:
+            if nse_file is not None or nse_url:
+                raise ValueError("NSE security-master options require provider=nse")
+            command = [
+                python_executable,
+                str(scripts_dir / "import_upstox_security_master.py"),
+                "--min-rows",
+                str(nse_min_rows),
+            ]
+            if upstox_file is not None:
+                command.extend(["--file", str(upstox_file)])
+            if upstox_url:
+                command.extend(["--url", upstox_url])
+            _append_approval_reference(command, upstox_approval_reference)
+            if dry_run:
+                command.append("--dry-run")
+            stages.append(
+                BootstrapStage(name="upstox_security_master", command=tuple(command))
+            )
 
     for index, spec in enumerate(financials, start=1):
         command = [
