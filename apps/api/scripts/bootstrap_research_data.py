@@ -22,6 +22,7 @@ from app.ingestion.bootstrap import (
 
 API_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = Path(__file__).resolve().parent
+DEFAULT_SOURCE_GOVERNANCE_REFERENCE = "SG-2026-08-31-01"
 
 
 def _parse_stage_output(stdout: str) -> object:
@@ -86,10 +87,26 @@ def main() -> int:
             "requires explicit provenance and does not accept synthetic/mock/sample sources."
         )
     )
-    parser.add_argument("--skip-nse", action="store_true")
+    parser.add_argument("--skip-nse", action="store_true", help="Skip the security-master stage")
+    parser.add_argument(
+        "--security-master-provider",
+        choices=("nse", "upstox"),
+        default="nse",
+        help=(
+            "Use official NSE by default. Select upstox explicitly only as the documented "
+            "regulated-broker fallback when NSE delivery is inaccessible."
+        ),
+    )
     nse_source = parser.add_mutually_exclusive_group()
     nse_source.add_argument("--nse-file")
     nse_source.add_argument("--nse-url")
+    upstox_source = parser.add_mutually_exclusive_group()
+    upstox_source.add_argument("--upstox-security-master-file")
+    upstox_source.add_argument("--upstox-security-master-url")
+    parser.add_argument(
+        "--upstox-security-master-approval-reference",
+        default=DEFAULT_SOURCE_GOVERNANCE_REFERENCE,
+    )
     parser.add_argument("--nse-min-rows", type=int, default=1000)
     parser.add_argument(
         "--financial",
@@ -172,8 +189,16 @@ def main() -> int:
             python_executable=sys.executable,
             scripts_dir=SCRIPTS_DIR,
             skip_nse=args.skip_nse,
+            security_master_provider=args.security_master_provider,
             nse_file=Path(args.nse_file) if args.nse_file else None,
             nse_url=args.nse_url,
+            upstox_file=(
+                Path(args.upstox_security_master_file)
+                if args.upstox_security_master_file
+                else None
+            ),
+            upstox_url=args.upstox_security_master_url,
+            upstox_approval_reference=args.upstox_security_master_approval_reference,
             nse_min_rows=args.nse_min_rows,
             financials=financials,
             financial_min_rows=args.financial_min_rows,
@@ -204,6 +229,9 @@ def main() -> int:
 
     summary: dict[str, object] = {
         "data_policy": "real_provenance_required",
+        "security_master_provider": (
+            "skipped" if args.skip_nse else args.security_master_provider
+        ),
         "dry_run": args.dry_run,
         "stage_count": len(plan),
         "stages": [],
