@@ -28,6 +28,7 @@ def _coverage(**overrides: object) -> DataCoverage:
         "security_metrics": 100,
         "sourced_security_metrics": 100,
         "enabled_official_feeds": 1,
+        "enabled_unapproved_official_feeds": 0,
     }
     values.update(overrides)
     return DataCoverage(**values)  # type: ignore[arg-type]
@@ -44,6 +45,12 @@ def test_nonproduction_provenance_is_a_hard_readiness_failure() -> None:
     assert report.ready is False
     assert any("Non-production provenance" in error for error in report.errors)
     assert any("2 source row(s)" in error for error in report.errors)
+
+
+def test_enabled_feed_pending_approval_is_a_hard_readiness_failure() -> None:
+    report = evaluate_data_coverage(_coverage(enabled_unapproved_official_feeds=1))
+    assert report.ready is False
+    assert any("still require licensing review" in error for error in report.errors)
 
 
 def test_empty_research_datasets_are_visible_warnings() -> None:
