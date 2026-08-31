@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.agents.contracts import AgentInput, AgentName, AgentOutput, EvidenceRef
+from app.agents.contracts import (
+    AgentInput,
+    AgentName,
+    AgentOutput,
+    EvidenceRef,
+    normalize_evidence_freshness,
+)
 
 
 class WebIntelligenceAgent:
@@ -22,9 +28,6 @@ class WebIntelligenceAgent:
             uri = str(raw.get("url") or raw.get("source_uri") or "").strip()
             if not uri:
                 continue
-            freshness = str(raw.get("freshness") or "near_live")
-            if freshness not in {"live", "near_live", "periodic", "historical", "unknown"}:
-                freshness = "unknown"
             evidence.append(
                 EvidenceRef(
                     source_type=str(raw.get("source_type") or "web"),
@@ -32,7 +35,7 @@ class WebIntelligenceAgent:
                     title=raw.get("title"),
                     published_at=raw.get("published_at"),
                     retrieved_at=str(raw.get("retrieved_at") or datetime.now(UTC).isoformat()),
-                    freshness=freshness,
+                    freshness=normalize_evidence_freshness(raw.get("freshness") or "near_live"),
                     excerpt=str(raw.get("content") or raw.get("excerpt") or "")[:700] or None,
                     checksum=raw.get("checksum"),
                 )
