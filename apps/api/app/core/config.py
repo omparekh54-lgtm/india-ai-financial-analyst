@@ -84,6 +84,8 @@ class Settings(BaseSettings):
     enable_live_market: bool = False
     enable_external_llm_calls: bool = False
     enable_external_data_calls: bool = False
+    # Event-triggered background research remains off until the real corpus gate is green.
+    enable_event_research: bool = False
     enable_semantic_retrieval: bool = False
     enable_multimodal_document_analysis: bool = False
     enable_audio_transcription: bool = False
