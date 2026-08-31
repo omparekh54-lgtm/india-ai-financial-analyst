@@ -7,6 +7,7 @@ import pytest
 from app.ingestion.reference_provenance import (
     parse_optional_datetime,
     validate_provider_name,
+    validate_reference_approval,
     validate_source_uri,
 )
 
@@ -44,8 +45,47 @@ def test_source_uri_rejects_explicit_non_production_markers() -> None:
 def test_provider_name_rejects_non_production_labels() -> None:
     assert validate_provider_name("NSE") == "nse"
     assert validate_provider_name("Licensed Vendor") == "licensed vendor"
-    with pytest.raises(ValueError, match="synthetic/mock/sample"):
+    with pytest.raises(ValueError, match="non-production"):
         validate_provider_name("synthetic-provider")
+
+
+def test_official_reference_source_does_not_require_manual_approval() -> None:
+    approval = validate_reference_approval(
+        "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
+    )
+    assert approval.provenance_class == "official_source"
+    assert approval.approval_reference is None
+    assert approval.source_host == "nsearchives.nseindia.com"
+    assert approval.as_metadata()["production_approved"] is True
+
+
+def test_official_reference_accepts_regulator_subdomains() -> None:
+    approval = validate_reference_approval("https://dbie.rbi.org.in/DBIE/dbie.rbi?site=statistics")
+    assert approval.provenance_class == "official_source"
+    assert approval.source_host == "dbie.rbi.org.in"
+
+
+def test_non_official_reference_requires_explicit_approval_reference() -> None:
+    with pytest.raises(ValueError, match="approval-reference"):
+        validate_reference_approval("https://licensed.vendor.net/reliance/fy26")
+
+    approval = validate_reference_approval(
+        "https://licensed.vendor.net/reliance/fy26",
+        "DATA-LICENSE-2026-014",
+    )
+    assert approval.provenance_class == "licensed_or_approved"
+    assert approval.approval_reference == "DATA-LICENSE-2026-014"
+    assert approval.as_metadata()["production_approved"] is True
+
+
+def test_local_reference_file_requires_approval_and_rejects_fake_approval() -> None:
+    with pytest.raises(ValueError, match="approval-reference"):
+        validate_reference_approval("file:///approved/reliance.csv")
+    with pytest.raises(ValueError, match="non-production"):
+        validate_reference_approval(
+            "file:///approved/reliance.csv",
+            "synthetic-test-approval",
+        )
 
 
 def test_optional_datetime_normalizes_to_utc() -> None:
