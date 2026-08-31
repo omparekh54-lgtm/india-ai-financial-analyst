@@ -6,6 +6,7 @@ import gzip
 import hashlib
 import json
 import re
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -118,7 +119,7 @@ def validate_rows(rows: list[dict[str, object]], *, min_rows: int) -> dict[str, 
     }
 
 
-def _duplicates(values: Any) -> list[str]:
+def _duplicates(values: Iterable[str]) -> list[str]:
     seen: set[str] = set()
     duplicates: set[str] = set()
     for value in values:
@@ -342,24 +343,29 @@ async def main() -> None:
         raise SystemExit("DATABASE_URL must be configured")
 
     before = await existing_coverage(settings.database_url)
-    source_id = await upsert_reference_source(
-        create_database_engine(settings.database_url),
-        security_id=None,
-        source_type="security_master",
-        source_uri=source_url,
-        title="Upstox BOD NSE cash-equity instrument master",
-        published_at=None,
-        checksum=checksum,
-        metadata={
-            "artifact_kind": "broker_instrument_master",
-            "exchange": "NSE",
-            "segment": "NSE_EQ",
-            "instrument_type": "EQ",
-            "row_count": len(rows),
-            "governance_record": DEFAULT_APPROVAL_REFERENCE,
-        },
-        approval_reference=args.approval_reference,
-    )
+    source_engine = create_database_engine(settings.database_url)
+    try:
+        source_id = await upsert_reference_source(
+            source_engine,
+            security_id=None,
+            source_type="security_master",
+            source_uri=source_url,
+            title="Upstox BOD NSE cash-equity instrument master",
+            published_at=None,
+            checksum=checksum,
+            metadata={
+                "artifact_kind": "broker_instrument_master",
+                "exchange": "NSE",
+                "segment": "NSE_EQ",
+                "instrument_type": "EQ",
+                "row_count": len(rows),
+                "governance_record": DEFAULT_APPROVAL_REFERENCE,
+            },
+            approval_reference=args.approval_reference,
+        )
+    finally:
+        await source_engine.dispose()
+
     imported, aliases = await upsert_rows(
         rows,
         settings.database_url,
