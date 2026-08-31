@@ -78,3 +78,31 @@ def test_why_move_ranks_material_company_event() -> None:
     )
     assert result["causality_status"] == "candidate_explanation_not_proven_causality"
     assert result["candidate_drivers"][0]["type"] == "company_event"
+
+
+def test_why_move_uses_technical_and_derivatives_as_context_not_proven_cause() -> None:
+    result = why_did_it_move(
+        {
+            "market_metrics": {"relative_to_benchmark_pct": 1.0},
+            "macro_metrics": {"material_macro_flags": []},
+            "technical_metrics": {
+                "rsi_14": 74.0,
+                "realized_volatility_20d": 0.52,
+                "derivatives": {
+                    "futures_basis_pct": 1.2,
+                    "futures_oi_change_pct": 18.0,
+                    "put_call_oi_ratio": 1.7,
+                },
+            },
+        },
+        {},
+    )
+
+    types = {driver["type"] for driver in result["candidate_drivers"]}
+    assert "technical_momentum_condition" in types
+    assert "elevated_realized_volatility" in types
+    assert "futures_basis_context" in types
+    assert "futures_open_interest_change" in types
+    assert "options_positioning_context" in types
+    assert result["causality_status"] == "candidate_explanation_not_proven_causality"
+    assert "not proof of cause" in result["note"]
