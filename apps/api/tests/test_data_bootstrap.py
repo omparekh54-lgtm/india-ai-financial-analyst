@@ -19,8 +19,12 @@ def _plan(**overrides: object):
         "python_executable": "/usr/bin/python",
         "scripts_dir": Path("/app/scripts"),
         "skip_nse": False,
+        "security_master_provider": "nse",
         "nse_file": Path("/data/EQUITY_L.csv"),
         "nse_url": None,
+        "upstox_file": None,
+        "upstox_url": None,
+        "upstox_approval_reference": "SG-2026-08-31-01",
         "nse_min_rows": 1000,
         "financials": (),
         "financial_min_rows": 5,
@@ -226,6 +230,29 @@ def test_bootstrap_plan_has_deterministic_dependency_order_and_approvals() -> No
     assert "COMPS-LICENSE-2026" in plan[3].command
 
 
+def test_bootstrap_plan_can_explicitly_use_upstox_master_fallback() -> None:
+    plan = _plan(
+        security_master_provider="upstox",
+        nse_file=None,
+        upstox_file=Path("/data/NSE.json.gz"),
+    )
+    assert [stage.name for stage in plan] == ["upstox_security_master"]
+    assert "import_upstox_security_master.py" in plan[0].command[1]
+    assert "/data/NSE.json.gz" in plan[0].command
+    assert "SG-2026-08-31-01" in plan[0].command
+
+
+def test_bootstrap_plan_rejects_mixed_security_master_sources() -> None:
+    with pytest.raises(ValueError, match="Upstox security-master options"):
+        _plan(upstox_file=Path("/data/NSE.json.gz"))
+
+    with pytest.raises(ValueError, match="NSE security-master options"):
+        _plan(
+            security_master_provider="upstox",
+            nse_file=Path("/data/EQUITY_L.csv"),
+        )
+
+
 def test_dry_run_propagates_only_to_file_validation_stages() -> None:
     plan = _plan(
         dry_run=True,
@@ -298,6 +325,9 @@ def test_skip_nse_allows_resumable_partial_bootstrap() -> None:
 
 
 def test_bootstrap_plan_rejects_invalid_limits() -> None:
+    with pytest.raises(ValueError, match="security_master_provider"):
+        _plan(security_master_provider="unknown")
+
     with pytest.raises(ValueError, match="financial_min_rows"):
         _plan(financial_min_rows=0)
 
