@@ -7,7 +7,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from app.agents.contracts import EvidenceRef
+from app.agents.contracts import EvidenceRef, normalize_evidence_freshness
 from app.evidence.embeddings import EmbeddingProvider, vector_literal
 
 
@@ -113,7 +113,7 @@ class SemanticEvidenceRetriever:
                             if retrieved_at
                             else datetime.now(UTC).isoformat()
                         ),
-                        freshness=_freshness(row["freshness"]),
+                        freshness=normalize_evidence_freshness(row["freshness"] or "near_live"),
                         excerpt=str(row["content"]),
                         page_number=row["page_number"],
                         section=str(
@@ -160,10 +160,3 @@ def build_research_queries(
     elif mode == "what_changed":
         queries.insert(0, f"{prefix} new change update latest filing guidance risk catalyst")
     return queries[:6]
-
-
-def _freshness(value: object) -> str:
-    candidate = str(value or "near_live")
-    if candidate not in {"live", "near_live", "periodic", "historical", "unknown"}:
-        return "unknown"
-    return candidate
