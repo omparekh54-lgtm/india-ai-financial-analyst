@@ -31,6 +31,7 @@ async def _run() -> int:
         engine,
         external_data_enabled=settings.enable_external_data_calls,
         app_env=settings.app_env,
+        event_research_enabled=settings.enable_event_research,
     )
 
     try:
