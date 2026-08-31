@@ -149,6 +149,52 @@ class OfficialFeedRepository:
                 },
             )
 
+    async def block(self, claim: ClaimedFeed, *, reason: str) -> None:
+        """Disable a feed that is unsafe to execute in the current production policy."""
+        error_message = reason.strip()[:1000] or "Feed blocked by production source policy"
+        async with self.engine.begin() as connection:
+            await connection.execute(
+                text(
+                    """
+                    update official_ingestion_runs
+                    set completed_at = now(),
+                        status = 'failed',
+                        error_type = 'ProductionFeedBlocked',
+                        error_message = :error_message,
+                        result = cast(:result as jsonb)
+                    where id = :run_id
+                    """
+                ),
+                {
+                    "run_id": claim.run_id,
+                    "error_message": error_message,
+                    "result": json.dumps(
+                        {
+                            "blocked": True,
+                            "reason": error_message,
+                            "network_request_performed": False,
+                        }
+                    ),
+                },
+            )
+            await connection.execute(
+                text(
+                    """
+                    update official_data_feeds
+                    set enabled = false,
+                        last_completed_at = now(),
+                        last_error = :last_error,
+                        lease_until = null,
+                        updated_at = now()
+                    where id = :feed_id
+                    """
+                ),
+                {
+                    "feed_id": claim.feed.id,
+                    "last_error": f"ProductionFeedBlocked: {error_message}"[:1200],
+                },
+            )
+
     async def fail(self, claim: ClaimedFeed, exc: Exception) -> None:
         error_type = type(exc).__name__
         error_message = str(exc)[:1000]
