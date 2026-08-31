@@ -14,6 +14,7 @@ from app.orchestration.plan import AnalysisMode, ResearchDepth, ResearchPlan, bu
 from app.orchestration.registry import build_agent_registry
 from app.orchestration.runtime import OrchestratorRuntime
 from app.repositories.research import ResearchRepository
+from app.repositories.research_progress import ResearchProgressRepository
 from app.research.live_context import UserAwareResearchContextLoader
 from app.telemetry import ProductTelemetry
 
@@ -38,6 +39,7 @@ class ResearchService:
         self.engine = engine
         self.settings = settings or get_settings()
         self.repository = ResearchRepository(engine)
+        self.progress = ResearchProgressRepository(engine)
         self.telemetry = ProductTelemetry(self.settings)
         self.runtime = OrchestratorRuntime(
             build_agent_registry(engine, self.settings),
@@ -57,6 +59,8 @@ class ResearchService:
         job_metadata: dict[str, object] = {
             "analysis_depth": depth.value,
             "execution": "queued_worker",
+            "research_stage": "received",
+            "progress_pct": 0,
         }
         if metadata:
             job_metadata.update(metadata)
@@ -86,7 +90,12 @@ class ResearchService:
             query=query,
             mode=mode.value,
             requested_by=requested_by,
-            metadata={"analysis_depth": depth.value, "execution": "inline"},
+            metadata={
+                "analysis_depth": depth.value,
+                "execution": "inline",
+                "research_stage": "received",
+                "progress_pct": 0,
+            },
         )
         return await self.execute_existing(
             job_id=job_id,
@@ -111,6 +120,7 @@ class ResearchService:
         """Execute an already-durable job, suitable for a separate worker process."""
         started = perf_counter()
         await self.repository.set_job_status(job_id, "running")
+        await self.progress.set_stage(job_id, "planned", 5)
         await self.telemetry.capture(
             "research_started",
             {"mode": mode.value, "depth": depth.value, "queued": True},
@@ -118,6 +128,9 @@ class ResearchService:
 
         runtime_context = dict(context or {})
         runtime_context.setdefault("analysis_depth", depth.value)
+
+        async def update_stage(stage: str, progress_pct: int) -> None:
+            await self.progress.set_stage(job_id, stage, progress_pct)
 
         try:
             outputs = await self.runtime.run(
@@ -128,11 +141,13 @@ class ResearchService:
                     query=query,
                     context=runtime_context,
                 ),
+                on_stage=update_stage,
             )
             security_id = _resolved_security_id(outputs)
             if security_id is not None:
                 await self._attach_security(job_id, security_id)
 
+            await self.progress.set_stage(job_id, "rendering", 95)
             for output in outputs:
                 await self.repository.save_agent_output(job_id, output)
 
@@ -145,6 +160,7 @@ class ResearchService:
                     await self.repository.save_report(job_id, report)
 
             await self.repository.set_job_status(job_id, "completed")
+            await self.progress.set_stage(job_id, "complete", 100)
             if security_id is not None and report:
                 await self._save_snapshot(job_id, security_id, mode, depth, report, outputs)
 
@@ -173,6 +189,7 @@ class ResearchService:
             )
         except Exception as exc:
             await self.repository.set_job_status(job_id, "failed")
+            await self.progress.set_stage(job_id, "failed", 100)
             await self.telemetry.capture(
                 "research_failed",
                 {
