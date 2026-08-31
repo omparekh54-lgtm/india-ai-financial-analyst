@@ -46,6 +46,7 @@ class ChiefAnalystAgent:
             str(item.evidence_id): item.model_dump(mode="json")
             for item in agent_input.evidence
         }
+        fallback = _deterministic_synthesis(claims, confidence)
         report = {
             "query": agent_input.query,
             "mode": mode,
@@ -56,6 +57,13 @@ class ChiefAnalystAgent:
             "special_mode": special,
             "evidence_catalog": evidence_catalog,
             "confidence": confidence,
+            "executive_summary": fallback["executive_summary"],
+            "narrative": fallback["narrative"],
+            "investment_thesis": fallback["investment_thesis"],
+            "anti_thesis": fallback["anti_thesis"],
+            "catalysts": fallback["catalysts"],
+            "thesis_breakers": fallback["thesis_breakers"],
+            "valuation_scenarios": fallback["valuation_scenarios"],
             "validation": agent_input.context.get("validation_metrics", {}),
             "warnings": agent_input.context.get("validation_warnings", []),
             "research_disclaimer": (
@@ -70,6 +78,116 @@ class ChiefAnalystAgent:
             evidence=agent_input.evidence,
             metrics={"report": report, **confidence},
         )
+
+
+def _deterministic_synthesis(
+    claims: list[Claim],
+    confidence: dict[str, float],
+) -> dict[str, object]:
+    ranked = sorted(claims, key=_claim_rank, reverse=True)
+    thesis_agents = {
+        AgentName.FINANCIALS,
+        AgentName.EARNINGS,
+        AgentName.INDUSTRY,
+        AgentName.VALUATION,
+    }
+    thesis = _unique_statements(
+        [
+            claim
+            for claim in ranked
+            if claim.agent in thesis_agents and claim.claim_type not in {"risk", "catalyst"}
+        ],
+        limit=4,
+    )
+    catalysts = _unique_statements(
+        [claim for claim in ranked if claim.claim_type == "catalyst"],
+        limit=5,
+    )
+    risks = _unique_statements(
+        [claim for claim in ranked if claim.claim_type == "risk"],
+        limit=5,
+    )
+    watch_items = _unique_statements(
+        [
+            claim
+            for claim in ranked
+            if claim.status == "inferred"
+            or (
+                claim.agent in {AgentName.FILINGS, AgentName.EARNINGS, AgentName.NEWS}
+                and claim.claim_type not in {"risk", "catalyst"}
+            )
+        ],
+        limit=5,
+    )
+    summary_source = thesis or catalysts or risks or _unique_statements(ranked, limit=3)
+    if summary_source:
+        executive_summary = "Validated evidence currently highlights: " + " ".join(summary_source[:3])
+    else:
+        executive_summary = (
+            "No validated material claims were available for a research thesis in this run."
+        )
+
+    valuation_scenarios: dict[str, object] | None = None
+    for claim in ranked:
+        if claim.agent != AgentName.VALUATION:
+            continue
+        scenarios = claim.data.get("scenarios")
+        if isinstance(scenarios, dict):
+            valuation_scenarios = {
+                "method": claim.data.get("method"),
+                "method_code": claim.data.get("method_code"),
+                "sector_family": claim.data.get("sector_family"),
+                "scenarios": scenarios,
+                "upside_pct": claim.data.get("upside_pct"),
+                "probability_weighted_value": None,
+                "probability_note": (
+                    "No scenario probabilities were supplied, so the system does not invent "
+                    "a probability-weighted target."
+                ),
+            }
+            break
+
+    confidence_note = (
+        f"Data {confidence['data_confidence']:.0%}; thesis {confidence['thesis_confidence']:.0%}; "
+        f"valuation {confidence['valuation_confidence']:.0%}; catalyst "
+        f"{confidence['catalyst_confidence']:.0%}."
+    )
+    return {
+        "executive_summary": executive_summary,
+        "investment_thesis": thesis,
+        "anti_thesis": risks,
+        "catalysts": catalysts,
+        "thesis_breakers": risks,
+        "valuation_scenarios": valuation_scenarios,
+        "narrative": {
+            "bull_case": catalysts,
+            "bear_case": risks,
+            "watch_items": watch_items,
+            "confidence_note": confidence_note,
+            "provider": "deterministic",
+            "model": "validated_claims_v1",
+        },
+    }
+
+
+def _claim_rank(claim: Claim) -> tuple[int, float]:
+    status_rank = {"verified": 3, "supported": 2, "inferred": 1}
+    return status_rank.get(claim.status, 0), claim.confidence
+
+
+def _unique_statements(claims: list[Claim], *, limit: int) -> list[str]:
+    statements: list[str] = []
+    seen: set[str] = set()
+    for claim in claims:
+        statement = claim.statement.strip()
+        key = " ".join(statement.lower().split())
+        if not statement or key in seen:
+            continue
+        seen.add(key)
+        statements.append(statement)
+        if len(statements) >= limit:
+            break
+    return statements
 
 
 def _confidence_framework(claims: list[Claim]) -> dict[str, float]:
