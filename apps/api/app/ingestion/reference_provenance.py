@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from urllib.parse import unquote, urlparse
 from uuid import UUID
@@ -21,6 +22,37 @@ _SYNTHETIC_SOURCE_TOKENS = frozenset(
         "placeholder",
     }
 )
+
+# Domains controlled by exchanges, regulators, depositories, statistical authorities,
+# or public central-bank data services. Subdomains are accepted.
+_OFFICIAL_SOURCE_HOST_SUFFIXES = (
+    "nseindia.com",
+    "bseindia.com",
+    "sebi.gov.in",
+    "rbi.org.in",
+    "nsdl.co.in",
+    "cdslindia.com",
+    "mospi.gov.in",
+    "stlouisfed.org",
+)
+
+
+@dataclass(frozen=True)
+class ReferenceApproval:
+    provenance_class: str
+    approval_reference: str | None
+    source_host: str | None
+
+    def as_metadata(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "production_approved": True,
+            "provenance_class": self.provenance_class,
+        }
+        if self.source_host:
+            payload["source_host"] = self.source_host
+        if self.approval_reference:
+            payload["approval_reference"] = self.approval_reference
+        return payload
 
 
 async def resolve_security(engine: AsyncEngine, identifier: str) -> tuple[UUID, str]:
@@ -70,12 +102,7 @@ def validate_source_uri(value: str) -> str:
             if part
         )
     ).lower()
-    tokens = {token for token in re.split(r"[^a-z0-9]+", provenance_text) if token}
-    blocked = sorted(tokens & _SYNTHETIC_SOURCE_TOKENS)
-    if blocked:
-        raise ValueError(
-            "source_uri appears to identify non-production data: " + ", ".join(blocked)
-        )
+    _reject_synthetic_tokens(provenance_text, label="source_uri")
     return cleaned
 
 
@@ -83,11 +110,38 @@ def validate_provider_name(value: str) -> str:
     cleaned = value.strip().lower()
     if not cleaned:
         raise ValueError("provider cannot be empty")
-    tokens = {token for token in re.split(r"[^a-z0-9]+", cleaned) if token}
-    blocked = sorted(tokens & _SYNTHETIC_SOURCE_TOKENS)
-    if blocked:
-        raise ValueError("synthetic/mock/sample providers are not permitted")
+    _reject_synthetic_tokens(cleaned, label="provider")
     return cleaned
+
+
+def validate_reference_approval(
+    source_uri: str,
+    approval_reference: str | None = None,
+) -> ReferenceApproval:
+    cleaned_uri = validate_source_uri(source_uri)
+    parsed = urlparse(cleaned_uri)
+    host = (parsed.hostname or "").strip().lower() or None
+    if host and parsed.scheme.lower() in {"http", "https"} and _is_official_host(host):
+        return ReferenceApproval(
+            provenance_class="official_source",
+            approval_reference=None,
+            source_host=host,
+        )
+
+    approval = (approval_reference or "").strip()
+    if not approval:
+        raise ValueError(
+            "non-official reference data requires --approval-reference identifying the "
+            "license, contract, internal approval, or source-governance record"
+        )
+    if len(approval) > 240:
+        raise ValueError("approval reference must be 240 characters or fewer")
+    _reject_synthetic_tokens(approval.lower(), label="approval reference")
+    return ReferenceApproval(
+        provenance_class="licensed_or_approved",
+        approval_reference=approval,
+        source_host=host,
+    )
 
 
 def parse_optional_datetime(value: str | None) -> datetime | None:
@@ -110,10 +164,13 @@ async def upsert_reference_source(
     published_at: datetime | None,
     checksum: str,
     metadata: dict[str, object],
+    approval_reference: str | None = None,
 ) -> UUID:
     source_type = source_type.strip().lower()
     if not source_type:
         raise ValueError("source_type cannot be empty")
+    approval = validate_reference_approval(source_uri, approval_reference)
+    audited_metadata = {**metadata, **approval.as_metadata()}
     parameters = {
         "security_id": security_id,
         "source_type": source_type,
@@ -121,7 +178,7 @@ async def upsert_reference_source(
         "title": title.strip() or None,
         "published_at": published_at,
         "checksum": checksum,
-        "metadata": json.dumps(metadata),
+        "metadata": json.dumps(audited_metadata),
     }
     async with engine.begin() as connection:
         source_id = await connection.scalar(
@@ -175,3 +232,16 @@ async def upsert_reference_source(
                 {**parameters, "source_id": source_id},
             )
     return UUID(str(source_id))
+
+
+def _is_official_host(host: str) -> bool:
+    return any(host == suffix or host.endswith(f".{suffix}") for suffix in _OFFICIAL_SOURCE_HOST_SUFFIXES)
+
+
+def _reject_synthetic_tokens(value: str, *, label: str) -> None:
+    tokens = {token for token in re.split(r"[^a-z0-9]+", value) if token}
+    blocked = sorted(tokens & _SYNTHETIC_SOURCE_TOKENS)
+    if blocked:
+        raise ValueError(
+            f"{label} appears to identify non-production data: " + ", ".join(blocked)
+        )
