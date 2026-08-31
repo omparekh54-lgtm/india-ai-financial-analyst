@@ -19,6 +19,7 @@ class ContextLoader(Protocol):
         security_id: UUID,
         *,
         mode: str,
+        depth: str,
         user_id: UUID | None = None,
     ) -> tuple[dict[str, object], list[EvidenceRef]]: ...
 
@@ -59,6 +60,7 @@ class OrchestratorRuntime:
         outputs: list[AgentOutput] = []
         working_input = agent_input.model_copy(deep=True)
         working_input.context["analysis_mode"] = plan.mode.value
+        working_input.context["analysis_depth"] = plan.depth.value
 
         for stage in plan.stages:
             if stage.name == "validate":
@@ -130,6 +132,7 @@ class OrchestratorRuntime:
         loaded_context, loaded_evidence = await self.context_loader.load(
             working_input.security_id,
             mode=plan.mode.value,
+            depth=plan.depth.value,
             user_id=working_input.user_id,
         )
         working_input.context.update(loaded_context)
