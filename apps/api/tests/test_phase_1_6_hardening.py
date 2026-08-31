@@ -9,7 +9,13 @@ from app.agents.contracts import AgentInput, AgentName, AgentOutput, Claim, Evid
 from app.agents.financials_agent import FinancialForensicAgent
 from app.agents.validator_agent import EvidenceCrossValidationAgent
 from app.orchestration.events import classify_corporate_event
-from app.orchestration.plan import AnalysisMode, EventTrigger, ExecutionStage, ResearchDepth, ResearchPlan
+from app.orchestration.plan import (
+    AnalysisMode,
+    EventTrigger,
+    ExecutionStage,
+    ResearchDepth,
+    ResearchPlan,
+)
 from app.orchestration.runtime import AgentRegistry, OrchestratorRuntime
 
 
