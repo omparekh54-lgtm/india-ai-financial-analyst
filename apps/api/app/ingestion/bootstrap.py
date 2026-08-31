@@ -5,7 +5,11 @@ from pathlib import Path
 
 from app.ingestion.official_benchmark_files import resolve_official_benchmark_source
 from app.ingestion.official_macro_files import validate_official_source_url, validate_rbi_series_key
-from app.ingestion.reference_provenance import validate_provider_name, validate_source_uri
+from app.ingestion.reference_provenance import (
+    validate_provider_name,
+    validate_reference_approval,
+    validate_source_uri,
+)
 
 
 @dataclass(frozen=True)
@@ -20,6 +24,7 @@ class FinancialBootstrapSpec:
     security: str
     file: Path
     source_uri: str
+    approval_reference: str | None = None
 
 
 @dataclass(frozen=True)
@@ -28,6 +33,7 @@ class MarketBootstrapSpec:
     provider: str
     file: Path
     source_uri: str
+    approval_reference: str | None = None
 
 
 @dataclass(frozen=True)
@@ -35,6 +41,7 @@ class MetricsBootstrapSpec:
     security: str
     file: Path
     source_uri: str
+    approval_reference: str | None = None
 
 
 @dataclass(frozen=True)
@@ -65,39 +72,57 @@ def parse_benchmark_spec(value: str) -> BenchmarkBootstrapSpec:
 
 
 def parse_financial_spec(value: str) -> FinancialBootstrapSpec:
-    parts = [part.strip() for part in value.split(",", 2)]
-    if len(parts) != 3 or not all(parts):
-        raise ValueError("financial must use SECURITY,FILE,SOURCE_URI format")
-    security, file_name, source_uri = parts
+    parts = [part.strip() for part in value.split(",", 3)]
+    if len(parts) not in {3, 4} or not all(parts[:3]):
+        raise ValueError(
+            "financial must use SECURITY,FILE,SOURCE_URI[,APPROVAL_REFERENCE] format"
+        )
+    security, file_name, source_uri = parts[:3]
+    approval_reference = parts[3] if len(parts) == 4 and parts[3] else None
+    cleaned_uri = validate_source_uri(source_uri)
+    approval = validate_reference_approval(cleaned_uri, approval_reference)
     return FinancialBootstrapSpec(
         security=security,
         file=Path(file_name),
-        source_uri=validate_source_uri(source_uri),
+        source_uri=cleaned_uri,
+        approval_reference=approval.approval_reference,
     )
 
 
 def parse_market_spec(value: str) -> MarketBootstrapSpec:
-    parts = [part.strip() for part in value.split(",", 3)]
-    if len(parts) != 4 or not all(parts):
-        raise ValueError("market must use SECURITY,PROVIDER,FILE,SOURCE_URI format")
-    security, provider, file_name, source_uri = parts
+    parts = [part.strip() for part in value.split(",", 4)]
+    if len(parts) not in {4, 5} or not all(parts[:4]):
+        raise ValueError(
+            "market must use SECURITY,PROVIDER,FILE,SOURCE_URI[,APPROVAL_REFERENCE] format"
+        )
+    security, provider, file_name, source_uri = parts[:4]
+    approval_reference = parts[4] if len(parts) == 5 and parts[4] else None
+    cleaned_uri = validate_source_uri(source_uri)
+    approval = validate_reference_approval(cleaned_uri, approval_reference)
     return MarketBootstrapSpec(
         security=security,
         provider=validate_provider_name(provider),
         file=Path(file_name),
-        source_uri=validate_source_uri(source_uri),
+        source_uri=cleaned_uri,
+        approval_reference=approval.approval_reference,
     )
 
 
 def parse_metrics_spec(value: str) -> MetricsBootstrapSpec:
-    parts = [part.strip() for part in value.split(",", 2)]
-    if len(parts) != 3 or not all(parts):
-        raise ValueError("metrics must use SECURITY,FILE,SOURCE_URI format")
-    security, file_name, source_uri = parts
+    parts = [part.strip() for part in value.split(",", 3)]
+    if len(parts) not in {3, 4} or not all(parts[:3]):
+        raise ValueError(
+            "metrics must use SECURITY,FILE,SOURCE_URI[,APPROVAL_REFERENCE] format"
+        )
+    security, file_name, source_uri = parts[:3]
+    approval_reference = parts[3] if len(parts) == 4 and parts[3] else None
+    cleaned_uri = validate_source_uri(source_uri)
+    approval = validate_reference_approval(cleaned_uri, approval_reference)
     return MetricsBootstrapSpec(
         security=security,
         file=Path(file_name),
-        source_uri=validate_source_uri(source_uri),
+        source_uri=cleaned_uri,
+        approval_reference=approval.approval_reference,
     )
 
 
@@ -214,6 +239,7 @@ def build_bootstrap_plan(
             "--min-rows",
             str(financial_min_rows),
         ]
+        _append_approval_reference(command, spec.approval_reference)
         if dry_run:
             command.append("--dry-run")
         stages.append(
@@ -242,6 +268,7 @@ def build_bootstrap_plan(
             "--min-rows",
             str(market_min_rows),
         ]
+        _append_approval_reference(command, spec.approval_reference)
         if dry_run:
             command.append("--dry-run")
         stages.append(
@@ -264,6 +291,7 @@ def build_bootstrap_plan(
             "--min-rows",
             str(metrics_min_rows),
         ]
+        _append_approval_reference(command, spec.approval_reference)
         if dry_run:
             command.append("--dry-run")
         stages.append(
@@ -338,3 +366,8 @@ def build_bootstrap_plan(
         stages.append(BootstrapStage(name="evidence_embeddings", command=tuple(command)))
 
     return tuple(stages)
+
+
+def _append_approval_reference(command: list[str], approval_reference: str | None) -> None:
+    if approval_reference:
+        command.extend(["--approval-reference", approval_reference])
