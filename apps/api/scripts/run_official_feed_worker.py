@@ -19,9 +19,10 @@ async def _run(limit: int) -> int:
         result = await OfficialFeedWorker(
             engine,
             external_data_enabled=settings.enable_external_data_calls,
+            app_env=settings.app_env,
         ).run_once(limit=limit)
         print(json.dumps(result, indent=2, default=str))
-        return 0 if result.get("failed_count", 0) == 0 else 1
+        return 0 if result.get("failed_count", 0) == 0 and result.get("blocked_count", 0) == 0 else 1
     finally:
         await engine.dispose()
 
