@@ -32,6 +32,18 @@ def test_deep_plan_keeps_full_specialist_set() -> None:
     assert plan.stages[-1].agents == [AgentName.SYNTHESIS]
 
 
+def test_what_changed_recomputes_financial_and_valuation_inputs() -> None:
+    plan = build_research_plan(AnalysisMode.WHAT_CHANGED)
+
+    assert AgentName.MARKET in plan.stages[1].agents
+    assert AgentName.FINANCIALS in plan.stages[1].agents
+    assert AgentName.FILINGS in plan.stages[1].agents
+    assert AgentName.EARNINGS in plan.stages[1].agents
+    assert AgentName.VALUATION in plan.stages[2].agents
+    assert plan.stages[-2].agents == [AgentName.VALIDATOR]
+    assert plan.stages[-1].agents == [AgentName.SYNTHESIS]
+
+
 def test_why_move_plan_is_selective() -> None:
     plan = build_research_plan(AnalysisMode.WHY_MOVE)
     collection = plan.stages[1].agents
