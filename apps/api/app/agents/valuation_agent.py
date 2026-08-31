@@ -18,7 +18,10 @@ class ValuationScenarioAgent:
                 warnings=["No valuation inputs supplied"],
             )
 
-        method = _select_method(str(data.get("sector") or data.get("business_type") or ""))
+        classification = " ".join(
+            str(data.get(key) or "") for key in ("business_type", "industry", "sector")
+        )
+        method = _select_method(classification)
         try:
             scenarios = _calculate(method, data)
         except (TypeError, ValueError, KeyError) as exc:
@@ -55,12 +58,12 @@ class ValuationScenarioAgent:
         )
 
 
-def _select_method(sector: str) -> str:
-    value = sector.lower()
-    if any(term in value for term in ("bank", "nbfc", "financial services", "lending")):
-        return "price_to_book"
+def _select_method(classification: str) -> str:
+    value = classification.lower()
     if "insurance" in value:
         return "price_to_embedded_value"
+    if any(term in value for term in ("bank", "nbfc", "financial services", "lending")):
+        return "price_to_book"
     if any(term in value for term in ("holding", "conglomerate")):
         return "sotp"
     if any(term in value for term in ("loss making", "pre-profit", "internet platform")):
