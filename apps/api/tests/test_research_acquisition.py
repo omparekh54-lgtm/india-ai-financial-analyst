@@ -122,7 +122,7 @@ async def test_quick_depth_uses_one_small_search() -> None:
     settings = Settings(
         enable_external_data_calls=True,
         tavily_api_key="configured",
-        web_research_max_searches_per_job=4,
+        web_research_max_searches_per_job=3,
         web_research_max_results_per_search=8,
     )
     tavily = FakeTavily()
@@ -149,7 +149,7 @@ async def test_deep_depth_uses_configured_hard_caps() -> None:
     settings = Settings(
         enable_external_data_calls=True,
         tavily_api_key="configured",
-        web_research_max_searches_per_job=4,
+        web_research_max_searches_per_job=3,
         web_research_max_results_per_search=7,
     )
     tavily = FakeTavily()
@@ -164,7 +164,7 @@ async def test_deep_depth_uses_configured_hard_caps() -> None:
         evidence=[],
     )
 
-    assert len(tavily.calls) == 4
+    assert len(tavily.calls) == 3
     assert all(max_results == 7 for _query, _topic, max_results in tavily.calls)
     acquisition = context["research_acquisition"]
     assert isinstance(acquisition, dict)
