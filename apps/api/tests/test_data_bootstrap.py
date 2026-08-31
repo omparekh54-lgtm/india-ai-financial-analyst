@@ -212,7 +212,7 @@ def test_bootstrap_plan_has_deterministic_dependency_order_and_approvals() -> No
     )
 
     assert [stage.name for stage in plan] == [
-        "nse_security_master",
+        "nse_universe",
         "financial_1_RELIANCE",
         "market_1_RELIANCE",
         "metrics_1_RELIANCE",
@@ -223,6 +223,10 @@ def test_bootstrap_plan_has_deterministic_dependency_order_and_approvals() -> No
         "evidence_embeddings",
     ]
     assert plan[-1].command[-2:] == ("--limit", "500")
+    assert "bootstrap_nse_universe.py" in plan[0].command[1]
+    assert "--provider" in plan[0].command
+    assert "nse" in plan[0].command
+    assert "--nse-file" in plan[0].command
     assert "import_official_benchmark_file.py" in plan[4].command[1]
     assert "import_official_macro_file.py" in plan[6].command[1]
     assert "DATA-LICENSE-2026-014" in plan[1].command
@@ -236,8 +240,10 @@ def test_bootstrap_plan_can_explicitly_use_upstox_master_fallback() -> None:
         nse_file=None,
         upstox_file=Path("/data/NSE.json.gz"),
     )
-    assert [stage.name for stage in plan] == ["upstox_security_master"]
-    assert "import_upstox_security_master.py" in plan[0].command[1]
+    assert [stage.name for stage in plan] == ["nse_universe"]
+    assert "bootstrap_nse_universe.py" in plan[0].command[1]
+    assert "upstox" in plan[0].command
+    assert "--upstox-file" in plan[0].command
     assert "/data/NSE.json.gz" in plan[0].command
     assert "SG-2026-08-31-01" in plan[0].command
 
@@ -327,6 +333,9 @@ def test_skip_nse_allows_resumable_partial_bootstrap() -> None:
 def test_bootstrap_plan_rejects_invalid_limits() -> None:
     with pytest.raises(ValueError, match="security_master_provider"):
         _plan(security_master_provider="unknown")
+
+    with pytest.raises(ValueError, match="nse_min_rows"):
+        _plan(nse_min_rows=999)
 
     with pytest.raises(ValueError, match="financial_min_rows"):
         _plan(financial_min_rows=0)
