@@ -25,6 +25,18 @@ _REQUIRED_MACRO_SERIES = frozenset(
     }
 )
 _REQUIRED_BENCHMARK_CODES = frozenset({"NIFTY50", "INDIAVIX"})
+_LLM_ENRICHED_AGENTS = frozenset(
+    {
+        AgentName.FILINGS,
+        AgentName.EARNINGS,
+        AgentName.NEWS,
+        AgentName.WEB,
+        AgentName.INDUSTRY,
+        AgentName.SENTIMENT,
+        AgentName.RISK,
+        AgentName.SYNTHESIS,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -295,8 +307,10 @@ def evaluate_agent_readiness(
     agent_errors[AgentName.FINANCIALS] = errors_for(
         (
             financial_ready,
-            "Every supported security needs sourced financial history across at least 8 periods "
-            "and 6 canonical fact types.",
+            (
+                "Every supported security needs sourced financial history across at least 8 periods "
+                "and 6 canonical fact types."
+            ),
         ),
         (financial_fresh, "Financial history is stale beyond the 200-day production window."),
     )
@@ -310,8 +324,10 @@ def evaluate_agent_readiness(
         (financial_ready, "Earnings analysis requires complete financial-history coverage."),
         (
             earnings_ready,
-            "Every supported security needs parsed results/call/transcript/presentation evidence "
-            "from the last 220 days.",
+            (
+                "Every supported security needs parsed results/call/transcript/presentation evidence "
+                "from the last 220 days."
+            ),
         ),
     )
     agent_errors[AgentName.NEWS] = errors_for(
@@ -436,11 +452,10 @@ def _global_provenance_errors(coverage: DataCoverage) -> tuple[str, ...]:
 
 def _agent_warnings(agent: AgentName, settings: Settings) -> tuple[str, ...]:
     warnings: list[str] = []
-    if agent in {AgentName.FILINGS, AgentName.EARNINGS, AgentName.NEWS, AgentName.WEB, AgentName.INDUSTRY, AgentName.SENTIMENT, AgentName.RISK, AgentName.SYNTHESIS}:
-        if not settings.enable_external_llm_calls:
-            warnings.append(
-                "Optional LLM enrichment is disabled; deterministic agent logic remains available."
-            )
+    if agent in _LLM_ENRICHED_AGENTS and not settings.enable_external_llm_calls:
+        warnings.append(
+            "Optional LLM enrichment is disabled; deterministic agent logic remains available."
+        )
     if agent == AgentName.MARKET and not settings.enable_live_market:
         warnings.append(
             "Live broker overlay is disabled; sourced stored market history remains the fallback."
