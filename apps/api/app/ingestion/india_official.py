@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
 from uuid import UUID
@@ -158,17 +159,22 @@ class OfficialIndiaIngestionService:
                 "derived_count": 0,
             }
 
+        checksum = hashlib.sha256(data).hexdigest()
         source_id = await self._ensure_security_source(
             security_id=security_id,
             source_type="exchange_filing",
             source_uri=source_uri,
             title=title,
             published_at=published_at,
+            checksum=checksum,
             metadata={
                 "exchange": normalized_exchange,
                 "identifier": identifier,
                 "document_type": "financial_results_xbrl",
                 "media_type": media_type,
+                "provenance_class": "official_source",
+                "production_approved": True,
+                "content_sha256": checksum,
             },
         )
         result = await self.financial_ingestor.ingest_batch(
@@ -181,6 +187,7 @@ class OfficialIndiaIngestionService:
             "identifier": identifier,
             "security_id": str(security_id),
             "source_id": str(source_id),
+            "checksum": checksum,
             **result,
         }
 
@@ -265,6 +272,7 @@ class OfficialIndiaIngestionService:
         title: str,
         published_at: datetime | None,
         metadata: dict[str, object],
+        checksum: str | None = None,
     ) -> UUID:
         if not source_uri.startswith("https://"):
             raise ValueError("Official source_uri must use HTTPS")
@@ -275,6 +283,7 @@ class OfficialIndiaIngestionService:
             "title": title,
             "published_at": published_at,
             "retrieved_at": datetime.now(UTC),
+            "checksum": checksum,
             "metadata": json.dumps(metadata),
         }
         async with self.engine.begin() as connection:
@@ -283,10 +292,10 @@ class OfficialIndiaIngestionService:
                     """
                     insert into sources (
                         security_id, source_type, source_uri, title, published_at,
-                        retrieved_at, freshness, metadata
+                        retrieved_at, freshness, checksum, metadata
                     ) values (
                         :security_id, :source_type, :source_uri, :title, :published_at,
-                        :retrieved_at, 'periodic', cast(:metadata as jsonb)
+                        :retrieved_at, 'periodic', :checksum, cast(:metadata as jsonb)
                     )
                     on conflict do nothing
                     returning id
@@ -295,28 +304,42 @@ class OfficialIndiaIngestionService:
                 parameters,
             )
             source_id = result.scalar_one_or_none()
-            if source_id is not None:
-                return source_id
-            source_id = await connection.scalar(
-                text(
-                    """
-                    select id
-                    from sources
-                    where security_id = :security_id
-                      and source_uri = :source_uri
-                      and published_at is not distinct from :published_at
-                    order by retrieved_at desc
-                    limit 1
-                    """
-                ),
-                {
-                    "security_id": security_id,
-                    "source_uri": source_uri,
-                    "published_at": published_at,
-                },
-            )
+            if source_id is None:
+                source_id = await connection.scalar(
+                    text(
+                        """
+                        select id
+                        from sources
+                        where security_id = :security_id
+                          and source_uri = :source_uri
+                          and published_at is not distinct from :published_at
+                        order by retrieved_at desc
+                        limit 1
+                        """
+                    ),
+                    {
+                        "security_id": security_id,
+                        "source_uri": source_uri,
+                        "published_at": published_at,
+                    },
+                )
             if source_id is None:
                 raise RuntimeError("Unable to resolve official security source")
+            await connection.execute(
+                text(
+                    """
+                    update sources
+                    set source_type = :source_type,
+                        title = :title,
+                        retrieved_at = :retrieved_at,
+                        freshness = 'periodic',
+                        checksum = coalesce(:checksum, checksum),
+                        metadata = cast(:metadata as jsonb)
+                    where id = :source_id
+                    """
+                ),
+                {**parameters, "source_id": source_id},
+            )
             return source_id
 
     async def _ensure_global_source(
