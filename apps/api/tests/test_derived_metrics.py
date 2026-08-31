@@ -59,7 +59,7 @@ def test_general_company_derives_growth_margin_roce_and_market_metrics() -> None
     ]
     bundle = derive_peer_metrics(
         facts,
-        market=MetricMarketClose(date(2026, 8, 28), Decimal("120"), S3),
+        market=MetricMarketClose(date(2026, 8, 28), Decimal(120), S3),
     )
     metrics = _metrics(bundle)
 
@@ -68,8 +68,9 @@ def test_general_company_derives_growth_margin_roce_and_market_metrics() -> None
     assert Decimal(str(metrics["roce"].value)) == Decimal("0.15")  # type: ignore[attr-defined]
     assert Decimal(str(metrics["roe"].value)) == Decimal("0.2")  # type: ignore[attr-defined]
     assert Decimal(str(metrics["roa"].value)) == Decimal("0.08")  # type: ignore[attr-defined]
-    assert Decimal(str(metrics["pe"].value)) == Decimal("10")  # type: ignore[attr-defined]
-    assert Decimal(str(metrics["pb"].value)) == Decimal("2")  # type: ignore[attr-defined]
+    assert Decimal(str(metrics["pe"].value)) == Decimal(10)  # type: ignore[attr-defined]
+    assert Decimal(str(metrics["pb"].value)) == Decimal(2)  # type: ignore[attr-defined]
+    assert bundle.industry_comparable_count >= 3
     assert bundle.checksum
     assert set(bundle.upstream_source_ids) == {S1, S2, S3}
 
@@ -140,6 +141,23 @@ def test_insurer_can_reach_peer_metric_breadth_without_ebitda() -> None:
     assert {"revenue_growth", "vnb_margin_pct", "solvency_ratio_pct"} <= set(metrics)
 
 
+def test_market_multiple_fallbacks_use_pat_equity_and_shares() -> None:
+    facts = [
+        _fact("pat", date(2026, 3, 31), "100", source_id=S1),
+        _fact("total_equity", date(2026, 3, 31), "500", source_id=S2),
+        _fact("shares_outstanding", date(2026, 3, 31), "10", unit="crore shares", source_id=S2),
+    ]
+    metrics = _metrics(
+        derive_peer_metrics(
+            facts,
+            market=MetricMarketClose(date(2026, 8, 28), Decimal(100), S3),
+        )
+    )
+
+    assert Decimal(str(metrics["pe"].value)) == Decimal(10)  # type: ignore[attr-defined]
+    assert Decimal(str(metrics["pb"].value)) == Decimal(2)  # type: ignore[attr-defined]
+
+
 def test_incompatible_units_do_not_create_false_ratio_metrics() -> None:
     facts = [
         _fact("revenue", date(2026, 3, 31), "100", unit="INR crore", source_id=S1),
@@ -168,13 +186,13 @@ def test_market_multiples_are_not_created_from_quarterly_eps_or_nonpositive_pric
     metrics = _metrics(
         derive_peer_metrics(
             facts,
-            market=MetricMarketClose(date(2026, 8, 28), Decimal("100"), S4),
+            market=MetricMarketClose(date(2026, 8, 28), Decimal(100), S4),
         )
     )
     assert "pe" not in metrics
 
     try:
-        derive_peer_metrics(facts, market=MetricMarketClose(date(2026, 8, 28), Decimal("0"), S4))
+        derive_peer_metrics(facts, market=MetricMarketClose(date(2026, 8, 28), Decimal(0), S4))
     except ValueError as exc:
         assert "positive" in str(exc)
     else:  # pragma: no cover
