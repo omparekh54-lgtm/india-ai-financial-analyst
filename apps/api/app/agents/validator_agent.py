@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isclose
-from typing import Any
 from uuid import UUID
 
 from app.agents.contracts import AgentInput, AgentName, AgentOutput, Claim, EvidenceRef
