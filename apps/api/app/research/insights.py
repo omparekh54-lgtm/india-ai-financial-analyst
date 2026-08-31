@@ -98,7 +98,8 @@ def what_changed(
         ),
         "note": (
             "Changes compare the current validated run with the latest prior validated snapshot. "
-            "Numeric deltas are computed deterministically from persisted specialist metrics."
+            "Structured event/metric identities are used before statement text so wording changes "
+            "do not create false new or resolved items."
         ),
     }
 
@@ -113,17 +114,80 @@ def why_did_it_move(
     derivatives = _mapping(technical.get("derivatives"))
     drivers: list[dict[str, Any]] = []
 
-    relative = _first_number(
-        market.get("relative_to_sector_pct"),
-        market.get("relative_to_benchmark_pct"),
-    )
+    stock_move = _number(market.get("change_pct"))
+    benchmark_move = _number(market.get("benchmark_change_pct"))
+    sector_move = _number(market.get("sector_change_pct"))
+    relative_sector = _number(market.get("relative_to_sector_pct"))
+    relative_benchmark = _number(market.get("relative_to_benchmark_pct"))
+    relative = _first_number(relative_sector, relative_benchmark)
+    volume_ratio = _number(market.get("volume_ratio"))
+
+    if stock_move is not None and abs(stock_move) >= 1.0:
+        drivers.append(
+            {
+                "type": "absolute_stock_move",
+                "score": min(0.70, 0.20 + abs(stock_move) / 10.0),
+                "direction": "positive" if stock_move > 0 else "negative",
+                "detail": f"Stock moved {stock_move:.2f}% versus the previous close.",
+            }
+        )
+
     if relative is not None and abs(relative) >= 0.75:
         drivers.append(
             {
                 "type": "stock_specific_relative_move",
-                "score": min(1.0, abs(relative) / 5.0),
+                "score": min(0.80, 0.35 + abs(relative) / 8.0),
                 "direction": "positive" if relative > 0 else "negative",
-                "detail": f"Stock moved {relative:.2f} percentage points versus its comparison benchmark.",
+                "detail": (
+                    f"Stock moved {relative:.2f} percentage points versus its closest "
+                    "comparison benchmark, increasing the likelihood of company-specific factors."
+                ),
+            }
+        )
+
+    if (
+        stock_move is not None
+        and benchmark_move is not None
+        and abs(benchmark_move) >= 0.75
+        and _same_direction(stock_move, benchmark_move)
+    ):
+        drivers.append(
+            {
+                "type": "broad_market_factor",
+                "score": min(0.60, 0.30 + abs(benchmark_move) / 8.0),
+                "direction": "positive" if benchmark_move > 0 else "negative",
+                "detail": (
+                    f"Broad benchmark moved {benchmark_move:.2f}% in the same direction as the stock."
+                ),
+            }
+        )
+
+    if (
+        stock_move is not None
+        and sector_move is not None
+        and abs(sector_move) >= 0.75
+        and _same_direction(stock_move, sector_move)
+        and (relative_sector is None or abs(relative_sector) < max(1.0, abs(sector_move)))
+    ):
+        drivers.append(
+            {
+                "type": "sector_factor",
+                "score": min(0.65, 0.35 + abs(sector_move) / 8.0),
+                "direction": "positive" if sector_move > 0 else "negative",
+                "detail": (
+                    f"Sector benchmark moved {sector_move:.2f}% in the same direction, suggesting "
+                    "part of the move may be sector-wide rather than company-specific."
+                ),
+            }
+        )
+
+    if volume_ratio is not None and volume_ratio >= 1.5:
+        drivers.append(
+            {
+                "type": "volume_confirmation",
+                "score": min(0.58, 0.30 + (volume_ratio - 1.0) / 5.0),
+                "direction": "confirms_move_not_direction",
+                "detail": f"Trading volume was {volume_ratio:.2f}x its recent average.",
             }
         )
 
@@ -212,11 +276,15 @@ def why_did_it_move(
 
     drivers.sort(key=lambda item: _number(item.get("score")) or 0.0, reverse=True)
     return {
-        "candidate_drivers": drivers[:8],
+        "candidate_drivers": drivers[:10],
         "causality_status": "candidate_explanation_not_proven_causality",
+        "market_move_pct": stock_move,
+        "benchmark_move_pct": benchmark_move,
+        "sector_move_pct": sector_move,
+        "volume_ratio": volume_ratio,
         "note": (
-            "Drivers are ranked evidence-based candidates. Technical and derivatives conditions are "
-            "context, not proof of cause; market moves can have multiple causes."
+            "Drivers are ranked evidence-based candidates. Market, sector, volume, technical and "
+            "derivatives conditions are context, not proof of cause; market moves can have multiple causes."
         ),
     }
 
@@ -236,8 +304,26 @@ def _new_items(
 
 
 def _claim_key(claim: dict[str, Any]) -> str:
+    agent = str(claim.get("agent") or "")
+    claim_type = str(claim.get("claim_type") or "")
+    metric = str(claim.get("metric") or "").strip().lower()
+    data = _mapping(claim.get("data"))
+    event_type = str(data.get("event_type") or "").strip().lower()
+    title = str(data.get("title") or "").strip().lower()
+    source_uri = str(data.get("source_uri") or "").strip().lower()
+
+    if event_type:
+        stable_event = "|".join(part for part in (agent, claim_type, event_type, source_uri) if part)
+        return f"event:{stable_event}"
+    if metric:
+        return f"metric:{agent}|{claim_type}|{metric}"
+    if title:
+        normalized_title = re.sub(r"[^a-z0-9]+", " ", title).strip()
+        return f"title:{agent}|{claim_type}|{normalized_title}"
+
     statement = str(claim.get("statement") or "")
-    return re.sub(r"[^a-z0-9]+", " ", statement.lower()).strip()
+    normalized_statement = re.sub(r"[^a-z0-9]+", " ", statement.lower()).strip()
+    return f"statement:{agent}|{claim_type}|{normalized_statement}"
 
 
 def _mapping(value: object) -> dict[str, Any]:
@@ -320,6 +406,10 @@ def _flag_direction(flag: dict[str, Any]) -> str:
     if direction in {"inr strength", "lower crude", "net buying"}:
         return "positive_for_exposed_companies"
     return "context_dependent"
+
+
+def _same_direction(left: float, right: float) -> bool:
+    return (left > 0 and right > 0) or (left < 0 and right < 0)
 
 
 def _first_number(*values: object) -> float | None:
