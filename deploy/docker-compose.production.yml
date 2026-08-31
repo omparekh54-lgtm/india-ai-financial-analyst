@@ -11,6 +11,19 @@ services:
       - "8000:8000"
     restart: unless-stopped
 
+  research-worker:
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      APP_ENV: production
+    command: ["python", "scripts/run_research_worker.py"]
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
   official-feed-worker:
     build:
       context: ../apps/api
