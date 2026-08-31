@@ -170,7 +170,7 @@ def sniff_xbrl_media_type(content: bytes) -> str | None:
     has_inline_xbrl = b"xmlns:ix" in sample or b"<ix:" in sample or b" inline" in sample
     if has_html and has_inline_xbrl:
         return "application/xhtml+xml"
-    if sample.startswith(b"<!doctype html") or sample.startswith(b"<html"):
+    if sample.startswith((b"<!doctype html", b"<html")):
         return "text/html"
     if sample.startswith(b"<?xml") or b"<xbrl" in sample[:1024] or b":xbrl" in sample[:1024]:
         return "application/xml"
