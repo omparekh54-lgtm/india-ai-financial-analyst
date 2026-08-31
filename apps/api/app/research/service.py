@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.agents.contracts import AgentInput, AgentName, AgentOutput
 from app.core.config import Settings, get_settings
-from app.orchestration.plan import AnalysisMode, build_research_plan
+from app.orchestration.plan import AnalysisMode, ResearchDepth, build_research_plan
 from app.orchestration.registry import build_agent_registry
 from app.orchestration.runtime import OrchestratorRuntime
 from app.repositories.research import ResearchRepository
@@ -22,6 +22,7 @@ from app.telemetry import ProductTelemetry
 class ResearchExecution:
     job_id: UUID
     security_id: UUID | None
+    depth: ResearchDepth
     report: dict[str, Any]
     outputs: list[AgentOutput]
 
@@ -49,6 +50,7 @@ class ResearchService:
         *,
         query: str,
         mode: AnalysisMode,
+        depth: ResearchDepth = ResearchDepth.STANDARD,
         context: dict[str, Any] | None = None,
         requested_by: UUID | None = None,
     ) -> ResearchExecution:
@@ -57,13 +59,17 @@ class ResearchService:
             query=query,
             mode=mode.value,
             requested_by=requested_by,
+            metadata={"analysis_depth": depth.value},
         )
         await self.repository.set_job_status(job_id, "running")
-        await self.telemetry.capture("research_started", {"mode": mode.value})
+        await self.telemetry.capture(
+            "research_started",
+            {"mode": mode.value, "depth": depth.value},
+        )
 
         try:
             outputs = await self.runtime.run(
-                build_research_plan(mode),
+                build_research_plan(mode, depth),
                 AgentInput(
                     job_id=job_id,
                     user_id=requested_by,
@@ -88,7 +94,7 @@ class ResearchService:
 
             await self.repository.set_job_status(job_id, "completed")
             if security_id is not None and report:
-                await self._save_snapshot(job_id, security_id, mode, report)
+                await self._save_snapshot(job_id, security_id, mode, depth, report)
 
             validation = report.get("validation") if isinstance(report.get("validation"), dict) else {}
             coverage = validation.get("evidence_coverage") if isinstance(validation, dict) else None
@@ -96,6 +102,7 @@ class ResearchService:
                 "research_completed",
                 {
                     "mode": mode.value,
+                    "depth": depth.value,
                     "duration_ms": round((perf_counter() - started) * 1000),
                     "agent_count": len(outputs),
                     "agent_warning_count": sum(bool(output.warnings) for output in outputs),
@@ -108,6 +115,7 @@ class ResearchService:
             return ResearchExecution(
                 job_id=job_id,
                 security_id=security_id,
+                depth=depth,
                 report=report,
                 outputs=outputs,
             )
@@ -117,6 +125,7 @@ class ResearchService:
                 "research_failed",
                 {
                     "mode": mode.value,
+                    "depth": depth.value,
                     "duration_ms": round((perf_counter() - started) * 1000),
                     "error_type": type(exc).__name__,
                 },
@@ -135,6 +144,7 @@ class ResearchService:
         job_id: UUID,
         security_id: UUID,
         mode: AnalysisMode,
+        depth: ResearchDepth,
         report: dict[str, Any],
     ) -> None:
         sections = report.get("sections") if isinstance(report.get("sections"), dict) else {}
@@ -155,7 +165,7 @@ class ResearchService:
                     ) values (
                         :security_id, :job_id, :snapshot_type,
                         cast(:metrics as jsonb), cast(:catalysts as jsonb), cast(:risks as jsonb),
-                        '{}'::jsonb
+                        cast(:metadata as jsonb)
                     )
                     """
                 ),
@@ -166,6 +176,7 @@ class ResearchService:
                     "metrics": _json(report.get("confidence") or {}),
                     "catalysts": _json(catalysts),
                     "risks": _json(risks),
+                    "metadata": _json({"analysis_depth": depth.value}),
                 },
             )
 
