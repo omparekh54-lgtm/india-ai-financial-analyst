@@ -1,8 +1,18 @@
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
+
+EvidenceFreshness = Literal["live", "near_live", "periodic", "historical", "unknown"]
+_EVIDENCE_FRESHNESS_VALUES = {"live", "near_live", "periodic", "historical", "unknown"}
+
+
+def normalize_evidence_freshness(value: object) -> EvidenceFreshness:
+    cleaned = str(value or "unknown")
+    if cleaned in _EVIDENCE_FRESHNESS_VALUES:
+        return cast(EvidenceFreshness, cleaned)
+    return "unknown"
 
 
 class AgentName(StrEnum):
@@ -31,7 +41,7 @@ class EvidenceRef(BaseModel):
     title: str | None = None
     published_at: str | None = None
     retrieved_at: str
-    freshness: Literal["live", "near_live", "periodic", "historical", "unknown"] = "unknown"
+    freshness: EvidenceFreshness = "unknown"
     excerpt: str | None = None
     page_number: int | None = None
     section: str | None = None
