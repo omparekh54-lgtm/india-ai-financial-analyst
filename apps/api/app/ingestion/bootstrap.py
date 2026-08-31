@@ -255,41 +255,41 @@ def build_bootstrap_plan(
                 BootstrapStage(name="upstox_security_master", command=tuple(command))
             )
 
-    for index, spec in enumerate(financials, start=1):
+    for index, financial_spec in enumerate(financials, start=1):
         command = [
             python_executable,
             str(scripts_dir / "import_financial_csv.py"),
             "--file",
-            str(spec.file),
+            str(financial_spec.file),
             "--security",
-            spec.security,
+            financial_spec.security,
             "--source-uri",
-            spec.source_uri,
+            financial_spec.source_uri,
             "--min-rows",
             str(financial_min_rows),
         ]
-        _append_approval_reference(command, spec.approval_reference)
+        _append_approval_reference(command, financial_spec.approval_reference)
         if dry_run:
             command.append("--dry-run")
         stages.append(
             BootstrapStage(
-                name=f"financial_{index}_{spec.security.upper()}",
+                name=f"financial_{index}_{financial_spec.security.upper()}",
                 command=tuple(command),
             )
         )
 
-    for index, spec in enumerate(markets, start=1):
+    for index, market_spec in enumerate(markets, start=1):
         command = [
             python_executable,
             str(scripts_dir / "import_market_csv.py"),
             "--file",
-            str(spec.file),
+            str(market_spec.file),
             "--security",
-            spec.security,
+            market_spec.security,
             "--source-uri",
-            spec.source_uri,
+            market_spec.source_uri,
             "--provider",
-            spec.provider,
+            market_spec.provider,
             "--interval",
             market_interval,
             "--timezone",
@@ -297,49 +297,49 @@ def build_bootstrap_plan(
             "--min-rows",
             str(market_min_rows),
         ]
-        _append_approval_reference(command, spec.approval_reference)
+        _append_approval_reference(command, market_spec.approval_reference)
         if dry_run:
             command.append("--dry-run")
         stages.append(
             BootstrapStage(
-                name=f"market_{index}_{spec.security.upper()}",
+                name=f"market_{index}_{market_spec.security.upper()}",
                 command=tuple(command),
             )
         )
 
-    for index, spec in enumerate(metrics, start=1):
+    for index, metrics_spec in enumerate(metrics, start=1):
         command = [
             python_executable,
             str(scripts_dir / "import_security_metrics_csv.py"),
             "--file",
-            str(spec.file),
+            str(metrics_spec.file),
             "--security",
-            spec.security,
+            metrics_spec.security,
             "--source-uri",
-            spec.source_uri,
+            metrics_spec.source_uri,
             "--min-rows",
             str(metrics_min_rows),
         ]
-        _append_approval_reference(command, spec.approval_reference)
+        _append_approval_reference(command, metrics_spec.approval_reference)
         if dry_run:
             command.append("--dry-run")
         stages.append(
             BootstrapStage(
-                name=f"metrics_{index}_{spec.security.upper()}",
+                name=f"metrics_{index}_{metrics_spec.security.upper()}",
                 command=tuple(command),
             )
         )
 
-    for index, spec in enumerate(benchmarks, start=1):
+    for index, benchmark_spec in enumerate(benchmarks, start=1):
         command = [
             python_executable,
             str(scripts_dir / "import_official_benchmark_file.py"),
             "--file",
-            str(spec.file),
+            str(benchmark_spec.file),
             "--source-url",
-            spec.source_url,
+            benchmark_spec.source_url,
             "--benchmark-code",
-            spec.code,
+            benchmark_spec.code,
             "--timezone",
             benchmark_timezone,
             "--min-rows",
@@ -347,30 +347,35 @@ def build_bootstrap_plan(
         ]
         if dry_run:
             command.append("--dry-run")
-        stages.append(BootstrapStage(name=f"benchmark_{index}_{spec.code}", command=tuple(command)))
+        stages.append(
+            BootstrapStage(
+                name=f"benchmark_{index}_{benchmark_spec.code}",
+                command=tuple(command),
+            )
+        )
 
-    for index, spec in enumerate(macros, start=1):
+    for index, macro_spec in enumerate(macros, start=1):
         command = [
             python_executable,
             str(scripts_dir / "import_official_macro_file.py"),
-            spec.provider,
+            macro_spec.provider,
             "--file",
-            str(spec.file),
+            str(macro_spec.file),
             "--source-url",
-            spec.source_url,
+            macro_spec.source_url,
             "--min-rows",
             str(macro_min_rows),
         ]
-        if spec.provider == "rbi":
-            if spec.series_key is None:
+        if macro_spec.provider == "rbi":
+            if macro_spec.series_key is None:
                 raise ValueError("RBI macro bootstrap requires a series_key")
-            command.extend(["--series-key", spec.series_key])
+            command.extend(["--series-key", macro_spec.series_key])
         if dry_run:
             command.append("--dry-run")
-        stage_suffix = spec.series_key or "flows"
+        stage_suffix = macro_spec.series_key or "flows"
         stages.append(
             BootstrapStage(
-                name=f"macro_{index}_{spec.provider.upper()}_{stage_suffix}",
+                name=f"macro_{index}_{macro_spec.provider.upper()}_{stage_suffix}",
                 command=tuple(command),
             )
         )
