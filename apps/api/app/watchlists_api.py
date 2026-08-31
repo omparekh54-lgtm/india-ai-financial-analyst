@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.auth import AuthenticatedUser, require_authenticated_user
 from app.core.config import get_settings
@@ -29,7 +30,7 @@ class WatchlistItemRequest(BaseModel):
     event_research_enabled: bool = True
 
 
-def _engine_and_repository() -> tuple[object, WatchlistRepository]:
+def _engine_and_repository() -> tuple[AsyncEngine, WatchlistRepository]:
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
     engine = create_database_engine(settings.database_url)
@@ -42,7 +43,7 @@ async def list_watchlists(user: CurrentUser) -> dict[str, object]:
     try:
         watchlists = await repository.list_for_user(user.id)
     finally:
-        await engine.dispose()  # type: ignore[union-attr]
+        await engine.dispose()
     return {"count": len(watchlists), "watchlists": watchlists}
 
 
@@ -61,7 +62,7 @@ async def create_watchlist(
                 detail="A watchlist with that name already exists",
             ) from exc
     finally:
-        await engine.dispose()  # type: ignore[union-attr]
+        await engine.dispose()
     return watchlist
 
 
@@ -71,7 +72,7 @@ async def delete_watchlist(watchlist_id: UUID, user: CurrentUser) -> dict[str, o
     try:
         removed = await repository.delete(user.id, watchlist_id)
     finally:
-        await engine.dispose()  # type: ignore[union-attr]
+        await engine.dispose()
     if not removed:
         raise HTTPException(status_code=404, detail="Watchlist not found")
     return {"watchlist_id": str(watchlist_id), "deleted": True}
@@ -99,7 +100,7 @@ async def add_watchlist_item(
                 detail="Security not found",
             ) from exc
     finally:
-        await engine.dispose()  # type: ignore[union-attr]
+        await engine.dispose()
     if item is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
     return item
@@ -115,7 +116,7 @@ async def remove_watchlist_item(
     try:
         removed = await repository.remove_item(user.id, watchlist_id, security_id)
     finally:
-        await engine.dispose()  # type: ignore[union-attr]
+        await engine.dispose()
     if not removed:
         raise HTTPException(status_code=404, detail="Watchlist item not found")
     return {
