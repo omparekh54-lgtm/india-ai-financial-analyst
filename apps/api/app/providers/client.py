@@ -11,6 +11,17 @@ from app.core.config import Settings
 class ProviderCallError(RuntimeError):
     """Raised when a provider call fails without exposing credentials."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retryable: bool = True,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retryable = retryable
+
 
 @dataclass(frozen=True)
 class ChatMessage:
@@ -76,14 +87,24 @@ class OpenAICompatibleClient:
                     json=payload,
                 )
                 response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            raise ProviderCallError(
+                f"{self.provider} request failed",
+                status_code=status_code,
+                retryable=status_code == 429 or status_code >= 500,
+            ) from exc
         except httpx.HTTPError as exc:
-            raise ProviderCallError(f"{self.provider} request failed") from exc
+            raise ProviderCallError(f"{self.provider} request failed", retryable=True) from exc
 
         body = response.json()
         try:
             content = body["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise ProviderCallError(f"{self.provider} returned an unexpected response") from exc
+            raise ProviderCallError(
+                f"{self.provider} returned an unexpected response",
+                retryable=False,
+            ) from exc
 
         usage = body.get("usage") or {}
         return ChatResult(
@@ -137,14 +158,24 @@ class GeminiClient:
                     json=payload,
                 )
                 response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            raise ProviderCallError(
+                "gemini request failed",
+                status_code=status_code,
+                retryable=status_code == 429 or status_code >= 500,
+            ) from exc
         except httpx.HTTPError as exc:
-            raise ProviderCallError("gemini request failed") from exc
+            raise ProviderCallError("gemini request failed", retryable=True) from exc
 
         body = response.json()
         try:
             content = body["candidates"][0]["content"]["parts"][0]["text"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise ProviderCallError("gemini returned an unexpected response") from exc
+            raise ProviderCallError(
+                "gemini returned an unexpected response",
+                retryable=False,
+            ) from exc
 
         usage = body.get("usageMetadata") or {}
         return ChatResult(
@@ -158,7 +189,10 @@ class GeminiClient:
 
 def build_client(provider: str, settings: Settings) -> ChatClient:
     if not settings.enable_external_llm_calls:
-        raise ProviderCallError("External LLM calls are disabled by runtime configuration")
+        raise ProviderCallError(
+            "External LLM calls are disabled by runtime configuration",
+            retryable=False,
+        )
 
     if provider == "groq" and settings.groq_api_key:
         return OpenAICompatibleClient(
@@ -188,4 +222,4 @@ def build_client(provider: str, settings: Settings) -> ChatClient:
             base_url=settings.gemini_base_url,
         )
 
-    raise ProviderCallError(f"Provider '{provider}' is not configured")
+    raise ProviderCallError(f"Provider '{provider}' is not configured", retryable=False)
