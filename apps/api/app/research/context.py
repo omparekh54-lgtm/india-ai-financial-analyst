@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from statistics import mean
 from typing import Any
 from uuid import UUID
@@ -77,7 +77,7 @@ class DatabaseResearchContextLoader:
                         from market_bars
                         where security_id = :security_id and interval in ('1d', 'day', 'daily')
                         order by ts desc
-                        limit 160
+                        limit 260
                         """
                     ),
                     {"security_id": security_id},
@@ -281,16 +281,26 @@ def _event_context(rows: list[Row]) -> list[dict[str, object]]:
 
 
 def _governance_context(rows: list[Row]) -> dict[str, object]:
-    event_types = {str(row["event_type"]) for row in rows}
+    recent_rows = [row for row in rows if _is_recent(row.get("event_at"), days=400)]
+    recent_event_types = {str(row["event_type"]) for row in recent_rows}
     governance: dict[str, object] = {
-        "auditor_resignation_recent": "auditor_resignation" in event_types,
+        "auditor_resignation_recent": "auditor_resignation" in recent_event_types,
         "credit_rating_downgrade_recent": any(
             row["event_type"] == "credit_rating"
             and "downgrade" in str(row["headline"]).lower()
-            for row in rows
+            for row in recent_rows
         ),
+        "senior_management_change_recent": bool(
+            recent_event_types & {"cfo_change", "ceo_change", "director_change"}
+        ),
+        "regulatory_action_recent": "regulatory_action" in recent_event_types,
+        "related_party_recent": "related_party" in recent_event_types,
+        "preferential_issue_recent": "preferential_issue" in recent_event_types,
+        "qip_recent": "qip" in recent_event_types,
+        "rights_issue_recent": "rights_issue" in recent_event_types,
+        "shareholding_pattern_recent": "shareholding_pattern" in recent_event_types,
     }
-    for row in rows:
+    for row in recent_rows:
         if row["event_type"] != "promoter_pledge":
             continue
         data = row["data"] if isinstance(row["data"], dict) else {}
@@ -344,6 +354,13 @@ def _valuation_factual_inputs(
     if debt is not None and cash is not None:
         data["net_debt"] = debt - cash
     return data
+
+
+def _is_recent(value: object, *, days: int) -> bool:
+    if not isinstance(value, datetime):
+        return False
+    timestamp = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return timestamp >= datetime.now(UTC) - timedelta(days=days)
 
 
 def _freshness(value: object, *, fallback: str = "unknown") -> str:
