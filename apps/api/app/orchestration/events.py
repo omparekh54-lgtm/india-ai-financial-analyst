@@ -1,6 +1,5 @@
 from app.orchestration.plan import EventTrigger
 
-
 _GOVERNANCE_EVENTS = {
     "auditor_resignation",
     "auditor_qualification",
