@@ -46,8 +46,8 @@ class DatabaseResearchContextLoader:
                     text(
                         """
                         with ranked as (
-                          select ff.fact_name, ff.value, ff.unit, ff.period_end, ff.period_type,
-                                 ff.source_id,
+                          select ff.id as fact_id, ff.fact_name, ff.value, ff.unit,
+                                 ff.period_end, ff.period_type, ff.source_id,
                                  row_number() over (
                                    partition by ff.fact_name
                                    order by ff.period_end desc, ff.created_at desc
@@ -55,7 +55,7 @@ class DatabaseResearchContextLoader:
                           from financial_facts ff
                           where ff.security_id = :security_id
                         )
-                        select r.fact_name, r.value, r.unit, r.period_end, r.period_type,
+                        select r.fact_id, r.fact_name, r.value, r.unit, r.period_end, r.period_type,
                                r.source_id, r.rn,
                                s.source_type, s.source_uri, s.title, s.published_at,
                                s.retrieved_at, s.freshness, s.checksum
@@ -166,14 +166,26 @@ class DatabaseResearchContextLoader:
 
 def _financial_context(rows: list[Row]) -> dict[str, object]:
     facts: dict[str, object] = {}
+    fact_ids: dict[str, str] = {}
+    fact_units: dict[str, str] = {}
+    fact_periods: dict[str, str] = {}
     for row in rows:
         name = str(row["fact_name"])
         value = float(row["value"]) if row["value"] is not None else None
-        if row["rn"] == 1:
-            facts[name] = value
-            facts[f"{name}_period_end"] = row["period_end"].isoformat()
-        elif row["rn"] == 2:
-            facts[f"previous_{name}"] = value
+        key = name if row["rn"] == 1 else f"previous_{name}"
+        facts[key] = value
+        if row.get("fact_id") is not None:
+            fact_ids[key] = str(row["fact_id"])
+        if row.get("unit"):
+            fact_units[key] = str(row["unit"])
+        if row.get("period_end") is not None:
+            period = row["period_end"].isoformat()
+            fact_periods[key] = period
+            if row["rn"] == 1:
+                facts[f"{name}_period_end"] = period
+    facts["_fact_ids"] = fact_ids
+    facts["_fact_units"] = fact_units
+    facts["_fact_periods"] = fact_periods
     return facts
 
 
@@ -353,6 +365,9 @@ def _valuation_factual_inputs(
     cash = _number(financials.get("cash"))
     if debt is not None and cash is not None:
         data["net_debt"] = debt - cash
+    fact_ids = financials.get("_fact_ids")
+    if isinstance(fact_ids, dict):
+        data["_input_metric_ids"] = dict(fact_ids)
     return data
 
 
