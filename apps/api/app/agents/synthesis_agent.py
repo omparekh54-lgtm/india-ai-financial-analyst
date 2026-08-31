@@ -6,6 +6,9 @@ from typing import Any
 from app.agents.contracts import AgentInput, AgentName, AgentOutput, Claim
 from app.research.insights import special_mode_insights
 
+_STATUS_WEIGHT = {"verified": 1.0, "supported": 0.86, "inferred": 0.62}
+_SOURCE_TIER_WEIGHT = {"A": 1.0, "B": 0.92, "C": 0.78, "D": 0.58, "E": 0.38}
+
 
 class ChiefAnalystAgent:
     """Composes a research payload strictly from claims admitted by Agent 15."""
@@ -47,6 +50,7 @@ class ChiefAnalystAgent:
             for item in agent_input.evidence
         }
         fallback = _deterministic_synthesis(claims, confidence)
+        evidence_map = _thesis_evidence_map(claims)
         report = {
             "query": agent_input.query,
             "mode": mode,
@@ -64,6 +68,7 @@ class ChiefAnalystAgent:
             "catalysts": fallback["catalysts"],
             "thesis_breakers": fallback["thesis_breakers"],
             "valuation_scenarios": fallback["valuation_scenarios"],
+            "thesis_evidence_map": evidence_map,
             "validation": agent_input.context.get("validation_metrics", {}),
             "warnings": agent_input.context.get("validation_warnings", []),
             "research_disclaimer": (
@@ -95,12 +100,18 @@ def _deterministic_synthesis(
         [
             claim
             for claim in ranked
-            if claim.agent in thesis_agents and claim.claim_type not in {"risk", "catalyst"}
+            if claim.agent in thesis_agents
+            and claim.claim_type not in {"risk", "catalyst"}
+            and not _needs_corroboration(claim)
         ],
         limit=4,
     )
     catalysts = _unique_statements(
-        [claim for claim in ranked if claim.claim_type == "catalyst"],
+        [
+            claim
+            for claim in ranked
+            if claim.claim_type == "catalyst" and not _needs_corroboration(claim)
+        ],
         limit=5,
     )
     risks = _unique_statements(
@@ -111,7 +122,8 @@ def _deterministic_synthesis(
         [
             claim
             for claim in ranked
-            if claim.status == "inferred"
+            if _needs_corroboration(claim)
+            or claim.status == "inferred"
             or (
                 claim.agent in {AgentName.FILINGS, AgentName.EARNINGS, AgentName.NEWS}
                 and claim.claim_type not in {"risk", "catalyst"}
@@ -165,14 +177,15 @@ def _deterministic_synthesis(
             "watch_items": watch_items,
             "confidence_note": confidence_note,
             "provider": "deterministic",
-            "model": "validated_claims_v1",
+            "model": "validated_claims_v2",
         },
     }
 
 
-def _claim_rank(claim: Claim) -> tuple[int, float]:
+def _claim_rank(claim: Claim) -> tuple[int, float, float]:
     status_rank = {"verified": 3, "supported": 2, "inferred": 1}
-    return status_rank.get(claim.status, 0), claim.confidence
+    corroboration_penalty = 0.0 if _needs_corroboration(claim) else 1.0
+    return status_rank.get(claim.status, 0), corroboration_penalty, _claim_quality(claim)
 
 
 def _unique_statements(claims: list[Claim], *, limit: int) -> list[str]:
@@ -199,11 +212,6 @@ def _confidence_framework(claims: list[Claim]) -> dict[str, float]:
             "catalyst_confidence": 0.0,
         }
 
-    def average(selected: list[Claim]) -> float:
-        if not selected:
-            return 0.0
-        return round(sum(claim.confidence for claim in selected) / len(selected), 4)
-
     verified_or_supported = [
         claim for claim in claims if claim.status in {"verified", "supported"}
     ]
@@ -227,8 +235,69 @@ def _confidence_framework(claims: list[Claim]) -> dict[str, float]:
     ]
 
     return {
-        "data_confidence": average(verified_or_supported),
-        "thesis_confidence": average(thesis_claims),
-        "valuation_confidence": average(valuation_claims),
-        "catalyst_confidence": average(catalyst_claims),
+        "data_confidence": _weighted_confidence(verified_or_supported),
+        "thesis_confidence": _weighted_confidence(thesis_claims),
+        "valuation_confidence": _weighted_confidence(valuation_claims),
+        "catalyst_confidence": _weighted_confidence(catalyst_claims),
     }
+
+
+def _weighted_confidence(claims: list[Claim]) -> float:
+    if not claims:
+        return 0.0
+    weighted_total = 0.0
+    denominator = 0.0
+    for claim in claims:
+        materiality = claim.materiality if claim.materiality is not None else 0.60
+        materiality_weight = max(0.25, materiality)
+        denominator += materiality_weight
+        weighted_total += _claim_quality(claim) * materiality_weight
+    return round(weighted_total / denominator, 4) if denominator else 0.0
+
+
+def _claim_quality(claim: Claim) -> float:
+    status_weight = _STATUS_WEIGHT.get(claim.status, 0.45)
+    source_weight = _SOURCE_TIER_WEIGHT.get(str(claim.source_tier or ""), 0.62)
+    corroboration_weight = 0.72 if _needs_corroboration(claim) else 1.0
+    return max(
+        0.0,
+        min(1.0, claim.confidence * status_weight * source_weight * corroboration_weight),
+    )
+
+
+def _needs_corroboration(claim: Claim) -> bool:
+    return claim.data.get("validator_needs_corroboration") is True
+
+
+def _thesis_evidence_map(claims: list[Claim]) -> dict[str, list[dict[str, object]]]:
+    categories = {
+        "thesis": [
+            claim
+            for claim in claims
+            if claim.agent
+            in {AgentName.FINANCIALS, AgentName.EARNINGS, AgentName.INDUSTRY, AgentName.VALUATION}
+            and claim.claim_type not in {"risk", "catalyst"}
+        ],
+        "anti_thesis": [claim for claim in claims if claim.claim_type == "risk"],
+        "catalysts": [claim for claim in claims if claim.claim_type == "catalyst"],
+        "watch_items": [
+            claim for claim in claims if claim.status == "inferred" or _needs_corroboration(claim)
+        ],
+    }
+    output: dict[str, list[dict[str, object]]] = {}
+    for category, selected in categories.items():
+        output[category] = [
+            {
+                "claim_id": str(claim.claim_id),
+                "statement": claim.statement,
+                "agent": claim.agent.value,
+                "status": claim.status,
+                "confidence": claim.confidence,
+                "source_tier": claim.source_tier,
+                "materiality": claim.materiality,
+                "needs_corroboration": _needs_corroboration(claim),
+                "evidence_ids": [str(item) for item in claim.evidence_ids],
+            }
+            for claim in sorted(selected, key=_claim_rank, reverse=True)[:8]
+        ]
+    return output
