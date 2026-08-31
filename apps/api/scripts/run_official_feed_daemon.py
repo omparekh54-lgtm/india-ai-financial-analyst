@@ -30,6 +30,7 @@ async def _run() -> int:
     worker = OfficialFeedWorker(
         engine,
         external_data_enabled=settings.enable_external_data_calls,
+        app_env=settings.app_env,
     )
 
     try:
