@@ -7,7 +7,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from app.agents.contracts import AgentOutput, EvidenceRef
+from app.agents.contracts import AgentOutput, Claim, EvidenceRef
 
 
 class ResearchRepository:
@@ -300,7 +300,7 @@ class ResearchRepository:
                         "statement": claim.statement,
                         "confidence": claim.confidence,
                         "validation_status": claim.status,
-                        "data": json.dumps(claim.data),
+                        "data": json.dumps(_claim_data_payload(claim)),
                     },
                 )
                 for evidence_id in claim.evidence_ids:
@@ -412,3 +412,30 @@ class ResearchRepository:
                     "catalyst_confidence": confidence.get("catalyst_confidence"),
                 },
             )
+
+
+def _claim_data_payload(claim: Claim) -> dict[str, object]:
+    """Persist v2 audit fields without requiring a destructive claims-table migration."""
+    payload: dict[str, object] = dict(claim.data)
+    audit: dict[str, object] = {}
+    optional_fields: dict[str, object | None] = {
+        "metric": claim.metric,
+        "value": claim.value,
+        "unit": claim.unit,
+        "currency": claim.currency,
+        "period": claim.period,
+        "source_tier": claim.source_tier,
+        "freshness_at": claim.freshness_at,
+        "materiality": claim.materiality,
+        "calculation_version": claim.calculation_version,
+    }
+    for key, value in optional_fields.items():
+        if value is not None:
+            audit[key] = value
+    if claim.assumptions:
+        audit["assumptions"] = list(claim.assumptions)
+    if claim.input_metric_ids:
+        audit["input_metric_ids"] = [str(item) for item in claim.input_metric_ids]
+    if audit:
+        payload["_audit"] = audit
+    return payload
