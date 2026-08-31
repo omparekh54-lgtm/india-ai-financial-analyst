@@ -21,8 +21,9 @@ def test_vix_macro_observation_preserves_official_benchmark_context() -> None:
 
 
 def test_vix_macro_observation_rejects_invalid_inputs() -> None:
+    naive_ts = datetime(2026, 8, 31, 10, 0, tzinfo=UTC).replace(tzinfo=None)
     with pytest.raises(ValueError, match="timezone-aware"):
-        vix_macro_observation(ts=datetime(2026, 8, 31, 10, 0), close=12.0)
+        vix_macro_observation(ts=naive_ts, close=12.0)
 
     with pytest.raises(ValueError, match="cannot be negative"):
         vix_macro_observation(
