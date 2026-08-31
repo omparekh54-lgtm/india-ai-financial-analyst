@@ -65,13 +65,27 @@ def test_parse_benchmark_spec_rejects_incomplete_value() -> None:
         parse_benchmark_spec("NIFTY50,/data/nifty.csv")
 
 
-def test_parse_financial_spec_preserves_provenance_uri() -> None:
+def test_parse_financial_spec_requires_approval_for_non_official_source() -> None:
+    with pytest.raises(ValueError, match="approval-reference"):
+        parse_financial_spec(
+            "RELIANCE,/data/reliance.csv,https://licensed.example/reliance/fy26"
+        )
+
     spec = parse_financial_spec(
-        "RELIANCE,/data/reliance.csv,https://licensed.example/reliance/fy26"
+        "RELIANCE,/data/reliance.csv,https://licensed.example/reliance/fy26,"
+        "DATA-LICENSE-2026-014"
     )
     assert spec.security == "RELIANCE"
     assert spec.file == Path("/data/reliance.csv")
     assert spec.source_uri == "https://licensed.example/reliance/fy26"
+    assert spec.approval_reference == "DATA-LICENSE-2026-014"
+
+
+def test_parse_financial_spec_allows_official_source_without_manual_approval() -> None:
+    spec = parse_financial_spec(
+        "RELIANCE,/data/reliance.csv,https://www.nseindia.com/companies-listing/financial-results"
+    )
+    assert spec.approval_reference is None
 
 
 def test_parse_financial_spec_rejects_incomplete_or_synthetic_value() -> None:
@@ -79,37 +93,50 @@ def test_parse_financial_spec_rejects_incomplete_or_synthetic_value() -> None:
         parse_financial_spec("RELIANCE,/data/reliance.csv")
     with pytest.raises(ValueError, match="non-production"):
         parse_financial_spec(
-            "RELIANCE,/data/reliance.csv,https://licensed.example/sample/reliance.csv"
+            "RELIANCE,/data/reliance.csv,https://licensed.example/sample/reliance.csv,"
+            "DATA-LICENSE-2026-014"
         )
 
 
-def test_parse_market_spec_normalizes_provider_and_preserves_source() -> None:
+def test_parse_market_spec_normalizes_provider_and_preserves_approval() -> None:
     spec = parse_market_spec(
-        "RELIANCE,NSE,/data/reliance_prices.csv,https://licensed.example/reliance/prices"
+        "RELIANCE,NSE,/data/reliance_prices.csv,https://licensed.example/reliance/prices,"
+        "MARKET-DATA-LICENSE-2026"
     )
     assert spec.security == "RELIANCE"
     assert spec.provider == "nse"
     assert spec.file == Path("/data/reliance_prices.csv")
     assert spec.source_uri == "https://licensed.example/reliance/prices"
+    assert spec.approval_reference == "MARKET-DATA-LICENSE-2026"
 
 
-def test_parse_market_spec_rejects_incomplete_or_synthetic_provider() -> None:
+def test_parse_market_spec_rejects_incomplete_unapproved_or_synthetic_provider() -> None:
     with pytest.raises(ValueError, match="SECURITY,PROVIDER,FILE,SOURCE_URI"):
         parse_market_spec("RELIANCE,nse,/data/reliance_prices.csv")
-    with pytest.raises(ValueError, match="synthetic/mock/sample"):
+    with pytest.raises(ValueError, match="approval-reference"):
+        parse_market_spec(
+            "RELIANCE,nse,/data/reliance_prices.csv,https://licensed.example/reliance/prices"
+        )
+    with pytest.raises(ValueError, match="non-production"):
         parse_market_spec(
             "RELIANCE,synthetic-provider,/data/reliance_prices.csv,"
-            "https://licensed.example/reliance/prices"
+            "https://licensed.example/reliance/prices,MARKET-DATA-LICENSE-2026"
         )
 
 
-def test_parse_metrics_spec_preserves_provenance_uri() -> None:
+def test_parse_metrics_spec_requires_approval_for_non_official_source() -> None:
+    with pytest.raises(ValueError, match="approval-reference"):
+        parse_metrics_spec(
+            "RELIANCE,/data/reliance_metrics.csv,https://licensed.example/reliance/metrics"
+        )
     spec = parse_metrics_spec(
-        "RELIANCE,/data/reliance_metrics.csv,https://licensed.example/reliance/metrics"
+        "RELIANCE,/data/reliance_metrics.csv,https://licensed.example/reliance/metrics,"
+        "COMPS-LICENSE-2026"
     )
     assert spec.security == "RELIANCE"
     assert spec.file == Path("/data/reliance_metrics.csv")
     assert spec.source_uri == "https://licensed.example/reliance/metrics"
+    assert spec.approval_reference == "COMPS-LICENSE-2026"
 
 
 def test_parse_metrics_spec_rejects_incomplete_value() -> None:
@@ -137,20 +164,23 @@ def test_parse_macro_spec_requires_official_rbi_or_nsdl_provenance() -> None:
         )
 
 
-def test_bootstrap_plan_has_deterministic_dependency_order() -> None:
+def test_bootstrap_plan_has_deterministic_dependency_order_and_approvals() -> None:
     financials = (
         parse_financial_spec(
-            "RELIANCE,/data/reliance.csv,https://licensed.example/reliance/fy26"
+            "RELIANCE,/data/reliance.csv,https://licensed.example/reliance/fy26,"
+            "DATA-LICENSE-2026-014"
         ),
     )
     markets = (
         parse_market_spec(
-            "RELIANCE,nse,/data/reliance_prices.csv,https://licensed.example/reliance/prices"
+            "RELIANCE,nse,/data/reliance_prices.csv,https://licensed.example/reliance/prices,"
+            "MARKET-DATA-LICENSE-2026"
         ),
     )
     metrics = (
         parse_metrics_spec(
-            "RELIANCE,/data/reliance_metrics.csv,https://licensed.example/reliance/metrics"
+            "RELIANCE,/data/reliance_metrics.csv,https://licensed.example/reliance/metrics,"
+            "COMPS-LICENSE-2026"
         ),
     )
     benchmarks = (
@@ -191,6 +221,9 @@ def test_bootstrap_plan_has_deterministic_dependency_order() -> None:
     assert plan[-1].command[-2:] == ("--limit", "500")
     assert "import_official_benchmark_file.py" in plan[4].command[1]
     assert "import_official_macro_file.py" in plan[6].command[1]
+    assert "DATA-LICENSE-2026-014" in plan[1].command
+    assert "MARKET-DATA-LICENSE-2026" in plan[2].command
+    assert "COMPS-LICENSE-2026" in plan[3].command
 
 
 def test_dry_run_propagates_only_to_file_validation_stages() -> None:
@@ -198,17 +231,20 @@ def test_dry_run_propagates_only_to_file_validation_stages() -> None:
         dry_run=True,
         financials=(
             parse_financial_spec(
-                "RELIANCE,/data/reliance.csv,https://licensed.example/reliance/fy26"
+                "RELIANCE,/data/reliance.csv,https://licensed.example/reliance/fy26,"
+                "DATA-LICENSE-2026-014"
             ),
         ),
         markets=(
             parse_market_spec(
-                "RELIANCE,nse,/data/reliance_prices.csv,https://licensed.example/reliance/prices"
+                "RELIANCE,nse,/data/reliance_prices.csv,https://licensed.example/reliance/prices,"
+                "MARKET-DATA-LICENSE-2026"
             ),
         ),
         metrics=(
             parse_metrics_spec(
-                "RELIANCE,/data/reliance_metrics.csv,https://licensed.example/reliance/metrics"
+                "RELIANCE,/data/reliance_metrics.csv,https://licensed.example/reliance/metrics,"
+                "COMPS-LICENSE-2026"
             ),
         ),
         benchmarks=(
@@ -238,12 +274,14 @@ def test_skip_nse_allows_resumable_partial_bootstrap() -> None:
         skip_nse=True,
         markets=(
             parse_market_spec(
-                "RELIANCE,nse,/data/reliance_prices.csv,https://licensed.example/reliance/prices"
+                "RELIANCE,nse,/data/reliance_prices.csv,https://licensed.example/reliance/prices,"
+                "MARKET-DATA-LICENSE-2026"
             ),
         ),
         metrics=(
             parse_metrics_spec(
-                "RELIANCE,/data/reliance_metrics.csv,https://licensed.example/reliance/metrics"
+                "RELIANCE,/data/reliance_metrics.csv,https://licensed.example/reliance/metrics,"
+                "COMPS-LICENSE-2026"
             ),
         ),
         benchmarks=(
