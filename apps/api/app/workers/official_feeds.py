@@ -322,10 +322,19 @@ def production_feed_block_reason(
 ) -> str | None:
     if app_env.strip().lower() != "production":
         return None
-    if _truthy(parser_config.get("production_requires_licensing_review")):
+    review_key = "production_requires_licensing_review"
+    if review_key not in parser_config:
+        return None
+    if _truthy(parser_config.get(review_key)):
         return (
             "Feed is marked production_requires_licensing_review=true; "
             "production network access is blocked until licensing/source approval is complete."
+        )
+    approval_reference = str(parser_config.get("production_approval_reference") or "").strip()
+    if not approval_reference:
+        return (
+            "Feed licensing-review flag was cleared without production_approval_reference; "
+            "production network access remains blocked until an approval reference is recorded."
         )
     return None
 
