@@ -12,15 +12,17 @@ from app.core.post_launch_acceptance import (
 )
 
 _SECRET_KEY_MARKERS = (
+    "access_token",
     "api_key",
     "apikey",
+    "auth_token",
     "authorization",
     "bearer",
     "client_secret",
     "password",
     "private_key",
-    "secret",
-    "token",
+    "refresh_token",
+    "service_role",
 )
 
 
