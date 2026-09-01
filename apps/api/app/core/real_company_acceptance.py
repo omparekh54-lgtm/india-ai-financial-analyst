@@ -137,8 +137,10 @@ def evaluate_real_company_rows(
         job_id = str(row.get("job_id"))
         security_id = str(row.get("security_id") or "")
         sector = str(row.get("sector") or "").strip()
-        report_json = row.get("report_json") if isinstance(row.get("report_json"), dict) else {}
-        validation = report_json.get("validation") if isinstance(report_json.get("validation"), dict) else {}
+        raw_report = row.get("report_json")
+        report_json: dict[str, Any] = raw_report if isinstance(raw_report, dict) else {}
+        raw_validation = report_json.get("validation")
+        validation: dict[str, Any] = raw_validation if isinstance(raw_validation, dict) else {}
         evidence_coverage = validation.get("evidence_coverage")
         job_errors: list[str] = []
         if row.get("job_status") != "completed":
@@ -182,7 +184,11 @@ def evaluate_real_company_rows(
                 "validated_claim_count": int(row.get("validated_claim_count") or 0),
                 "evidence_linked_claim_count": int(row.get("evidence_linked_claim_count") or 0),
                 "linked_source_count": int(row.get("linked_source_count") or 0),
-                "evidence_coverage": float(evidence_coverage) if isinstance(evidence_coverage, (int, float)) else None,
+                "evidence_coverage": (
+                    float(evidence_coverage)
+                    if isinstance(evidence_coverage, (int, float))
+                    else None
+                ),
                 "accepted": not job_errors,
                 "errors": job_errors,
             }
