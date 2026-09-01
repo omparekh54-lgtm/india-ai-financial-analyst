@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.auth import AuthenticatedUser, require_authenticated_user
 from app.core.config import get_settings
@@ -29,7 +30,7 @@ class PortfolioPositionRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=1000)
 
 
-def _repository() -> tuple[object, PortfolioRepository]:
+def _repository() -> tuple[AsyncEngine, PortfolioRepository]:
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
     engine = create_database_engine(settings.database_url)
@@ -42,7 +43,7 @@ async def list_portfolios(user: CurrentUser) -> dict[str, object]:
     try:
         portfolios = await repository.list_for_user(user.id)
     finally:
-        await engine.dispose()  # type: ignore[union-attr]
+        await engine.dispose()
     return {"count": len(portfolios), "portfolios": portfolios}
 
 
@@ -55,7 +56,7 @@ async def create_portfolio(request: PortfolioCreateRequest, user: CurrentUser) -
         except IntegrityError as exc:
             raise HTTPException(status_code=409, detail="A portfolio with that name already exists") from exc
     finally:
-        await engine.dispose()  # type: ignore[union-attr]
+        await engine.dispose()
     return portfolio
 
 
@@ -65,7 +66,7 @@ async def delete_portfolio(portfolio_id: UUID, user: CurrentUser) -> dict[str, o
     try:
         deleted = await repository.delete(user.id, portfolio_id)
     finally:
-        await engine.dispose()  # type: ignore[union-attr]
+        await engine.dispose()
     if not deleted:
         raise HTTPException(status_code=404, detail="Portfolio not found")
     return {"portfolio_id": str(portfolio_id), "deleted": True}
@@ -91,7 +92,7 @@ async def upsert_portfolio_position(
         except IntegrityError as exc:
             raise HTTPException(status_code=404, detail="Security not found") from exc
     finally:
-        await engine.dispose()  # type: ignore[union-attr]
+        await engine.dispose()
     if position is None:
         raise HTTPException(status_code=404, detail="Portfolio not found")
     return position
@@ -107,7 +108,7 @@ async def remove_portfolio_position(
     try:
         deleted = await repository.remove_position(user.id, portfolio_id, security_id)
     finally:
-        await engine.dispose()  # type: ignore[union-attr]
+        await engine.dispose()
     if not deleted:
         raise HTTPException(status_code=404, detail="Portfolio position not found")
     return {"portfolio_id": str(portfolio_id), "security_id": str(security_id), "deleted": True}
@@ -119,7 +120,7 @@ async def portfolio_analysis(portfolio_id: UUID, user: CurrentUser) -> dict[str,
     try:
         analysis = await repository.analyze(user.id, portfolio_id)
     finally:
-        await engine.dispose()  # type: ignore[union-attr]
+        await engine.dispose()
     if analysis is None:
         raise HTTPException(status_code=404, detail="Portfolio not found")
     return analysis
