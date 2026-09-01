@@ -9,7 +9,9 @@ python scripts/run_post_launch_acceptance_gate.py --plan-only
 python scripts/run_post_launch_acceptance_gate.py --evidence-json post-launch-evidence.json
 ```
 
-The evidence JSON must be collected from production systems such as Vercel, Supabase, GitHub Actions, Sentry/PostHog or equivalent observability tools, billing dashboards, and approved operator records. It must not contain secrets.
+The evidence JSON must be collected from production systems such as Vercel, Supabase, GitHub Actions, Sentry/PostHog or equivalent observability tools, billing dashboards, and approved operator records. It must not contain secrets or secret-like keys.
+
+The protected GitHub workflow is `.github/workflows/post-launch-acceptance.yml`. It is manual only, requires exact confirmation text `RUN_POST_LAUNCH_GATE`, uses read-only repository permissions, runs under the protected production environment, uploads the structured result, and intentionally does not reference GitHub secrets. Operators paste only non-secret evidence JSON.
 
 ## Phase 31 - Production observability baseline
 
@@ -61,7 +63,7 @@ Required evidence:
 - Auth isolation passed against production.
 - Explicit security review approval.
 
-INFO-only unused-index notices do not block by themselves, but WARN/HIGH/CRITICAL security findings do.
+INFO-only unused-index notices do not block by themselves, but WARN/HIGH/CRITICAL security findings do. Backend-owned public tables should have explicit deny-all policies for `anon` and `authenticated` when direct client access is not part of the product surface.
 
 ## Phase 35 - Cost, quota and provider control
 
