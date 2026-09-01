@@ -57,6 +57,12 @@ create index if not exists monitoring_alerts_user_created_idx
   on public.monitoring_alerts(user_id, created_at desc);
 create index if not exists monitoring_alerts_security_created_idx
   on public.monitoring_alerts(security_id, created_at desc);
+create index if not exists monitoring_alerts_source_snapshot_idx
+  on public.monitoring_alerts(source_snapshot_id);
+create index if not exists monitoring_alerts_prior_snapshot_idx
+  on public.monitoring_alerts(prior_snapshot_id);
+create index if not exists monitoring_alerts_job_id_idx
+  on public.monitoring_alerts(job_id);
 create index if not exists monitoring_alerts_user_unread_idx
   on public.monitoring_alerts(user_id, created_at desc)
   where read_at is null;
