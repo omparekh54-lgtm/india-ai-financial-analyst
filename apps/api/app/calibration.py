@@ -128,7 +128,10 @@ class CalibrationRepository:
                         benchmark_code=benchmark_code,
                     )
                     metrics = snapshot["metrics"] if isinstance(snapshot["metrics"], dict) else {}
-                    confidence = metrics.get("confidence") if isinstance(metrics.get("confidence"), dict) else {}
+                    raw_confidence = metrics.get("confidence")
+                    confidence: dict[str, Any] = (
+                        raw_confidence if isinstance(raw_confidence, dict) else {}
+                    )
                     result = await connection.execute(
                         text(
                             """
@@ -289,13 +292,15 @@ async def _outcome_with_benchmark(
 def _confidence_buckets(items: list[dict[str, Any]]) -> dict[str, object]:
     buckets: dict[str, list[float]] = {"low": [], "medium": [], "high": []}
     for item in items:
-        confidence = item.get("confidence") if isinstance(item.get("confidence"), dict) else {}
+        raw_confidence = item.get("confidence")
+        confidence: dict[str, Any] = raw_confidence if isinstance(raw_confidence, dict) else {}
         value = confidence.get("thesis_confidence")
         if not isinstance(value, (int, float)):
             continue
         bucket = "low" if value < 0.45 else "medium" if value < 0.75 else "high"
-        if item.get("excess_return_pct") is not None:
-            buckets[bucket].append(float(item["excess_return_pct"]))
+        excess_return = item.get("excess_return_pct")
+        if excess_return is not None:
+            buckets[bucket].append(float(excess_return))
     return {
         key: {
             "sample_count": len(values),
