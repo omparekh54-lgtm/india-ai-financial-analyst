@@ -150,16 +150,19 @@ class ComparisonRepository:
 
         rankings: dict[str, list[dict[str, object]]] = {}
         for metric in metrics:
-            available = [
-                {
-                    "security_id": str(company["id"]),
-                    "nse_symbol": company.get("nse_symbol"),
-                    "value": float(company["metrics"][metric]["value"]),  # type: ignore[index]
-                }
-                for company in companies
-                if metric in company["metrics"]  # type: ignore[operator]
-            ]
-            available.sort(key=lambda item: float(item["value"]), reverse=True)
+            available: list[dict[str, object]] = []
+            for company in companies:
+                metric_value = _company_metric_value(company, metric)
+                if metric_value is None:
+                    continue
+                available.append(
+                    {
+                        "security_id": str(company["id"]),
+                        "nse_symbol": company.get("nse_symbol"),
+                        "value": metric_value,
+                    }
+                )
+            available.sort(key=_ranking_value, reverse=True)
             rankings[metric] = available
 
         return {
@@ -264,6 +267,32 @@ class ComparisonRepository:
             "industry": industry,
             "data_policy": "source_linked_latest_metric_filtering_no_composite_score",
         }
+
+
+def _company_metric_value(company: dict[str, object], metric: str) -> float | None:
+    raw_metrics = company.get("metrics")
+    if not isinstance(raw_metrics, dict):
+        return None
+    raw_metric = raw_metrics.get(metric)
+    if not isinstance(raw_metric, dict):
+        return None
+    value = raw_metric.get("value")
+    if value is None:
+        return None
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _ranking_value(item: dict[str, object]) -> float:
+    value = item.get("value")
+    if value is None:
+        return float("-inf")
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return float("-inf")
 
 
 def _validate_metric_names(metric_names: list[str]) -> list[str]:
