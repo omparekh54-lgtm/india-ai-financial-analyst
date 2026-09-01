@@ -30,6 +30,15 @@ def build_commands(
     financial_max_batches: int,
     peer_metric_batch_size: int,
     peer_metric_max_batches: int,
+    repo_source_url: str | None = None,
+    repo_date_column: str | None = None,
+    repo_value_column: str | None = None,
+    cpi_source_url: str | None = None,
+    cpi_date_column: str | None = None,
+    cpi_value_column: str | None = None,
+    iip_source_url: str | None = None,
+    iip_date_column: str | None = None,
+    iip_value_column: str | None = None,
     start_at: str = "market",
 ) -> tuple[ResearchCorpusStage, ...]:
     if min_nse_eq_securities < 1000:
@@ -49,24 +58,45 @@ def build_commands(
     if start_at not in STAGE_ORDER:
         raise ValueError("start_at must be one of: " + ", ".join(STAGE_ORDER))
 
+    if start_at == "market":
+        for name, value in (
+            ("repo_source_url", repo_source_url),
+            ("cpi_source_url", cpi_source_url),
+            ("iip_source_url", iip_source_url),
+        ):
+            if not value or not value.strip():
+                raise ValueError(f"{name} is required when the market corpus stage will run")
+
+    market_command = [
+        python_executable,
+        str(scripts_dir / "bootstrap_production_market_corpus.py"),
+        "--min-rows",
+        str(min_nse_eq_securities),
+        "--classification-min-coverage-pct",
+        "100.0",
+        "--mapping-min-coverage-pct",
+        "100.0",
+        "--history-batch-size",
+        str(market_history_batch_size),
+        "--history-max-batches",
+        str(market_history_max_batches),
+    ]
+    for flag, value in (
+        ("--repo-source-url", repo_source_url),
+        ("--repo-date-column", repo_date_column),
+        ("--repo-value-column", repo_value_column),
+        ("--cpi-source-url", cpi_source_url),
+        ("--cpi-date-column", cpi_date_column),
+        ("--cpi-value-column", cpi_value_column),
+        ("--iip-source-url", iip_source_url),
+        ("--iip-date-column", iip_date_column),
+        ("--iip-value-column", iip_value_column),
+    ):
+        if value:
+            market_command.extend([flag, value])
+
     stages = (
-        ResearchCorpusStage(
-            "market",
-            (
-                python_executable,
-                str(scripts_dir / "bootstrap_production_market_corpus.py"),
-                "--min-rows",
-                str(min_nse_eq_securities),
-                "--classification-min-coverage-pct",
-                "100.0",
-                "--mapping-min-coverage-pct",
-                "100.0",
-                "--history-batch-size",
-                str(market_history_batch_size),
-                "--history-max-batches",
-                str(market_history_max_batches),
-            ),
-        ),
+        ResearchCorpusStage("market", tuple(market_command)),
         ResearchCorpusStage(
             "financials",
             (
@@ -154,6 +184,15 @@ def main() -> int:
     parser.add_argument("--financial-max-batches", type=int, default=100)
     parser.add_argument("--peer-metric-batch-size", type=int, default=100)
     parser.add_argument("--peer-metric-max-batches", type=int, default=100)
+    parser.add_argument("--repo-source-url")
+    parser.add_argument("--repo-date-column")
+    parser.add_argument("--repo-value-column")
+    parser.add_argument("--cpi-source-url")
+    parser.add_argument("--cpi-date-column")
+    parser.add_argument("--cpi-value-column")
+    parser.add_argument("--iip-source-url")
+    parser.add_argument("--iip-date-column")
+    parser.add_argument("--iip-value-column")
     parser.add_argument("--start-at", choices=STAGE_ORDER, default="market")
     parser.add_argument("--plan-only", action="store_true")
     args = parser.parse_args()
@@ -169,6 +208,15 @@ def main() -> int:
             financial_max_batches=args.financial_max_batches,
             peer_metric_batch_size=args.peer_metric_batch_size,
             peer_metric_max_batches=args.peer_metric_max_batches,
+            repo_source_url=args.repo_source_url,
+            repo_date_column=args.repo_date_column,
+            repo_value_column=args.repo_value_column,
+            cpi_source_url=args.cpi_source_url,
+            cpi_date_column=args.cpi_date_column,
+            cpi_value_column=args.cpi_value_column,
+            iip_source_url=args.iip_source_url,
+            iip_date_column=args.iip_date_column,
+            iip_value_column=args.iip_value_column,
             start_at=args.start_at,
         )
     except ValueError as exc:
