@@ -101,11 +101,37 @@ def test_post_launch_acceptance_workflow_is_manual_fail_closed_and_secret_safe()
     assert "--client-secret" not in text
 
 
+def test_deployment_readiness_workflow_is_manual_fail_closed_and_secret_safe() -> None:
+    workflow = _workflow("deployment-readiness.yml")
+    triggers = workflow["on"]
+    assert isinstance(triggers, dict)
+    assert set(triggers) == {"workflow_dispatch"}
+    assert workflow["permissions"] == {"contents": "read"}
+
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    job = jobs["deployment-readiness"]
+    assert isinstance(job, dict)
+    assert job["environment"] == "production"
+
+    text = (WORKFLOWS / "deployment-readiness.yml").read_text(encoding="utf-8")
+    assert "RUN_DEPLOYMENT_READINESS" in text
+    assert "run_deployment_readiness_gate.py" in text
+    assert "DEPLOYMENT_READINESS_EVIDENCE_JSON" in text
+    assert "deployment-readiness-evidence.json" in text
+    assert "workflow_dispatch" in text
+    assert "secrets." not in text
+    assert "--api-key" not in text
+    assert "--token" not in text
+    assert "--client-secret" not in text
+
+
 def test_manual_workflows_have_non_cancelling_production_concurrency_locks() -> None:
     for filename, group in (
         ("production-corpus.yml", "production-research-corpus"),
         ("production-release-gate.yml", "production-release-gate"),
         ("post-launch-acceptance.yml", "post-launch-acceptance"),
+        ("deployment-readiness.yml", "deployment-readiness"),
     ):
         workflow = _workflow(filename)
         concurrency = workflow["concurrency"]
