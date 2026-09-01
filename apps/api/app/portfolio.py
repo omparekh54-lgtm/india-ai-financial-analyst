@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from math import sqrt
 from statistics import pstdev
 from typing import Any
@@ -59,9 +59,7 @@ class PortfolioRepository:
     async def delete(self, user_id: UUID, portfolio_id: UUID) -> bool:
         async with self.engine.begin() as connection:
             value = await connection.scalar(
-                text(
-                    "delete from portfolios where id=:id and user_id=:user_id returning id"
-                ),
+                text("delete from portfolios where id=:id and user_id=:user_id returning id"),
                 {"id": portfolio_id, "user_id": user_id},
             )
         return value is not None
@@ -184,7 +182,6 @@ class PortfolioRepository:
                     {"portfolio_id": portfolio_id},
                 )
             ).mappings().all()
-
             history_rows = (
                 await connection.execute(
                     text(
@@ -204,7 +201,11 @@ class PortfolioRepository:
                 )
             ).mappings().all()
 
-        return _portfolio_analysis(dict(portfolio), [dict(row) for row in positions], [dict(row) for row in history_rows])
+        return _portfolio_analysis(
+            dict(portfolio),
+            [dict(row) for row in positions],
+            [dict(row) for row in history_rows],
+        )
 
 
 def _portfolio_analysis(
@@ -215,13 +216,15 @@ def _portfolio_analysis(
     now = datetime.now(UTC)
     current_rows: list[dict[str, object]] = []
     covered_value = 0.0
-    total_cost = 0.0
+    known_cost_basis = 0.0
+    known_market_value_at_cost = 0.0
     positions_with_price = 0
+    positions_with_known_pnl = 0
     stale_positions: list[str] = []
     missing_positions: list[str] = []
 
     for position in positions:
-        quantity = float(position["quantity"])
+        quantity = _required_float(position["quantity"])
         average_cost = _float(position.get("average_cost"))
         latest_close = _float(position.get("latest_close"))
         latest_at = position.get("latest_price_at")
@@ -232,13 +235,21 @@ def _portfolio_analysis(
         )
         market_value = quantity * latest_close if latest_close is not None else None
         cost_basis = quantity * average_cost if average_cost is not None else None
+        unrealized_pnl = (
+            market_value - cost_basis
+            if market_value is not None and cost_basis is not None
+            else None
+        )
         if market_value is not None:
             covered_value += market_value
             positions_with_price += 1
         else:
             missing_positions.append(symbol)
         if cost_basis is not None:
-            total_cost += cost_basis
+            known_cost_basis += cost_basis
+        if unrealized_pnl is not None and market_value is not None:
+            known_market_value_at_cost += market_value
+            positions_with_known_pnl += 1
         if latest_close is not None and not is_fresh:
             stale_positions.append(symbol)
         current_rows.append(
@@ -257,47 +268,50 @@ def _portfolio_analysis(
                 "price_fresh": is_fresh,
                 "market_value": market_value,
                 "cost_basis": cost_basis,
-                "unrealized_pnl": (
-                    market_value - cost_basis
-                    if market_value is not None and cost_basis is not None
-                    else None
-                ),
+                "unrealized_pnl": unrealized_pnl,
                 "notes": position.get("notes"),
             }
         )
 
     sector_values: dict[str, float] = defaultdict(float)
     industry_values: dict[str, float] = defaultdict(float)
+    position_weights: list[float] = []
     for row in current_rows:
         value = _float(row.get("market_value"))
         if value is None:
             continue
         sector_values[str(row.get("sector") or "Unclassified")] += value
         industry_values[str(row.get("industry") or "Unclassified")] += value
-        row["weight_pct"] = round(value / covered_value * 100.0, 4) if covered_value else None
+        weight_pct = round(value / covered_value * 100.0, 4) if covered_value else None
+        row["weight_pct"] = weight_pct
+        if weight_pct is not None:
+            position_weights.append(weight_pct / 100.0)
 
     sector_weights = _weights(sector_values, covered_value)
     industry_weights = _weights(industry_values, covered_value)
-    position_weights = [
-        float(row["weight_pct"]) / 100.0
-        for row in current_rows
-        if isinstance(row.get("weight_pct"), (int, float))
-    ]
     hhi = sum(weight * weight for weight in position_weights)
     historical = _historical_portfolio_stats(positions, history_rows)
 
     risk_flags: list[str] = []
     if position_weights and max(position_weights) > 0.30:
         risk_flags.append("single_position_concentration_above_30pct")
-    if sector_weights and max(item["weight_pct"] for item in sector_weights) > 40.0:
+    sector_weight_values = [_required_float(item["weight_pct"]) for item in sector_weights]
+    if sector_weight_values and max(sector_weight_values) > 40.0:
         risk_flags.append("single_sector_concentration_above_40pct")
     if stale_positions:
         risk_flags.append("stale_source_linked_prices_present")
     if missing_positions:
         risk_flags.append("positions_missing_source_linked_prices")
-    if positions and len(current_rows) != positions_with_price:
+    if positions and positions_with_price != len(positions):
         risk_flags.append("portfolio_valuation_is_partial")
+    if positions and positions_with_known_pnl != len(positions):
+        risk_flags.append("portfolio_pnl_is_partial")
 
+    known_unrealized_pnl = (
+        known_market_value_at_cost - known_cost_basis
+        if positions_with_known_pnl > 0
+        else None
+    )
     return {
         "portfolio": {
             "id": str(portfolio["id"]),
@@ -307,10 +321,12 @@ def _portfolio_analysis(
         },
         "position_count": len(positions),
         "positions_with_source_linked_price": positions_with_price,
+        "positions_with_known_pnl": positions_with_known_pnl,
         "price_coverage_pct": round(positions_with_price / len(positions) * 100.0, 2) if positions else 0.0,
+        "pnl_coverage_pct": round(positions_with_known_pnl / len(positions) * 100.0, 2) if positions else 0.0,
         "covered_market_value": round(covered_value, 4),
-        "known_cost_basis": round(total_cost, 4),
-        "known_unrealized_pnl": round(covered_value - total_cost, 4) if total_cost else None,
+        "known_cost_basis": round(known_cost_basis, 4),
+        "known_unrealized_pnl": round(known_unrealized_pnl, 4) if known_unrealized_pnl is not None else None,
         "positions": current_rows,
         "sector_weights": sector_weights,
         "industry_weights": industry_weights,
@@ -319,6 +335,7 @@ def _portfolio_analysis(
         "risk_flags": risk_flags,
         "limitations": {
             "valuation": "Only source-linked stored daily market prices are used.",
+            "pnl": "Aggregate unrealized P&L includes only positions with both a source-linked price and known average cost.",
             "history": "Historical statistics require at least 30 common sourced daily observations across all positions.",
             "positions": "Quantities are treated as static research inputs; this is not broker execution or investment advice.",
         },
@@ -331,19 +348,29 @@ def _historical_portfolio_stats(
 ) -> dict[str, object]:
     if not positions:
         return {"available": False, "reason": "portfolio_has_no_positions"}
-    quantities = {str(row["security_id"]): float(row["quantity"]) for row in positions}
-    by_date: dict[object, dict[str, float]] = defaultdict(dict)
+    quantities = {
+        str(row["security_id"]): _required_float(row["quantity"])
+        for row in positions
+    }
+    by_date: dict[date, dict[str, float]] = defaultdict(dict)
     for row in history_rows:
         close = _float(row.get("close"))
-        if close is None:
+        bar_date = row.get("bar_date")
+        if close is None or not isinstance(bar_date, date):
             continue
-        by_date[row["bar_date"]][str(row["security_id"])] = close
-    common_values: list[tuple[object, float]] = []
+        by_date[bar_date][str(row["security_id"])] = close
+    common_values: list[tuple[date, float]] = []
     required = set(quantities)
     for bar_date, closes in by_date.items():
         if set(closes) >= required:
             common_values.append(
-                (bar_date, sum(quantities[security_id] * closes[security_id] for security_id in required))
+                (
+                    bar_date,
+                    sum(
+                        quantities[security_id] * closes[security_id]
+                        for security_id in required
+                    ),
+                )
             )
     common_values.sort(key=lambda item: item[0])
     if len(common_values) < 30:
@@ -353,7 +380,11 @@ def _historical_portfolio_stats(
             "common_observations": len(common_values),
         }
     values = [value for _, value in common_values[-60:]]
-    returns = [values[index] / values[index - 1] - 1.0 for index in range(1, len(values)) if values[index - 1] > 0]
+    returns = [
+        values[index] / values[index - 1] - 1.0
+        for index in range(1, len(values))
+        if values[index - 1] > 0
+    ]
     if not returns:
         return {"available": False, "reason": "invalid_historical_values"}
     peak = values[0]
@@ -379,7 +410,11 @@ def _weights(values: dict[str, float], total: float) -> list[dict[str, object]]:
     if total <= 0:
         return []
     return [
-        {"name": key, "market_value": round(value, 4), "weight_pct": round(value / total * 100.0, 4)}
+        {
+            "name": key,
+            "market_value": round(value, 4),
+            "weight_pct": round(value / total * 100.0, 4),
+        }
         for key, value in sorted(values.items(), key=lambda item: item[1], reverse=True)
     ]
 
@@ -407,7 +442,17 @@ def _iso(value: object) -> str | None:
 def _float(value: object) -> float | None:
     if value is None:
         return None
-    return float(value)
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _required_float(value: object) -> float:
+    result = _float(value)
+    if result is None:
+        raise ValueError(f"Expected numeric value, received {value!r}")
+    return result
 
 
 def _utc(value: datetime) -> datetime:
