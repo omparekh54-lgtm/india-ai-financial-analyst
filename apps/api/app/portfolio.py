@@ -216,8 +216,9 @@ def _portfolio_analysis(
     now = datetime.now(UTC)
     current_rows: list[dict[str, object]] = []
     covered_value = 0.0
-    known_cost_basis = 0.0
-    known_market_value_at_cost = 0.0
+    total_known_cost_basis = 0.0
+    matched_cost_basis = 0.0
+    matched_market_value = 0.0
     positions_with_price = 0
     positions_with_known_pnl = 0
     stale_positions: list[str] = []
@@ -246,9 +247,10 @@ def _portfolio_analysis(
         else:
             missing_positions.append(symbol)
         if cost_basis is not None:
-            known_cost_basis += cost_basis
-        if unrealized_pnl is not None and market_value is not None:
-            known_market_value_at_cost += market_value
+            total_known_cost_basis += cost_basis
+        if unrealized_pnl is not None and market_value is not None and cost_basis is not None:
+            matched_market_value += market_value
+            matched_cost_basis += cost_basis
             positions_with_known_pnl += 1
         if latest_close is not None and not is_fresh:
             stale_positions.append(symbol)
@@ -308,9 +310,7 @@ def _portfolio_analysis(
         risk_flags.append("portfolio_pnl_is_partial")
 
     known_unrealized_pnl = (
-        known_market_value_at_cost - known_cost_basis
-        if positions_with_known_pnl > 0
-        else None
+        matched_market_value - matched_cost_basis if positions_with_known_pnl > 0 else None
     )
     return {
         "portfolio": {
@@ -325,7 +325,8 @@ def _portfolio_analysis(
         "price_coverage_pct": round(positions_with_price / len(positions) * 100.0, 2) if positions else 0.0,
         "pnl_coverage_pct": round(positions_with_known_pnl / len(positions) * 100.0, 2) if positions else 0.0,
         "covered_market_value": round(covered_value, 4),
-        "known_cost_basis": round(known_cost_basis, 4),
+        "known_cost_basis": round(total_known_cost_basis, 4),
+        "matched_cost_basis": round(matched_cost_basis, 4),
         "known_unrealized_pnl": round(known_unrealized_pnl, 4) if known_unrealized_pnl is not None else None,
         "positions": current_rows,
         "sector_weights": sector_weights,
