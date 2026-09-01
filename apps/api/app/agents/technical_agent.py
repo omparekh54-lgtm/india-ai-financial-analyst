@@ -249,7 +249,7 @@ def _last_valid(series: pd.Series) -> float | None:
     return float(clean.iloc[-1])
 
 
-def _number(value: object) -> float | None:
+def _number(value: Any) -> float | None:
     try:
         return None if value is None else float(value)
     except (TypeError, ValueError):
