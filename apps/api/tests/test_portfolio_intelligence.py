@@ -45,6 +45,9 @@ def test_portfolio_analysis_is_source_linked_and_flags_concentration() -> None:
 
     assert result["covered_market_value"] == 1100.0
     assert result["price_coverage_pct"] == 100.0
+    assert result["pnl_coverage_pct"] == 100.0
+    assert result["matched_cost_basis"] == 890.0
+    assert result["known_unrealized_pnl"] == 210.0
     assert result["positions"][0]["source_linked_price"] is True  # type: ignore[index]
     assert "single_position_concentration_above_30pct" in result["risk_flags"]
     assert result["historical_risk"] == {
@@ -54,7 +57,7 @@ def test_portfolio_analysis_is_source_linked_and_flags_concentration() -> None:
     }
 
 
-def test_portfolio_partial_valuation_does_not_invent_missing_price() -> None:
+def test_portfolio_partial_valuation_does_not_invent_missing_price_or_pnl() -> None:
     portfolio = {"id": PORTFOLIO, "name": "Core", "base_currency": "INR", "updated_at": None}
     positions = [
         _position(SECURITY_A, "AAA", "Banks", 10, 100.0, 80.0),
@@ -63,10 +66,15 @@ def test_portfolio_partial_valuation_does_not_invent_missing_price() -> None:
     result = _portfolio_analysis(portfolio, positions, [])
 
     assert result["price_coverage_pct"] == 50.0
+    assert result["pnl_coverage_pct"] == 50.0
     assert result["covered_market_value"] == 1000.0
+    assert result["known_cost_basis"] == 1050.0
+    assert result["matched_cost_basis"] == 800.0
+    assert result["known_unrealized_pnl"] == 200.0
     assert result["positions"][1]["market_value"] is None  # type: ignore[index]
     assert "positions_missing_source_linked_prices" in result["risk_flags"]
     assert "portfolio_valuation_is_partial" in result["risk_flags"]
+    assert "portfolio_pnl_is_partial" in result["risk_flags"]
 
 
 def test_historical_portfolio_requires_common_dates_and_computes_real_series() -> None:
