@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 from uuid import UUID
 
 import sentry_sdk
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
@@ -14,17 +14,23 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.auth import AuthenticatedUser, require_authenticated_user
 from app.brokers.repository import BrokerRepository
 from app.brokers.upstox_oauth import UpstoxOAuthError, UpstoxOAuthService
+from app.calibration_api import router as calibration_router
+from app.comparison_api import router as comparison_router
 from app.core.agent_data_readiness import evaluate_agent_readiness, load_agent_data_coverage
 from app.core.config import get_settings
 from app.core.data_readiness import evaluate_data_coverage, load_data_coverage
 from app.core.readiness import assert_production_ready, audit_settings
 from app.core.research_gate import ResearchCorpusNotReadyError, enforce_research_corpus_ready
+from app.core.usage import ResearchUsageLimitError
 from app.db import create_database_engine, database_health
+from app.monitoring_api import router as monitoring_router
 from app.orchestration.plan import AnalysisMode, ResearchDepth, build_research_plan
+from app.portfolio_api import router as portfolio_router
 from app.providers.router import Capability, ProviderRouter
 from app.repositories.research import ResearchRepository
 from app.research.export import render_research_markdown, research_export_payload
 from app.research.service import ResearchService
+from app.usage_api import router as usage_router
 from app.watchlists_api import router as watchlists_router
 
 settings = get_settings()
@@ -48,7 +54,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.9.0",
+    version="0.10.0",
     default_response_class=ORJSONResponse,
     lifespan=lifespan,
 )
@@ -60,6 +66,29 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 app.include_router(watchlists_router)
+app.include_router(monitoring_router)
+app.include_router(portfolio_router)
+app.include_router(comparison_router)
+app.include_router(calibration_router)
+app.include_router(usage_router)
+
+
+@app.exception_handler(ResearchUsageLimitError)
+async def research_usage_limit_handler(
+    _request: Request,
+    exc: ResearchUsageLimitError,
+) -> ORJSONResponse:
+    return ORJSONResponse(
+        status_code=429,
+        content={
+            "detail": {
+                "code": exc.code,
+                "message": "Daily research usage limit reached.",
+                "used": exc.used,
+                "limit": exc.limit,
+            }
+        },
+    )
 
 
 class ResearchPlanRequest(BaseModel):
@@ -97,6 +126,8 @@ async def health() -> dict[str, object]:
         "external_llm_calls_enabled": settings.enable_external_llm_calls,
         "external_data_calls_enabled": settings.enable_external_data_calls,
         "free_only": settings.free_only,
+        "usage_limits_enabled": settings.enable_usage_limits,
+        "commercial_launch_enabled": settings.commercial_launch_enabled,
         "research_queue": "postgres_worker",
     }
 
@@ -401,6 +432,8 @@ async def run_research(
             depth=request.depth,
             requested_by=user.id,
         )
+    except ResearchUsageLimitError:
+        raise
     except Exception as exc:
         raise HTTPException(
             status_code=500,
