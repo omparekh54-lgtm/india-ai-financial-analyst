@@ -29,6 +29,8 @@ _REQUIRED_TABLES = (
     "live_market_subscriptions",
     "user_live_quotes",
     "broker_stream_leases",
+    "watchlists",
+    "watchlist_items",
 )
 
 _REQUIRED_RLS_TABLES = (
@@ -38,6 +40,8 @@ _REQUIRED_RLS_TABLES = (
     "claims",
     "claim_evidence",
     "analysis_snapshots",
+    "watchlists",
+    "watchlist_items",
 )
 
 _REQUIRED_OWNER_POLICIES = (
@@ -47,6 +51,8 @@ _REQUIRED_OWNER_POLICIES = (
     "claim_evidence_owner_read",
     "research_reports_owner_read",
     "analysis_snapshots_owner_read",
+    "watchlists_owner_all",
+    "watchlist_items_owner_all",
 )
 
 _REFERENCE_APPROVAL_CONSTRAINT = "sources_reference_production_approved_chk"
