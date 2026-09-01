@@ -1,0 +1,148 @@
+name: Production Release Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type RUN_RELEASE_GATE to execute production release QA
+        required: true
+        type: string
+      api_base_url:
+        description: Deployed API HTTPS base URL
+        required: true
+        type: string
+      web_app_url:
+        description: Deployed web app HTTPS URL used by production preflight
+        required: true
+        type: string
+      cors_origins:
+        description: Comma-separated HTTPS production CORS origins
+        required: true
+        type: string
+      owner_job_id:
+        description: Existing research job UUID owned by OWNER_ACCESS_TOKEN user
+        required: true
+        type: string
+      min_nse_eq_securities:
+        description: Required production NSE EQ universe minimum
+        required: true
+        default: "1000"
+        type: string
+      load_requests:
+        description: Read-only load probe request count, maximum 500
+        required: true
+        default: "60"
+        type: string
+      load_concurrency:
+        description: Read-only load probe concurrency, maximum 25
+        required: true
+        default: "5"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-release-gate
+  cancel-in-progress: false
+
+jobs:
+  release-gate:
+    name: Fail-closed production release QA
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      APP_ENV: production
+      FREE_ONLY: "true"
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      DEPLOYMENT_SMOKE_ACCESS_TOKEN: ${{ secrets.DEPLOYMENT_SMOKE_ACCESS_TOKEN }}
+      OWNER_ACCESS_TOKEN: ${{ secrets.OWNER_ACCESS_TOKEN }}
+      OTHER_ACCESS_TOKEN: ${{ secrets.OTHER_ACCESS_TOKEN }}
+      LOAD_PROBE_ACCESS_TOKEN: ${{ secrets.LOAD_PROBE_ACCESS_TOKEN }}
+      ENABLE_LIVE_MARKET: "false"
+      ENABLE_EXTERNAL_LLM_CALLS: "false"
+      ENABLE_EXTERNAL_DATA_CALLS: "false"
+      ENABLE_EVENT_RESEARCH: "false"
+      ENABLE_SEMANTIC_RETRIEVAL: "false"
+      ENABLE_MULTIMODAL_DOCUMENT_ANALYSIS: "false"
+      ENABLE_AUDIO_TRANSCRIPTION: "false"
+      ENABLE_PRODUCT_TELEMETRY: "false"
+      API_BASE_URL: ${{ inputs.api_base_url }}
+      WEB_APP_URL: ${{ inputs.web_app_url }}
+      CORS_ORIGINS: ${{ inputs.cors_origins }}
+      AUTH_ISOLATION_JOB_ID: ${{ inputs.owner_job_id }}
+      MIN_NSE_EQ_SECURITIES: ${{ inputs.min_nse_eq_securities }}
+      LOAD_REQUESTS: ${{ inputs.load_requests }}
+      LOAD_CONCURRENCY: ${{ inputs.load_concurrency }}
+    steps:
+      - name: Confirmation guard
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM" != "RUN_RELEASE_GATE" ]]; then
+            echo "Refusing production release QA: confirmation text did not match."
+            exit 2
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+
+      - name: Install API runtime
+        run: pip install -e .
+
+      - name: Validate release-gate inputs and secrets
+        run: |
+          set -euo pipefail
+          [[ "$API_BASE_URL" == https://* ]] || { echo "api_base_url must use HTTPS."; exit 2; }
+          [[ "$WEB_APP_URL" == https://* ]] || { echo "web_app_url must use HTTPS."; exit 2; }
+          [[ -n "${DATABASE_URL:-}" ]] || { echo "DATABASE_URL secret is missing."; exit 2; }
+          [[ -n "${SUPABASE_URL:-}" ]] || { echo "SUPABASE_URL secret is missing."; exit 2; }
+          [[ -n "${SUPABASE_PUBLISHABLE_KEY:-}" ]] || { echo "SUPABASE_PUBLISHABLE_KEY secret is missing."; exit 2; }
+          [[ -n "${DEPLOYMENT_SMOKE_ACCESS_TOKEN:-}" ]] || { echo "DEPLOYMENT_SMOKE_ACCESS_TOKEN secret is missing."; exit 2; }
+          [[ -n "${OWNER_ACCESS_TOKEN:-}" ]] || { echo "OWNER_ACCESS_TOKEN secret is missing."; exit 2; }
+          [[ -n "${OTHER_ACCESS_TOKEN:-}" ]] || { echo "OTHER_ACCESS_TOKEN secret is missing."; exit 2; }
+
+      - name: Run production release gate
+        run: |
+          set -euo pipefail
+          python scripts/run_production_release_gate.py \
+            --api-base-url "$API_BASE_URL" \
+            --job-id "$AUTH_ISOLATION_JOB_ID" \
+            --min-nse-eq-securities "$MIN_NSE_EQ_SECURITIES" \
+            --load-requests "$LOAD_REQUESTS" \
+            --load-concurrency "$LOAD_CONCURRENCY" \
+            | tee production-release-result.json
+
+      - name: Publish release summary
+        if: always()
+        run: |
+          {
+            echo "## Production release gate"
+            echo
+            echo "- API: \`$API_BASE_URL\`"
+            echo "- Minimum NSE EQ universe: \`$MIN_NSE_EQ_SECURITIES\`"
+            echo "- Stages: preflight → corpus readiness → deployment smoke → auth isolation → load probe"
+            echo "- The workflow fails closed if any stage fails."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload release result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-release-result-${{ github.run_id }}
+          path: apps/api/production-release-result.json
+          if-no-files-found: ignore
+          retention-days: 14
