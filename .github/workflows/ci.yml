@@ -61,7 +61,7 @@ jobs:
   phase25-source-artifacts:
     if: github.event_name == 'pull_request' && github.head_ref == 'feat/foundation-v1'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 60
     permissions:
       contents: read
     defaults:
@@ -72,6 +72,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - name: Install API runtime
+        run: pip install -e .
       - name: Fetch current official/provider source artifacts
         run: |
           set -euo pipefail
@@ -120,6 +124,21 @@ jobs:
           ]
           if len(up_eq) < 1000:
               raise SystemExit(f'Upstox NSE_EQ rows below production threshold: {len(up_eq)}')
+          by_isin = {str(x['isin']).strip().upper(): x for x in up_eq}
+          missing = []
+          mismatches = []
+          for row in eq:
+              isin = str(row.get(' ISIN NUMBER') or row.get('ISIN NUMBER') or '').strip().upper()
+              symbol = str(row.get('SYMBOL') or '').strip().upper()
+              mapped = by_isin.get(isin)
+              if not mapped:
+                  missing.append(symbol)
+                  continue
+              up_symbol = str(mapped.get('trading_symbol') or '').strip().upper()
+              if up_symbol != symbol or str(mapped.get('instrument_key') or '') != f'NSE_EQ|{isin}':
+                  mismatches.append({'isin': isin, 'nse_symbol': symbol, 'upstox_symbol': up_symbol, 'instrument_key': mapped.get('instrument_key')})
+          if missing or mismatches:
+              raise SystemExit(f'Upstox exact mapping validation failed: missing={len(missing)} mismatches={len(mismatches)}')
           manifest = {
               'nse_source_url': (root / 'nse-source-url.txt').read_text(encoding='utf-8').strip(),
               'nse_total_rows': len(rows),
@@ -128,12 +147,88 @@ jobs:
               'upstox_source_url': 'https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz',
               'upstox_nse_eq_rows': len(up_eq),
               'upstox_sha256': hashlib.sha256((root / 'NSE.json.gz').read_bytes()).hexdigest(),
+              'upstox_exact_isin_matches': len(eq),
+              'upstox_missing': 0,
+              'upstox_symbol_mismatches': 0,
               'synthetic_fallback': False,
           }
           (root / 'manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding='utf-8')
           print(json.dumps(manifest, indent=2, sort_keys=True))
           PY
+      - name: Collect official NSE four-tier classifications
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import asyncio
+          import csv
+          import hashlib
+          import json
+          from pathlib import Path
+
+          from app.connectors.http_fetcher import SourceFetchError
+          from app.connectors.nse_classification import NseIndustryClassificationFetcher
+
+          root = Path('phase25-artifacts')
+          rows = list(csv.DictReader((root / 'EQUITY_L.csv').open(encoding='utf-8-sig', newline='')))
+          targets = []
+          for row in rows:
+              if str(row.get(' SERIES') or row.get('SERIES') or '').strip().upper() != 'EQ':
+                  continue
+              symbol = str(row.get('SYMBOL') or '').strip().upper()
+              isin = str(row.get(' ISIN NUMBER') or row.get('ISIN NUMBER') or '').strip().upper()
+              if symbol and isin:
+                  targets.append((symbol, isin))
+
+          async def run():
+              results = []
+              failures = []
+              async with NseIndustryClassificationFetcher() as fetcher:
+                  for index, (symbol, isin) in enumerate(targets, start=1):
+                      last_error = None
+                      for attempt in range(3):
+                          try:
+                              item = await fetcher.fetch(symbol, expected_isin=isin)
+                              results.append(item.as_dict())
+                              last_error = None
+                              break
+                          except (SourceFetchError, TypeError, ValueError) as exc:
+                              last_error = str(exc)
+                              await asyncio.sleep(1.5 * (attempt + 1))
+                      if last_error is not None:
+                          failures.append({'symbol': symbol, 'isin': isin, 'error': last_error})
+                      if index % 100 == 0 or index == len(targets):
+                          print(json.dumps({'progress': index, 'total': len(targets), 'fetched': len(results), 'failed': len(failures)}), flush=True)
+                      if index < len(targets):
+                          await asyncio.sleep(0.35)
+              return results, failures
+
+          results, failures = asyncio.run(run())
+          payload = {
+              'taxonomy': 'NSE_INDICES_4_TIER',
+              'source': 'https://www.nseindia.com/api/quote-equity?symbol=<NSE_SYMBOL>',
+              'canonical_nse_sha256': hashlib.sha256((root / 'EQUITY_L.csv').read_bytes()).hexdigest(),
+              'target_count': len(targets),
+              'fetched_count': len(results),
+              'failed_count': len(failures),
+              'synthetic_fallback': False,
+              'results': results,
+              'failures': failures,
+          }
+          raw = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode('utf-8')
+          (root / 'nse-classification.json').write_bytes(raw)
+          (root / 'nse-classification-manifest.json').write_text(json.dumps({
+              'taxonomy': payload['taxonomy'],
+              'target_count': len(targets),
+              'fetched_count': len(results),
+              'failed_count': len(failures),
+              'sha256': hashlib.sha256(raw).hexdigest(),
+              'failure_preview': failures[:50],
+              'synthetic_fallback': False,
+          }, indent=2, sort_keys=True), encoding='utf-8')
+          print((root / 'nse-classification-manifest.json').read_text(encoding='utf-8'))
+          PY
       - name: Upload Phase 25 source artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: phase25-source-artifacts-${{ github.run_id }}
