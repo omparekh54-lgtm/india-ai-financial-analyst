@@ -288,40 +288,94 @@ def _comparable_value(claim: Claim) -> ComparableValue | None:
     if value is None:
         return None
     unit = str(claim.unit or claim.data.get("unit") or "").strip().lower()
-    currency = str(claim.currency or claim.data.get("currency") or "").strip().upper() or None
+    explicit_currency = (
+        str(claim.currency or claim.data.get("currency") or "").strip().upper() or None
+    )
 
     if unit in {"%", "percent", "percentage", "pct"}:
         return ComparableValue(value=value / 100.0, family="ratio", currency=None)
     if unit in {"bps", "basis_points", "basis points"}:
         return ComparableValue(value=value / 10_000.0, family="ratio", currency=None)
     if unit in {"ratio", "multiple", "x", ""}:
-        return ComparableValue(value=value, family=unit or "scalar", currency=currency)
+        return ComparableValue(value=value, family=unit or "scalar", currency=explicit_currency)
     if unit in {"day", "days"}:
         return ComparableValue(value=value, family="days", currency=None)
 
-    amount_scales = {
-        "inr": 1.0,
-        "rupee": 1.0,
-        "rupees": 1.0,
-        "rs": 1.0,
-        "₹": 1.0,
-        "lakh": 100_000.0,
-        "lakhs": 100_000.0,
-        "crore": 10_000_000.0,
-        "crores": 10_000_000.0,
-        "million": 1_000_000.0,
-        "billion": 1_000_000_000.0,
-    }
-    scale = amount_scales.get(unit)
-    if scale is not None:
+    monetary = _monetary_unit(unit, explicit_currency)
+    if monetary is not None:
+        scale, currency = monetary
         return ComparableValue(
             value=value * scale,
             family="currency_amount",
-            currency=currency or "INR",
+            currency=currency,
         )
     if unit in {"score", "shares", "units"}:
-        return ComparableValue(value=value, family=unit, currency=currency)
+        return ComparableValue(value=value, family=unit, currency=explicit_currency)
     return None
+
+
+def _monetary_unit(unit: str, explicit_currency: str | None) -> tuple[float, str] | None:
+    normalized = (
+        unit.replace("₹", " inr ")
+        .replace("$", " usd ")
+        .replace("€", " eur ")
+        .replace("£", " gbp ")
+        .replace("_", " ")
+        .replace("-", " ")
+        .replace("/", " ")
+    )
+    tokens = [token.strip(".,()") for token in normalized.split() if token.strip(".,()")]
+
+    currency_aliases = {
+        "inr": "INR",
+        "rs": "INR",
+        "rupee": "INR",
+        "rupees": "INR",
+        "usd": "USD",
+        "dollar": "USD",
+        "dollars": "USD",
+        "eur": "EUR",
+        "euro": "EUR",
+        "euros": "EUR",
+        "gbp": "GBP",
+        "pound": "GBP",
+        "pounds": "GBP",
+    }
+    scale_aliases = {
+        "thousand": 1_000.0,
+        "thousands": 1_000.0,
+        "lakh": 100_000.0,
+        "lakhs": 100_000.0,
+        "million": 1_000_000.0,
+        "millions": 1_000_000.0,
+        "crore": 10_000_000.0,
+        "crores": 10_000_000.0,
+        "billion": 1_000_000_000.0,
+        "billions": 1_000_000_000.0,
+    }
+
+    inferred_currencies = {
+        currency_aliases[token] for token in tokens if token in currency_aliases
+    }
+    if len(inferred_currencies) > 1:
+        return None
+    inferred_currency = next(iter(inferred_currencies), None)
+    if explicit_currency and inferred_currency and explicit_currency != inferred_currency:
+        return None
+    currency = explicit_currency or inferred_currency
+
+    scales = {scale_aliases[token] for token in tokens if token in scale_aliases}
+    if len(scales) > 1:
+        return None
+    scale = next(iter(scales), None)
+
+    has_currency_token = inferred_currency is not None or explicit_currency is not None
+    if scale is None and not has_currency_token:
+        return None
+    if scale is None:
+        scale = 1.0
+    # Preserve the original India-first default for shorthand units such as "crore"/"lakh".
+    return scale, currency or "INR"
 
 
 def _claim_source_priority(claim: Claim, evidence_by_id: dict[UUID, EvidenceRef]) -> int:
