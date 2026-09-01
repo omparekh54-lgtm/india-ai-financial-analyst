@@ -110,6 +110,21 @@ class Settings(BaseSettings):
     web_research_max_searches_per_job: int = Field(default=2, ge=1, le=3)
     web_research_max_results_per_search: int = Field(default=5, ge=2, le=10)
 
+    # Product usage controls are disabled until the operator explicitly enables them. The limits
+    # are conservative free-plan defaults and can be changed without a code deployment.
+    enable_usage_limits: bool = False
+    daily_research_job_limit: int = Field(default=10, ge=1, le=1000)
+    daily_deep_research_job_limit: int = Field(default=3, ge=1, le=250)
+    daily_event_research_job_limit: int = Field(default=20, ge=1, le=1000)
+
+    # Commercial launch is deliberately opt-in. Source scopes use PROVIDER:SCOPE entries separated
+    # by commas; `*` means provider-wide user-display approval. The default list is fail-closed for
+    # the providers expected by the India-first production architecture and may be narrowed only
+    # after source-governance review confirms a provider is not used in user-visible output.
+    commercial_launch_enabled: bool = False
+    commercial_require_free_only: bool = True
+    commercial_required_source_scopes: str = "NSE:*,BSE:*,RBI:*,FRED:*,TAVILY:*,UPSTOX:*"
+
     max_agent_concurrency: int = Field(default=6, ge=1, le=16)
     max_research_job_seconds: int = Field(default=240, ge=30, le=1800)
     research_worker_poll_seconds: float = Field(default=1.0, ge=0.25, le=30.0)
@@ -130,6 +145,19 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def commercial_required_source_scope_list(self) -> tuple[tuple[str, str], ...]:
+        scopes: list[tuple[str, str]] = []
+        for raw in self.commercial_required_source_scopes.split(","):
+            value = raw.strip()
+            if not value:
+                continue
+            provider, separator, scope = value.partition(":")
+            if not separator or not provider.strip() or not scope.strip():
+                continue
+            scopes.append((provider.strip().upper(), scope.strip()))
+        return tuple(dict.fromkeys(scopes))
 
     def provider_route_cost(self, provider: str) -> ProviderRouteCost:
         costs: dict[str, ProviderRouteCost] = {
