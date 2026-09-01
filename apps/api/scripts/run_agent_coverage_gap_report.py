@@ -6,113 +6,92 @@ import json
 
 from sqlalchemy import text
 
+from app.core.agent_data_readiness import evaluate_agent_readiness, load_agent_data_coverage
 from app.core.config import get_settings
+from app.core.data_readiness import evaluate_data_coverage, load_data_coverage
+from app.core.financial_history_coverage import load_financial_history_coverage
+from app.core.market_history_coverage import load_market_history_coverage
+from app.core.peer_metric_coverage import load_peer_metric_coverage
 from app.db import create_database_engine
 
-_REQUIRED_MACRO_SERIES = (
-    "repo_rate",
-    "india_10y_yield",
-    "usd_inr",
-    "brent",
-    "india_vix",
-    "cpi_yoy",
-    "iip_yoy",
-    "fii_cash_net_cr",
-    "dii_cash_net_cr",
-)
-_REQUIRED_BENCHMARK_CODES = ("NIFTY50", "INDIAVIX")
-
-_GAP_QUERY = text(
+_SECURITY_DIMENSION_QUERY = text(
     """
     with nse_eq as (
-      select id, nse_symbol, legal_name, sector, industry
+      select id, nse_symbol, legal_name, sector, industry, metadata
       from securities
       where primary_exchange = 'NSE'
         and coalesce(metadata->>'nse_series', 'EQ') = 'EQ'
-    ), mapping_ok as (
-      select distinct pi.security_id
-      from provider_instruments pi
-      join nse_eq n on n.id = pi.security_id
-    ), financial_ok as (
-      select ff.security_id
-      from financial_facts ff
-      join nse_eq n on n.id = ff.security_id
-      where ff.source_id is not null
-      group by ff.security_id
-      having count(distinct ff.period_end) >= 8
-         and count(distinct ff.fact_name) >= 6
-    ), filing_ok as (
-      select distinct src.security_id
-      from sources src
-      join nse_eq n on n.id = src.security_id
-      join evidence_chunks ec on ec.source_id = src.id
-      where src.source_type in ('exchange_filing', 'company_filing', 'regulator')
-        and length(btrim(ec.content)) > 0
-        and coalesce(src.published_at, src.retrieved_at) >= now() - interval '400 days'
-    ), earnings_ok as (
-      select distinct ce.security_id
-      from corporate_events ce
-      join nse_eq n on n.id = ce.security_id
-      join corporate_event_sources ces on ces.event_id = ce.id
-      join evidence_chunks ec on ec.source_id = ces.source_id
-      join sources src on src.id = ces.source_id
-      where ces.parse_status = 'parsed'
-        and length(btrim(ec.content)) > 0
-        and (
-          ce.event_type in (
-            'financial_results', 'earnings_call', 'earnings_transcript',
-            'investor_presentation'
-          )
-          or ces.document_role in ('transcript', 'presentation', 'xbrl')
-        )
-        and coalesce(src.published_at, ce.event_at, src.retrieved_at)
-            >= now() - interval '220 days'
-    ), technical_ok as (
-      select mb.security_id
-      from market_bars mb
-      join nse_eq n on n.id = mb.security_id
-      where mb.source_id is not null
-        and mb.interval in ('1d', 'day', 'daily')
-        and mb.ts >= now() - interval '500 days'
-      group by mb.security_id
-      having count(distinct mb.ts::date) >= 200
-    ), peer_ok as (
-      select sm.security_id
-      from security_metrics sm
-      join nse_eq n on n.id = sm.security_id
-      where sm.source_id is not null
-        and sm.as_of_date >= current_date - 400
-      group by sm.security_id
-      having count(distinct sm.metric_name) >= 3
     )
     select
-      n.id,
       n.nse_symbol,
       n.legal_name,
-      case when m.security_id is null then false else true end as mapping_ready,
-      case
-        when nullif(btrim(coalesce(n.sector, '')), '') is not null
-         and nullif(btrim(coalesce(n.industry, '')), '') is not null
-        then true else false
-      end as classification_ready,
-      case when f.security_id is null then false else true end as financial_ready,
-      case when fi.security_id is null then false else true end as filing_ready,
-      case when e.security_id is null then false else true end as earnings_ready,
-      case when t.security_id is null then false else true end as technical_ready,
-      case when p.security_id is null then false else true end as peer_metrics_ready
+      exists (
+        select 1 from provider_instruments pi where pi.security_id = n.id
+      ) as mapping_ready,
+      (
+        nullif(btrim(coalesce(n.sector, '')), '') is not null
+        and nullif(btrim(coalesce(n.industry, '')), '') is not null
+        and n.metadata->>'classification_taxonomy' = 'NSE_INDICES_4_TIER'
+        and n.metadata->>'classification_provenance_class' = 'official_source'
+        and n.metadata->>'classification_source_type' = 'nse_industry_classification'
+        and nullif(btrim(coalesce(n.metadata->>'classification_sha256', '')), '') is not null
+        and exists (
+          select 1
+          from sources src
+          where src.id::text = n.metadata->>'classification_source_id'
+            and src.security_id = n.id
+            and src.source_type = 'nse_industry_classification'
+            and src.metadata->>'provenance_class' = 'official_source'
+            and coalesce(src.metadata->>'production_approved', 'false') = 'true'
+            and src.checksum = n.metadata->>'classification_sha256'
+        )
+      ) as classification_ready,
+      exists (
+        select 1
+        from sources src
+        join evidence_chunks ec on ec.source_id = src.id
+        where src.security_id = n.id
+          and src.source_type in ('exchange_filing', 'company_filing', 'regulator')
+          and length(btrim(ec.content)) > 0
+          and coalesce(src.published_at, src.retrieved_at) >= now() - interval '400 days'
+      ) as filing_ready,
+      exists (
+        select 1
+        from corporate_events ce
+        join corporate_event_sources ces on ces.event_id = ce.id
+        join evidence_chunks ec on ec.source_id = ces.source_id
+        join sources src on src.id = ces.source_id
+        where ce.security_id = n.id
+          and ces.parse_status = 'parsed'
+          and length(btrim(ec.content)) > 0
+          and (
+            ce.event_type in (
+              'financial_results', 'earnings_call', 'earnings_transcript',
+              'investor_presentation'
+            )
+            or ces.document_role in ('transcript', 'presentation', 'xbrl')
+          )
+          and coalesce(src.published_at, ce.event_at, src.retrieved_at)
+              >= now() - interval '220 days'
+      ) as earnings_ready
     from nse_eq n
-    left join mapping_ok m on m.security_id = n.id
-    left join financial_ok f on f.security_id = n.id
-    left join filing_ok fi on fi.security_id = n.id
-    left join earnings_ok e on e.security_id = n.id
-    left join technical_ok t on t.security_id = n.id
-    left join peer_ok p on p.security_id = n.id
     order by n.nse_symbol nulls last, n.legal_name
     """
 )
 
 
-async def main(limit: int) -> int:
+def _missing_preview(rows: list[dict[str, object]], key: str, limit: int) -> list[dict[str, object]]:
+    return [
+        {
+            "nse_symbol": row.get("nse_symbol"),
+            "legal_name": row.get("legal_name"),
+        }
+        for row in rows
+        if not bool(row.get(key))
+    ][:limit]
+
+
+async def main(limit: int, min_nse_eq_securities: int) -> int:
     settings = get_settings()
     if not settings.database_url:
         raise RuntimeError("DATABASE_URL is not configured")
@@ -120,73 +99,52 @@ async def main(limit: int) -> int:
     engine = create_database_engine(settings.database_url)
     try:
         async with engine.connect() as connection:
-            rows = (await connection.execute(_GAP_QUERY)).mappings().all()
-            benchmark_codes = {
-                str(value).upper()
-                for value in (
-                    await connection.execute(
-                        text(
-                            """
-                            select distinct b.code
-                            from benchmark_bars bb
-                            join benchmarks b on b.id = bb.benchmark_id
-                            where bb.source_id is not null
-                            """
-                        )
-                    )
-                ).scalars().all()
-            }
-            macro_series = {
-                str(value)
-                for value in (
-                    await connection.execute(
-                        text(
-                            """
-                            select distinct series_key
-                            from macro_observations
-                            where source_id is not null
-                            """
-                        )
-                    )
-                ).scalars().all()
-            }
+            raw_rows = (await connection.execute(_SECURITY_DIMENSION_QUERY)).mappings().all()
+        rows = [dict(row) for row in raw_rows]
+        corpus_coverage = await load_data_coverage(engine)
+        agent_coverage = await load_agent_data_coverage(engine)
+        financial = await load_financial_history_coverage(engine)
+        market = await load_market_history_coverage(engine)
+        peer = await load_peer_metric_coverage(engine)
     finally:
         await engine.dispose()
 
-    dimensions = (
-        "mapping_ready",
-        "classification_ready",
-        "financial_ready",
-        "filing_ready",
-        "earnings_ready",
-        "technical_ready",
-        "peer_metrics_ready",
+    corpus_report = evaluate_data_coverage(
+        corpus_coverage,
+        min_nse_eq_securities=min_nse_eq_securities,
+    )
+    agent_report = evaluate_agent_readiness(
+        agent_coverage,
+        corpus_coverage,
+        settings,
+        min_nse_eq_securities=min_nse_eq_securities,
     )
     total = len(rows)
-    gaps: dict[str, object] = {}
-    for dimension in dimensions:
-        missing = [row for row in rows if not bool(row[dimension])]
-        gaps[dimension] = {
-            "covered": total - len(missing),
-            "missing": len(missing),
-            "coverage_pct": round(((total - len(missing)) / total) * 100, 2) if total else 0.0,
-            "missing_securities": [
-                {
-                    "nse_symbol": row["nse_symbol"],
-                    "legal_name": row["legal_name"],
-                }
-                for row in missing[:limit]
-            ],
-            "sample_truncated": len(missing) > limit,
+
+    dimension_counts: dict[str, dict[str, object]] = {}
+    for key in ("mapping_ready", "classification_ready", "filing_ready", "earnings_ready"):
+        covered = sum(bool(row.get(key)) for row in rows)
+        dimension_counts[key] = {
+            "covered": covered,
+            "missing": total - covered,
+            "coverage_pct": round((covered / total) * 100.0, 2) if total else 0.0,
+            "missing_securities": _missing_preview(rows, key, limit),
+            "sample_truncated": total - covered > limit,
         }
 
     payload = {
+        "ready": corpus_report.ready and agent_report.ready,
         "read_only": True,
         "synthetic_data_written": False,
+        "policy": "authoritative_listing_age_and_provenance_aware_coverage",
+        "minimum_nse_eq_securities": min_nse_eq_securities,
         "nse_eq_securities": total,
-        "security_gaps": gaps,
-        "missing_benchmarks": sorted(set(_REQUIRED_BENCHMARK_CODES) - benchmark_codes),
-        "missing_macro_series": sorted(set(_REQUIRED_MACRO_SERIES) - macro_series),
+        "security_dimensions": dimension_counts,
+        "financial_history": financial.as_dict(preview_limit=limit),
+        "market_history": market.as_dict(preview_limit=limit),
+        "peer_metrics": peer.as_dict(preview_limit=limit),
+        "corpus": corpus_report.as_dict(),
+        "agents": agent_report.as_dict(),
     }
     print(json.dumps(payload, indent=2, sort_keys=True, default=str))
     return 0
@@ -194,13 +152,21 @@ async def main(limit: int) -> int:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Read-only report of the exact real-data gaps blocking agent readiness."
+        description=(
+            "Read-only report of the exact real-data gaps blocking the authoritative 16-agent "
+            "production readiness contract."
+        )
     )
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=100,
-        help="Maximum missing securities to print per coverage dimension.",
-    )
+    parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument("--min-nse-eq-securities", type=int, default=1000)
     args = parser.parse_args()
-    raise SystemExit(asyncio.run(main(max(1, min(args.limit, 2000)))))
+    if args.min_nse_eq_securities < 1:
+        parser.error("--min-nse-eq-securities must be >= 1")
+    raise SystemExit(
+        asyncio.run(
+            main(
+                max(1, min(args.limit, 2000)),
+                args.min_nse_eq_securities,
+            )
+        )
+    )
