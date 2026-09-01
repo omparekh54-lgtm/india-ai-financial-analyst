@@ -242,7 +242,7 @@ class MonitoringRepository:
                     },
                 )
             ).mappings().all()
-        return [_jsonable_row(row) for row in rows]
+        return [_jsonable_row(dict(row)) for row in rows]
 
     async def mark_read(self, user_id: UUID, alert_id: UUID) -> bool:
         statement = text(
