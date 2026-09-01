@@ -17,24 +17,43 @@ This checks production configuration, PostgreSQL connectivity, pgvector, the sem
 The production corpus controller runs existing real-data workers in fail-closed order:
 
 ```bash
-python scripts/bootstrap_production_research_corpus.py --plan-only
-python scripts/bootstrap_production_research_corpus.py
+python scripts/bootstrap_production_research_corpus.py --plan-only \
+  --repo-source-url '<official RBI repo export>' \
+  --cpi-source-url '<official RBI CPI export>' \
+  --iip-source-url '<official RBI IIP export>'
+
+python scripts/bootstrap_production_research_corpus.py \
+  --repo-source-url '<official RBI repo export>' \
+  --cpi-source-url '<official RBI CPI export>' \
+  --iip-source-url '<official RBI IIP export>'
 ```
 
 Stages are:
 
-1. official NSE universe/classification + exact provider mappings + India market context + listing-aware market history,
+1. official NSE universe/classification + exact provider mappings + complete India market/macro context + listing-aware market history,
 2. official NSE financial-result XBRL + deterministic financial facts + filing/earnings evidence,
 3. deterministic peer/security metrics derived only from source-linked inputs,
 4. the authoritative 16-agent readiness gate.
 
-The controller can resume at a later stage, for example:
+The market context includes FRED USD/INR + Brent, explicit official RBI repo/CPI/IIP inputs, NIFTY 50 + India VIX history, India VIX normalized macro data, FII/FPI + DII cash flows, and RBI India 10Y.
+
+The controller can resume at a later stage without requiring already-completed market-stage inputs, for example:
 
 ```bash
 python scripts/bootstrap_production_research_corpus.py --start-at financials
 ```
 
 There is no synthetic, estimated, placeholder, or silent paid-provider fallback.
+
+### Manual protected corpus workflow
+
+After the workflow file is available on the repository's default branch and the protected `production` environment is configured, operators can use:
+
+- `.github/workflows/production-corpus.yml`
+
+It is `workflow_dispatch` only and never runs from a normal push or pull request. It requires the exact confirmation text `RUN_REAL_CORPUS`, uses read-only GitHub repository permission, prevents overlapping corpus runs, keeps credentials in Actions/environment secrets, and runs with `FREE_ONLY=true`, external LLM calls disabled, and event research disabled.
+
+Required production secrets for a full market-stage run include `DATABASE_URL`, `FRED_API_KEY`, and `UPSTOX_DATA_ACCESS_TOKEN`. The official RBI repo/CPI/IIP source URLs are explicit workflow inputs rather than hidden fallback URLs.
 
 ## 3. Authoritative corpus and agent readiness
 
@@ -146,13 +165,25 @@ The release gate is deliberately fail-closed and runs, in order:
 
 A failure in any stage prevents `release_ready=true`. Access tokens are never accepted as CLI arguments.
 
+### Manual protected release workflow
+
+After the workflow file is available on the default branch and the protected `production` environment is configured, operators can use:
+
+- `.github/workflows/production-release-gate.yml`
+
+It is `workflow_dispatch` only, requires the exact confirmation text `RUN_RELEASE_GATE`, uses read-only repository permission, prevents overlapping release-gate runs, requires HTTPS deployment inputs, and injects smoke/owner/other-user access tokens only from environment secrets.
+
+The workflow does not create research jobs or mutate the research corpus. It invokes the same fail-closed aggregate release gate described above and uploads the structured operator result as a short-retention artifact.
+
 ## 8. CI production configuration check
 
 Pull-request CI validates three independent surfaces:
 
-1. API Ruff + mypy + pytest, including scripts.
+1. API Ruff + mypy + pytest, including scripts and production-workflow safety regression tests.
 2. Next.js production build, including the private watchlist workspace and evidence UI.
 3. `docker compose -f deploy/docker-compose.production.yml config` and the API Dockerfile.
+
+The workflow regression tests parse both manual production workflow definitions and assert that they remain dispatch-only, read-only to GitHub content, explicitly confirmed, non-cancelling under production concurrency locks, and free of CLI access-token arguments.
 
 This catches malformed application/process definitions without starting workers or calling external providers.
 
@@ -160,4 +191,6 @@ This catches malformed application/process definitions without starting workers 
 
 These checks do not fabricate securities, prices, financial facts, filings, macro observations, benchmarks, peer metrics, transcripts, or evidence. They also do not automatically enable NSE/BSE development feed templates, Upstox live market, Tavily, Gemini, Groq, NVIDIA, Cerebras, or other external providers.
 
-Real provider activation and real-data backfills are separate go-live steps and must retain their source/licensing/provenance records. A green software CI run is not the same thing as a green live corpus readiness gate.
+Real provider activation and real-data backfills are separate go-live steps and must retain their source/licensing/provenance records. A green software CI run is not the same thing as a green live corpus readiness gate, and neither is the same thing as a completed deployment release gate.
+
+For the implementation-vs-activation status of phases 13–18, see `docs/PHASES_13_18_COMPLETION.md`.
