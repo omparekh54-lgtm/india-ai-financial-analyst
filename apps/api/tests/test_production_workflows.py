@@ -37,6 +37,8 @@ def test_production_corpus_workflow_is_manual_and_read_only_to_github() -> None:
     assert "secrets.DATABASE_URL" in text
     assert "secrets.FRED_API_KEY" in text
     assert "secrets.UPSTOX_DATA_ACCESS_TOKEN" in text
+    assert "run_production_corpus_manifest.py" in text
+    assert "production-corpus-manifest.json" in text
 
 
 def test_production_release_workflow_is_manual_fail_closed_and_secret_safe() -> None:
