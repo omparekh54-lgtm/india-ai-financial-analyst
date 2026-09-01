@@ -33,6 +33,8 @@ create index if not exists portfolio_positions_security_idx
 alter table public.portfolios enable row level security;
 alter table public.portfolio_positions enable row level security;
 
+revoke all on public.portfolios from anon, authenticated;
+revoke all on public.portfolio_positions from anon, authenticated;
 grant select, insert, update, delete on public.portfolios to authenticated;
 grant select, insert, update, delete on public.portfolio_positions to authenticated;
 
