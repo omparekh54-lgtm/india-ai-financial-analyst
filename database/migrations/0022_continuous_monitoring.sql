@@ -21,6 +21,7 @@ create index if not exists analysis_snapshots_job_id_idx
   on public.analysis_snapshots(job_id);
 
 alter table public.analysis_snapshots enable row level security;
+revoke all on public.analysis_snapshots from anon, authenticated;
 grant select on public.analysis_snapshots to authenticated;
 
 drop policy if exists analysis_snapshots_owner_read on public.analysis_snapshots;
@@ -62,7 +63,8 @@ create index if not exists monitoring_alerts_user_unread_idx
 
 alter table public.monitoring_alerts enable row level security;
 revoke all on public.monitoring_alerts from anon, authenticated;
-grant select, update on public.monitoring_alerts to authenticated;
+grant select on public.monitoring_alerts to authenticated;
+grant update (read_at) on public.monitoring_alerts to authenticated;
 
 drop policy if exists monitoring_alerts_owner_read on public.monitoring_alerts;
 create policy monitoring_alerts_owner_read
