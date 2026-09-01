@@ -45,6 +45,15 @@ def build_commands(
     flow_max_age_days: int,
     vix_max_age_days: int,
     rbi_10y_max_age_days: int,
+    repo_source_url: str,
+    repo_date_column: str | None,
+    repo_value_column: str | None,
+    cpi_source_url: str,
+    cpi_date_column: str | None,
+    cpi_value_column: str | None,
+    iip_source_url: str,
+    iip_date_column: str | None,
+    iip_value_column: str | None,
     history_from_date: date,
     history_to_date: date,
     history_batch_size: int,
@@ -82,6 +91,13 @@ def build_commands(
         raise ValueError("approval_reference cannot be empty")
     if not access_token_env.strip():
         raise ValueError("access_token_env cannot be empty")
+    for name, value in (
+        ("repo_source_url", repo_source_url),
+        ("cpi_source_url", cpi_source_url),
+        ("iip_source_url", iip_source_url),
+    ):
+        if not value.strip():
+            raise ValueError(f"{name} is required for a reproducible production macro corpus")
 
     if provider == "nse" and (upstox_security_master_file or upstox_security_master_url):
         raise ValueError("Upstox security-master options require provider=upstox")
@@ -142,7 +158,23 @@ def build_commands(
         str(vix_max_age_days),
         "--rbi-10y-max-age-days",
         str(rbi_10y_max_age_days),
+        "--repo-source-url",
+        repo_source_url,
+        "--cpi-source-url",
+        cpi_source_url,
+        "--iip-source-url",
+        iip_source_url,
     ]
+    for flag, value in (
+        ("--repo-date-column", repo_date_column),
+        ("--repo-value-column", repo_value_column),
+        ("--cpi-date-column", cpi_date_column),
+        ("--cpi-value-column", cpi_value_column),
+        ("--iip-date-column", iip_date_column),
+        ("--iip-value-column", iip_value_column),
+    ):
+        if value:
+            market_context.extend([flag, value])
 
     market_history = [
         python_executable,
@@ -169,8 +201,7 @@ def build_commands(
         CorpusStage("market_context", tuple(market_context)),
         CorpusStage("market_history", tuple(market_history)),
     )
-    start_index = STAGE_ORDER.index(start_at)
-    return stages[start_index:]
+    return stages[STAGE_ORDER.index(start_at) :]
 
 
 def _parse_output(stdout: str) -> object:
@@ -212,6 +243,10 @@ def _preflight(*, access_token_env: str) -> None:
     settings = get_settings()
     if not settings.database_url:
         raise RuntimeError("DATABASE_URL must be configured before production corpus mutation")
+    if not settings.enable_external_data_calls:
+        raise RuntimeError("ENABLE_EXTERNAL_DATA_CALLS must be true before production corpus mutation")
+    if not settings.fred_api_key:
+        raise RuntimeError("FRED_API_KEY must be configured before production corpus mutation")
     if not os.environ.get(access_token_env, "").strip():
         raise RuntimeError(
             f"{access_token_env} must contain the operator Upstox data-access token before any "
@@ -224,8 +259,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Build the production India market corpus in deterministic fail-closed order: genuine "
-            "NSE universe + official taxonomy, exact-ISIN Upstox mappings, official India market "
-            "context, then listing-age-aware sourced daily market history."
+            "NSE universe + official taxonomy, exact-ISIN Upstox mappings, complete source-linked "
+            "India macro/market context, then listing-age-aware sourced daily market history."
         )
     )
     parser.add_argument("--security-master-provider", choices=("nse", "upstox"), default="nse")
@@ -246,6 +281,15 @@ def main() -> int:
     parser.add_argument("--flow-max-age-days", type=int, default=7)
     parser.add_argument("--vix-max-age-days", type=int, default=7)
     parser.add_argument("--rbi-10y-max-age-days", type=int, default=45)
+    parser.add_argument("--repo-source-url", required=True)
+    parser.add_argument("--repo-date-column")
+    parser.add_argument("--repo-value-column")
+    parser.add_argument("--cpi-source-url", required=True)
+    parser.add_argument("--cpi-date-column")
+    parser.add_argument("--cpi-value-column")
+    parser.add_argument("--iip-source-url", required=True)
+    parser.add_argument("--iip-date-column")
+    parser.add_argument("--iip-value-column")
     parser.add_argument(
         "--history-from-date",
         type=date.fromisoformat,
@@ -284,6 +328,15 @@ def main() -> int:
             flow_max_age_days=args.flow_max_age_days,
             vix_max_age_days=args.vix_max_age_days,
             rbi_10y_max_age_days=args.rbi_10y_max_age_days,
+            repo_source_url=args.repo_source_url,
+            repo_date_column=args.repo_date_column,
+            repo_value_column=args.repo_value_column,
+            cpi_source_url=args.cpi_source_url,
+            cpi_date_column=args.cpi_date_column,
+            cpi_value_column=args.cpi_value_column,
+            iip_source_url=args.iip_source_url,
+            iip_date_column=args.iip_date_column,
+            iip_value_column=args.iip_value_column,
             history_from_date=args.history_from_date,
             history_to_date=args.history_to_date,
             history_batch_size=args.history_batch_size,
@@ -301,6 +354,7 @@ def main() -> int:
         "start_at": args.start_at,
         "plan_only": args.plan_only,
         "stage_order": [stage.name for stage in stages],
+        "required_macro_sources": ["repo_rate", "cpi_yoy", "iip_yoy"],
     }
     if args.plan_only:
         summary["commands"] = [
