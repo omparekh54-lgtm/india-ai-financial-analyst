@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.agents.contracts import AgentInput, AgentName, AgentOutput
 from app.core.config import Settings, get_settings
+from app.core.usage import ResearchUsageGate
 from app.orchestration.plan import AnalysisMode, ResearchDepth, ResearchPlan, build_research_plan
 from app.orchestration.registry import build_agent_registry
 from app.orchestration.runtime import OrchestratorRuntime
@@ -42,6 +43,7 @@ class ResearchService:
         self.repository = ResearchRepository(engine)
         self.progress = ResearchProgressRepository(engine)
         self.monitoring = MonitoringRepository(engine)
+        self.usage = ResearchUsageGate(engine, self.settings)
         self.telemetry = ProductTelemetry(self.settings)
         self.runtime = OrchestratorRuntime(
             build_agent_registry(engine, self.settings),
@@ -66,12 +68,28 @@ class ResearchService:
         }
         if metadata:
             job_metadata.update(metadata)
-        job_id = await self.repository.create_job(
-            query=query,
-            mode=mode.value,
-            requested_by=requested_by,
-            metadata=job_metadata,
-        )
+        event_generated = bool(job_metadata.get("system_generated") is True)
+        if requested_by is not None:
+            await self.usage.reserve(
+                requested_by,
+                depth=depth,
+                event_generated=event_generated,
+            )
+        try:
+            job_id = await self.repository.create_job(
+                query=query,
+                mode=mode.value,
+                requested_by=requested_by,
+                metadata=job_metadata,
+            )
+        except Exception:
+            if requested_by is not None:
+                await self.usage.release(
+                    requested_by,
+                    depth=depth,
+                    event_generated=event_generated,
+                )
+            raise
         await self.telemetry.capture(
             "research_queued",
             {"mode": mode.value, "depth": depth.value},
@@ -88,17 +106,24 @@ class ResearchService:
         requested_by: UUID | None = None,
     ) -> ResearchExecution:
         """Backward-compatible immediate execution used by tests/internal callers."""
-        job_id = await self.repository.create_job(
-            query=query,
-            mode=mode.value,
-            requested_by=requested_by,
-            metadata={
-                "analysis_depth": depth.value,
-                "execution": "inline",
-                "research_stage": "received",
-                "progress_pct": 0,
-            },
-        )
+        if requested_by is not None:
+            await self.usage.reserve(requested_by, depth=depth)
+        try:
+            job_id = await self.repository.create_job(
+                query=query,
+                mode=mode.value,
+                requested_by=requested_by,
+                metadata={
+                    "analysis_depth": depth.value,
+                    "execution": "inline",
+                    "research_stage": "received",
+                    "progress_pct": 0,
+                },
+            )
+        except Exception:
+            if requested_by is not None:
+                await self.usage.release(requested_by, depth=depth)
+            raise
         return await self.execute_existing(
             job_id=job_id,
             query=query,
