@@ -16,6 +16,7 @@ from app.orchestration.runtime import OrchestratorRuntime
 from app.repositories.research import ResearchRepository
 from app.repositories.research_progress import ResearchProgressRepository
 from app.research.live_context import UserAwareResearchContextLoader
+from app.research.monitoring import MonitoringRepository, thesis_hash
 from app.telemetry import ProductTelemetry
 
 
@@ -40,6 +41,7 @@ class ResearchService:
         self.settings = settings or get_settings()
         self.repository = ResearchRepository(engine)
         self.progress = ResearchProgressRepository(engine)
+        self.monitoring = MonitoringRepository(engine)
         self.telemetry = ProductTelemetry(self.settings)
         self.runtime = OrchestratorRuntime(
             build_agent_registry(engine, self.settings),
@@ -162,7 +164,15 @@ class ResearchService:
             await self.repository.set_job_status(job_id, "completed")
             await self.progress.set_stage(job_id, "complete", 100)
             if security_id is not None and report:
-                await self._save_snapshot(job_id, security_id, mode, depth, report, outputs)
+                await self._save_snapshot(
+                    job_id,
+                    security_id,
+                    mode,
+                    depth,
+                    report,
+                    outputs,
+                    requested_by=requested_by,
+                )
 
             validation = report.get("validation") if isinstance(report.get("validation"), dict) else {}
             coverage = validation.get("evidence_coverage") if isinstance(validation, dict) else None
@@ -216,6 +226,8 @@ class ResearchService:
         depth: ResearchDepth,
         report: dict[str, Any],
         outputs: list[AgentOutput],
+        *,
+        requested_by: UUID | None,
     ) -> None:
         sections = report.get("sections") if isinstance(report.get("sections"), dict) else {}
         risks = sections.get(AgentName.RISK.value, []) if isinstance(sections, dict) else []
@@ -249,34 +261,47 @@ class ResearchService:
                 snapshot_metrics[key] = output.metrics
 
         async with self.engine.begin() as connection:
-            await connection.execute(
-                text(
-                    """
-                    insert into analysis_snapshots (
-                        security_id, job_id, snapshot_type, metrics, catalysts, risks, metadata
-                    ) values (
-                        :security_id, :job_id, :snapshot_type,
-                        cast(:metrics as jsonb), cast(:catalysts as jsonb), cast(:risks as jsonb),
-                        cast(:metadata as jsonb)
-                    )
-                    """
-                ),
-                {
-                    "security_id": security_id,
-                    "job_id": job_id,
-                    "snapshot_type": mode.value,
-                    "metrics": _json(snapshot_metrics),
-                    "catalysts": _json(catalysts),
-                    "risks": _json(risks),
-                    "metadata": _json(
-                        {
-                            "analysis_depth": depth.value,
-                            "disclosure_claims": disclosures[:80],
-                            "snapshot_schema_version": 2,
-                        }
+            snapshot_id = (
+                await connection.execute(
+                    text(
+                        """
+                        insert into analysis_snapshots (
+                            security_id, job_id, snapshot_type, thesis_hash,
+                            metrics, catalysts, risks, metadata
+                        ) values (
+                            :security_id, :job_id, :snapshot_type, :thesis_hash,
+                            cast(:metrics as jsonb), cast(:catalysts as jsonb), cast(:risks as jsonb),
+                            cast(:metadata as jsonb)
+                        )
+                        returning id
+                        """
                     ),
-                },
-            )
+                    {
+                        "security_id": security_id,
+                        "job_id": job_id,
+                        "snapshot_type": mode.value,
+                        "thesis_hash": thesis_hash(report),
+                        "metrics": _json(snapshot_metrics),
+                        "catalysts": _json(catalysts),
+                        "risks": _json(risks),
+                        "metadata": _json(
+                            {
+                                "analysis_depth": depth.value,
+                                "disclosure_claims": disclosures[:80],
+                                "snapshot_schema_version": 3,
+                            }
+                        ),
+                    },
+                )
+            ).scalar_one()
+            if requested_by is not None:
+                await self.monitoring.create_alert_for_snapshot(
+                    connection=connection,
+                    user_id=requested_by,
+                    security_id=security_id,
+                    job_id=job_id,
+                    source_snapshot_id=UUID(str(snapshot_id)),
+                )
 
 
 def _resolved_security_id(outputs: list[AgentOutput]) -> UUID | None:
