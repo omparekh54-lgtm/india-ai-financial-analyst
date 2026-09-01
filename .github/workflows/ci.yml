@@ -58,54 +58,77 @@ jobs:
       - name: Validate API Dockerfile
         run: docker build --check apps/api
 
-  phase25-live-nse-universe:
+  phase25-source-artifacts:
     if: github.event_name == 'pull_request' && github.head_ref == 'feat/foundation-v1'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: production
     permissions:
       contents: read
     defaults:
       run:
         working-directory: apps/api
-    env:
-      APP_ENV: production
-      FREE_ONLY: "true"
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: apps/api/pyproject.toml
-      - name: Install API runtime
-        run: pip install -e .
-      - name: Guard production database secret
+      - name: Fetch current official/provider source artifacts
         run: |
           set -euo pipefail
-          [[ -n "${DATABASE_URL:-}" ]] || { echo "DATABASE_URL production secret is missing."; exit 2; }
-      - name: Import official NSE EQ security master
+          mkdir -p phase25-artifacts
+          curl --fail --location --retry 3 \
+            --user-agent 'IndiaAIFinancialAnalyst/0.7 source-artifact-fetcher' \
+            --output phase25-artifacts/EQUITY_L.csv \
+            https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv
+          curl --fail --location --retry 3 \
+            --user-agent 'IndiaAIFinancialAnalyst/0.7 source-artifact-fetcher' \
+            --output phase25-artifacts/NSE.json.gz \
+            https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz
+      - name: Validate source artifacts and produce manifest
         run: |
           set -euo pipefail
-          python scripts/import_nse_security_master.py \
-            --url https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv \
-            --series EQ \
-            --min-rows 1000 \
-            | tee phase25-nse-universe-result.json
-      - name: Verify live NSE EQ universe
-        run: |
-          set -euo pipefail
-          python scripts/run_production_corpus_manifest.py --min-nse-eq-securities 1000 \
-            > phase25-corpus-manifest.json || true
-          cat phase25-corpus-manifest.json
-      - name: Upload Phase 25 universe evidence
-        if: always()
+          python - <<'PY'
+          import csv, gzip, hashlib, json
+          from pathlib import Path
+
+          root = Path('phase25-artifacts')
+          equity = root / 'EQUITY_L.csv'
+          rows = list(csv.DictReader(equity.open(encoding='utf-8-sig', newline='')))
+          eq = [r for r in rows if str(r.get(' SERIES') or r.get('SERIES') or '').strip().upper() == 'EQ']
+          if len(eq) < 1000:
+              raise SystemExit(f'Official NSE EQ rows below production threshold: {len(eq)}')
+          raw = gzip.decompress((root / 'NSE.json.gz').read_bytes())
+          payload = json.loads(raw.decode('utf-8-sig'))
+          if isinstance(payload, dict):
+              payload = payload.get('data')
+          if not isinstance(payload, list):
+              raise SystemExit('Upstox NSE artifact is not a JSON array')
+          up_eq = [
+              x for x in payload if isinstance(x, dict)
+              and str(x.get('segment') or '').upper() == 'NSE_EQ'
+              and str(x.get('exchange') or '').upper() == 'NSE'
+              and str(x.get('instrument_type') or '').upper() == 'EQ'
+              and x.get('isin') and x.get('instrument_key')
+          ]
+          if len(up_eq) < 1000:
+              raise SystemExit(f'Upstox NSE_EQ rows below production threshold: {len(up_eq)}')
+          manifest = {
+              'nse_source_url': 'https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv',
+              'nse_total_rows': len(rows),
+              'nse_eq_rows': len(eq),
+              'nse_sha256': hashlib.sha256(equity.read_bytes()).hexdigest(),
+              'upstox_source_url': 'https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz',
+              'upstox_nse_eq_rows': len(up_eq),
+              'upstox_sha256': hashlib.sha256((root / 'NSE.json.gz').read_bytes()).hexdigest(),
+              'synthetic_fallback': False,
+          }
+          (root / 'manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding='utf-8')
+          print(json.dumps(manifest, indent=2, sort_keys=True))
+          PY
+      - name: Upload Phase 25 source artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: phase25-nse-universe-${{ github.run_id }}
-          path: |
-            apps/api/phase25-nse-universe-result.json
-            apps/api/phase25-corpus-manifest.json
-          if-no-files-found: ignore
-          retention-days: 14
+          name: phase25-source-artifacts-${{ github.run_id }}
+          path: apps/api/phase25-artifacts/
+          if-no-files-found: error
+          retention-days: 3
