@@ -23,7 +23,8 @@ _SECRET_KEY_MARKERS = (
     "private_key",
     "refresh_token",
     "secret_key",
-    "service_role",
+    "service_role_key",
+    "service_role_secret",
 )
 
 
