@@ -91,7 +91,9 @@ def test_production_activation_requires_expected_vercel_repo_link() -> None:
     evidence["vercel_live_project"] = vercel_project
 
     report = evaluate_production_activation(evidence)
-    phase = next(item for item in report.phases if item.name == "phase_43_vercel_live_project")
+    phase = next(
+        item for item in report.phases if item.name == "phase_43_vercel_live_project"
+    )
 
     assert report.ready is False
     assert "vercel_project_not_linked_to_expected_repository" in phase.errors
@@ -193,6 +195,7 @@ def test_production_activation_rejects_secret_like_evidence_keys(tmp_path: Path)
     evidence["production_environment"] = {
         **evidence["production_environment"],  # type: ignore[arg-type]
         "database_password": "must-not-be-here",
+        "service_role_key": "must-not-be-here",
     }
     evidence_path = tmp_path / "bad-activation-evidence.json"
     evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
