@@ -152,7 +152,14 @@ jobs:
               'upstox_nse_eq_rows': len(up_eq),
               'upstox_sha256': hashlib.sha256((root / 'NSE.json.gz').read_bytes()).hexdigest(),
               'upstox_exact_isin_matches': len(eq),
-              'upst      - name: Validate official NSE sector-classification subset
+              'upstox_missing': 0,
+              'upstox_symbol_mismatches': 0,
+              'synthetic_fallback': False,
+          }
+          (root / 'manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding='utf-8')
+          print(json.dumps(manifest, indent=2, sort_keys=True))
+          PY
+      - name: Validate official NSE sector-classification subset
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -239,29 +246,12 @@ jobs:
           }
           raw = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode('utf-8')
           (root / 'nse-sector-classification-subset.json').write_bytes(raw)
+          manifest = {key: value for key, value in payload.items() if key != 'results'}
           (root / 'nse-sector-classification-manifest.json').write_text(
-              json.dumps(
-                  {
-                      key: value
-                      for key, value in payload.items()
-                      if key not in {'results'}
-                  },
-                  indent=2,
-                  sort_keys=True,
-              ),
+              json.dumps(manifest, indent=2, sort_keys=True),
               encoding='utf-8',
           )
-          print(
-              (root / 'nse-sector-classification-manifest.json').read_text(
-                  encoding='utf-8'
-              )
-          )
-          PY
-           'sha256': hashlib.sha256(raw).hexdigest(),
-              'failure_preview': failures[:50],
-              'synthetic_fallback': False,
-          }, indent=2, sort_keys=True), encoding='utf-8')
-          print((root / 'nse-classification-manifest.json').read_text(encoding='utf-8'))
+          print(json.dumps(manifest, indent=2, sort_keys=True))
           PY
       - name: Upload Phase 25 source artifacts
         if: always()
