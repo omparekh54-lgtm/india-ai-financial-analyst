@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from decimal import Decimal
 from math import isfinite
 
 
@@ -100,29 +101,32 @@ def working_capital_days(
 
 def piotroski_f_score(facts: Mapping[str, object]) -> int | None:
     """Return the nine-point Piotroski F-score only when all nine signals can be evaluated."""
-    pat = _number(facts.get("pat"))
-    cfo = _number(facts.get("cfo"))
-    assets = _number(facts.get("total_assets"))
-    previous_pat = _number(facts.get("previous_pat"))
-    previous_assets = _number(facts.get("previous_total_assets"))
-    debt = _number(facts.get("long_term_debt"))
-    previous_debt = _number(facts.get("previous_long_term_debt"))
-    current_assets = _number(facts.get("current_assets"))
-    current_liabilities = _number(facts.get("current_liabilities"))
-    previous_current_assets = _number(facts.get("previous_current_assets"))
-    previous_current_liabilities = _number(facts.get("previous_current_liabilities"))
-    shares = _number(facts.get("shares_outstanding"))
-    previous_shares = _number(facts.get("previous_shares_outstanding"))
-    revenue = _number(facts.get("revenue"))
-    previous_revenue = _number(facts.get("previous_revenue"))
-    cogs = _number(facts.get("cogs"))
-    previous_cogs = _number(facts.get("previous_cogs"))
-
-    required = (
+    required = _required_values(
+        _number(facts.get("pat")),
+        _number(facts.get("cfo")),
+        _number(facts.get("total_assets")),
+        _number(facts.get("previous_pat")),
+        _number(facts.get("previous_total_assets")),
+        _number(facts.get("long_term_debt")),
+        _number(facts.get("previous_long_term_debt")),
+        _number(facts.get("current_assets")),
+        _number(facts.get("current_liabilities")),
+        _number(facts.get("previous_current_assets")),
+        _number(facts.get("previous_current_liabilities")),
+        _number(facts.get("shares_outstanding")),
+        _number(facts.get("previous_shares_outstanding")),
+        _number(facts.get("revenue")),
+        _number(facts.get("previous_revenue")),
+        _number(facts.get("cogs")),
+        _number(facts.get("previous_cogs")),
+    )
+    if required is None:
+        return None
+    (
         pat,
         cfo,
         assets,
-        previous_pat,
+        _previous_pat,
         previous_assets,
         debt,
         previous_debt,
@@ -136,23 +140,23 @@ def piotroski_f_score(facts: Mapping[str, object]) -> int | None:
         previous_revenue,
         cogs,
         previous_cogs,
+    ) = required
+
+    ratios = _required_values(
+        safe_divide(pat, assets),
+        safe_divide(_previous_pat, previous_assets),
+        safe_divide(debt, assets),
+        safe_divide(previous_debt, previous_assets),
+        safe_divide(current_assets, current_liabilities),
+        safe_divide(previous_current_assets, previous_current_liabilities),
+        safe_divide(revenue - cogs, revenue),
+        safe_divide(previous_revenue - previous_cogs, previous_revenue),
+        safe_divide(revenue, assets),
+        safe_divide(previous_revenue, previous_assets),
     )
-    if any(value is None for value in required):
+    if ratios is None:
         return None
-    assert all(value is not None for value in required)
-
-    current_roa = safe_divide(pat, assets)
-    previous_roa = safe_divide(previous_pat, previous_assets)
-    current_leverage = safe_divide(debt, assets)
-    previous_leverage = safe_divide(previous_debt, previous_assets)
-    current_ratio = safe_divide(current_assets, current_liabilities)
-    previous_current_ratio = safe_divide(previous_current_assets, previous_current_liabilities)
-    gross_margin = safe_divide(revenue - cogs, revenue)
-    previous_gross_margin = safe_divide(previous_revenue - previous_cogs, previous_revenue)
-    current_asset_turnover = safe_divide(revenue, assets)
-    previous_asset_turnover = safe_divide(previous_revenue, previous_assets)
-
-    ratios = (
+    (
         current_roa,
         previous_roa,
         current_leverage,
@@ -163,10 +167,7 @@ def piotroski_f_score(facts: Mapping[str, object]) -> int | None:
         previous_gross_margin,
         current_asset_turnover,
         previous_asset_turnover,
-    )
-    if any(value is None for value in ratios):
-        return None
-    assert all(value is not None for value in ratios)
+    ) = ratios
 
     signals = (
         pat > 0,
@@ -184,15 +185,19 @@ def piotroski_f_score(facts: Mapping[str, object]) -> int | None:
 
 def altman_z_score(facts: Mapping[str, object]) -> float | None:
     """Classic public-manufacturer Altman Z-score; caller must enforce sector applicability."""
-    current_assets = _number(facts.get("current_assets"))
-    current_liabilities = _number(facts.get("current_liabilities"))
-    total_assets = _number(facts.get("total_assets"))
-    retained_earnings = _number(facts.get("retained_earnings"))
-    ebit = _number(facts.get("ebit"))
-    market_cap = _number(facts.get("market_cap"))
-    total_liabilities = _number(facts.get("total_liabilities"))
-    revenue = _number(facts.get("revenue"))
-    required = (
+    required = _required_values(
+        _number(facts.get("current_assets")),
+        _number(facts.get("current_liabilities")),
+        _number(facts.get("total_assets")),
+        _number(facts.get("retained_earnings")),
+        _number(facts.get("ebit")),
+        _number(facts.get("market_cap")),
+        _number(facts.get("total_liabilities")),
+        _number(facts.get("revenue")),
+    )
+    if required is None:
+        return None
+    (
         current_assets,
         current_liabilities,
         total_assets,
@@ -201,10 +206,7 @@ def altman_z_score(facts: Mapping[str, object]) -> float | None:
         market_cap,
         total_liabilities,
         revenue,
-    )
-    if any(value is None for value in required):
-        return None
-    assert all(value is not None for value in required)
+    ) = required
     if total_assets == 0 or total_liabilities == 0:
         return None
 
@@ -221,28 +223,31 @@ def altman_z_score(facts: Mapping[str, object]) -> float | None:
 
 def beneish_m_score(facts: Mapping[str, object]) -> float | None:
     """Eight-variable Beneish M-score; returns None unless every component is available."""
-    revenue = _number(facts.get("revenue"))
-    previous_revenue = _number(facts.get("previous_revenue"))
-    receivables = _number(facts.get("receivables"))
-    previous_receivables = _number(facts.get("previous_receivables"))
-    cogs = _number(facts.get("cogs"))
-    previous_cogs = _number(facts.get("previous_cogs"))
-    current_assets = _number(facts.get("current_assets"))
-    previous_current_assets = _number(facts.get("previous_current_assets"))
-    ppe = _number(facts.get("ppe"))
-    previous_ppe = _number(facts.get("previous_ppe"))
-    total_assets = _number(facts.get("total_assets"))
-    previous_total_assets = _number(facts.get("previous_total_assets"))
-    depreciation = _number(facts.get("depreciation"))
-    previous_depreciation = _number(facts.get("previous_depreciation"))
-    sga = _number(facts.get("sga_expense"))
-    previous_sga = _number(facts.get("previous_sga_expense"))
-    total_debt = _number(facts.get("total_debt"))
-    previous_total_debt = _number(facts.get("previous_total_debt"))
-    pat = _number(facts.get("pat"))
-    cfo = _number(facts.get("cfo"))
-
-    required = (
+    required = _required_values(
+        _number(facts.get("revenue")),
+        _number(facts.get("previous_revenue")),
+        _number(facts.get("receivables")),
+        _number(facts.get("previous_receivables")),
+        _number(facts.get("cogs")),
+        _number(facts.get("previous_cogs")),
+        _number(facts.get("current_assets")),
+        _number(facts.get("previous_current_assets")),
+        _number(facts.get("ppe")),
+        _number(facts.get("previous_ppe")),
+        _number(facts.get("total_assets")),
+        _number(facts.get("previous_total_assets")),
+        _number(facts.get("depreciation")),
+        _number(facts.get("previous_depreciation")),
+        _number(facts.get("sga_expense")),
+        _number(facts.get("previous_sga_expense")),
+        _number(facts.get("total_debt")),
+        _number(facts.get("previous_total_debt")),
+        _number(facts.get("pat")),
+        _number(facts.get("cfo")),
+    )
+    if required is None:
+        return None
+    (
         revenue,
         previous_revenue,
         receivables,
@@ -263,21 +268,21 @@ def beneish_m_score(facts: Mapping[str, object]) -> float | None:
         previous_total_debt,
         pat,
         cfo,
-    )
-    if any(value is None for value in required):
-        return None
-    assert all(value is not None for value in required)
+    ) = required
 
     dsri = _ratio_of_ratios(receivables, revenue, previous_receivables, previous_revenue)
     current_gross_margin = safe_divide(revenue - cogs, revenue)
     previous_gross_margin = safe_divide(previous_revenue - previous_cogs, previous_revenue)
     gmi = safe_divide(previous_gross_margin, current_gross_margin)
 
-    current_asset_quality = 1.0 - _required_ratio(current_assets + ppe, total_assets)
-    previous_asset_quality = 1.0 - _required_ratio(
-        previous_current_assets + previous_ppe,
-        previous_total_assets,
-    )
+    try:
+        current_asset_quality = 1.0 - _required_ratio(current_assets + ppe, total_assets)
+        previous_asset_quality = 1.0 - _required_ratio(
+            previous_current_assets + previous_ppe,
+            previous_total_assets,
+        )
+    except ValueError:
+        return None
     aqi = safe_divide(current_asset_quality, previous_asset_quality)
     sgi = safe_divide(revenue, previous_revenue)
 
@@ -291,10 +296,10 @@ def beneish_m_score(facts: Mapping[str, object]) -> float | None:
     lvgi = _ratio_of_ratios(total_debt, total_assets, previous_total_debt, previous_total_assets)
     tata = safe_divide(pat - cfo, total_assets)
 
-    components = (dsri, gmi, aqi, sgi, depi, sgai, lvgi, tata)
-    if any(value is None for value in components):
+    components = _required_values(dsri, gmi, aqi, sgi, depi, sgai, lvgi, tata)
+    if components is None:
         return None
-    assert all(value is not None for value in components)
+    dsri, gmi, aqi, sgi, depi, sgai, lvgi, tata = components
 
     score = (
         -4.84
@@ -328,8 +333,19 @@ def _required_ratio(numerator: float, denominator: float) -> float:
     return value
 
 
+def _required_values(*values: float | None) -> tuple[float, ...] | None:
+    if any(value is None for value in values):
+        return None
+    return tuple(value for value in values if value is not None)
+
+
 def _number(value: object) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if not isinstance(value, (int, float, Decimal, str)):
+        return None
     try:
-        return None if value is None else float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return None
+    return parsed if isfinite(parsed) else None
