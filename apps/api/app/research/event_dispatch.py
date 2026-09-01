@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings, get_settings
 from app.core.research_gate import ResearchCorpusNotReadyError, enforce_research_corpus_ready
+from app.core.usage import ResearchUsageLimitError
 from app.orchestration.events import classify_corporate_event
 from app.orchestration.plan import AnalysisMode, ResearchDepth
 from app.repositories.watchlists import WatchlistRepository
@@ -83,6 +84,7 @@ class EventResearchDispatcher:
         }
         queued: list[dict[str, str]] = []
         duplicate_users: list[str] = []
+        quota_limited_users: list[dict[str, object]] = []
         for user_id in subscribers:
             if await self._already_enqueued(event_id, user_id):
                 duplicate_users.append(str(user_id))
@@ -102,27 +104,52 @@ class EventResearchDispatcher:
                         "event_context": event_context,
                     },
                 )
+            except ResearchUsageLimitError as exc:
+                # One subscriber exhausting a quota must never suppress another subscriber's
+                # independently authorized event research job.
+                quota_limited_users.append(
+                    {
+                        "user_id": str(user_id),
+                        "code": exc.code,
+                        "used": exc.used,
+                        "limit": exc.limit,
+                    }
+                )
+                continue
             except IntegrityError:
                 # The per-event/per-owner unique expression index is the race-safe boundary.
                 duplicate_users.append(str(user_id))
                 continue
             queued.append({"user_id": str(user_id), "job_id": str(job_id)})
 
-        if not queued:
+        if queued:
             return {
-                "status": "duplicate",
+                "status": "queued",
+                "event_id": str(event_id),
+                "trigger": trigger.value,
+                "subscriber_count": len(subscribers),
+                "queued_count": len(queued),
+                "duplicate_count": len(duplicate_users),
+                "quota_limited_count": len(quota_limited_users),
+                "quota_limited": quota_limited_users,
+                "jobs": queued,
+            }
+        if quota_limited_users:
+            return {
+                "status": "skipped",
+                "reason": "subscriber_usage_limits_reached",
                 "event_id": str(event_id),
                 "subscriber_count": len(subscribers),
                 "duplicate_count": len(duplicate_users),
+                "quota_limited_count": len(quota_limited_users),
+                "quota_limited": quota_limited_users,
             }
         return {
-            "status": "queued",
+            "status": "duplicate",
             "event_id": str(event_id),
-            "trigger": trigger.value,
             "subscriber_count": len(subscribers),
-            "queued_count": len(queued),
             "duplicate_count": len(duplicate_users),
-            "jobs": queued,
+            "quota_limited_count": 0,
         }
 
     async def _already_enqueued(self, event_id: UUID, user_id: UUID) -> bool:
