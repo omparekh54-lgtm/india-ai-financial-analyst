@@ -126,7 +126,6 @@ def test_deployment_readiness_workflow_is_manual_fail_closed_and_secret_safe() -
     assert "--client-secret" not in text
 
 
-
 def test_production_activation_readiness_workflow_is_manual_fail_closed_and_secret_safe() -> None:
     workflow = _workflow("production-activation-readiness.yml")
     triggers = workflow["on"]
@@ -150,6 +149,7 @@ def test_production_activation_readiness_workflow_is_manual_fail_closed_and_secr
     assert "--api-key" not in text
     assert "--token" not in text
     assert "--client-secret" not in text
+
 
 def test_manual_workflows_have_non_cancelling_production_concurrency_locks() -> None:
     for filename, group in (
