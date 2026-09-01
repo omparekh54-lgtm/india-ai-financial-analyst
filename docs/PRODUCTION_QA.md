@@ -217,7 +217,17 @@ The protected manual workflow is `.github/workflows/deployment-readiness.yml`. I
 
 This gate covers the Vercel project link, protected environment contract, Supabase migration/security state, exact build artifact commit, auth/traffic preparation and final release runbook. It should be green before Phase 30 is run against a live HTTPS deployment.
 
-## 13. Post-launch Phase 31-36 acceptance
+## 13. Production activation Phase 43-46
+
+Before production deployment is promoted, collect non-secret activation evidence and run:
+
+    python scripts/run_production_activation_gate.py --plan-only
+    python scripts/run_production_activation_gate.py --evidence-json production-activation-evidence.json
+
+The protected manual workflow is .github/workflows/production-activation-readiness.yml. It requires RUN_PRODUCTION_ACTIVATION, runs with read-only repository permission, rejects secret-like evidence keys, and uploads a structured activation artifact.
+
+This gate is stricter than Phase 37-42: it requires the actual Vercel project link, production environment readiness, real Supabase corpus evidence and final Supabase advisor/security evidence. It must be green before final production deployment and before Phase 30 live release acceptance.
+## 14. Post-launch Phase 31-36 acceptance
 
 After Phase 30 is genuinely green, collect non-secret production evidence and run:
 
@@ -231,3 +241,4 @@ The protected manual workflow is `.github/workflows/post-launch-acceptance.yml`.
 For the detailed Phase 25-30 contract, see `docs/PHASE_25_30_RELEASE_ACCEPTANCE.md`.
 For the detailed Phase 31-36 contract, see `docs/PHASE_31_36_POST_LAUNCH_ACCEPTANCE.md`.
 For the detailed Phase 37-42 contract, see `docs/PHASE_37_42_DEPLOYMENT_READINESS.md`.
+For the detailed Phase 43-46 contract, see `docs/PHASE_43_46_PRODUCTION_ACTIVATION.md`.
