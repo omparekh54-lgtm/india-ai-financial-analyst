@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
@@ -41,6 +43,7 @@ class ResearchUsageGate:
     ) -> UsageReservation | None:
         if not self.settings.enable_usage_limits:
             return None
+        today = datetime.now(UTC).date()
         is_deep = depth == ResearchDepth.DEEP
         async with self.engine.begin() as connection:
             await connection.execute(
@@ -51,7 +54,7 @@ class ResearchUsageGate:
                     on conflict (user_id, usage_date) do nothing
                     """
                 ),
-                {"user_id": user_id, "usage_date": datetime.now(UTC).date()},
+                {"user_id": user_id, "usage_date": today},
             )
             row = (
                 await connection.execute(
@@ -63,7 +66,7 @@ class ResearchUsageGate:
                         for update
                         """
                     ),
-                    {"user_id": user_id, "usage_date": datetime.now(UTC).date()},
+                    {"user_id": user_id, "usage_date": today},
                 )
             ).mappings().one()
             research_used = int(row["research_jobs"])
@@ -102,7 +105,7 @@ class ResearchUsageGate:
                     ),
                     {
                         "user_id": user_id,
-                        "usage_date": datetime.now(UTC).date(),
+                        "usage_date": today,
                         "deep_increment": 1 if is_deep else 0,
                         "event_increment": 1 if event_generated else 0,
                     },
@@ -159,7 +162,7 @@ class ResearchUsageGate:
                     {"user_id": user_id, "usage_date": today},
                 )
             ).mappings().one_or_none()
-        values = row or {}
+        values: Mapping[str, Any] = dict(row) if row is not None else {}
         return {
             "usage_date": today.isoformat(),
             "limits_enabled": self.settings.enable_usage_limits,
