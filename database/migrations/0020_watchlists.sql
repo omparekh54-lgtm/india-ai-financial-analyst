@@ -40,8 +40,8 @@ create policy watchlists_owner_all
   on public.watchlists
   for all
   to authenticated
-  using (user_id = auth.uid())
-  with check (user_id = auth.uid());
+  using (user_id = (select auth.uid()))
+  with check (user_id = (select auth.uid()));
 
 drop policy if exists watchlist_items_owner_all on public.watchlist_items;
 create policy watchlist_items_owner_all
@@ -53,7 +53,7 @@ create policy watchlist_items_owner_all
       select 1
       from public.watchlists w
       where w.id = watchlist_items.watchlist_id
-        and w.user_id = auth.uid()
+        and w.user_id = (select auth.uid())
     )
   )
   with check (
@@ -61,6 +61,6 @@ create policy watchlist_items_owner_all
       select 1
       from public.watchlists w
       where w.id = watchlist_items.watchlist_id
-        and w.user_id = auth.uid()
+        and w.user_id = (select auth.uid())
     )
   );
