@@ -96,6 +96,10 @@ jobs:
             --user-agent 'Mozilla/5.0 IndiaAIFinancialAnalyst/0.7' \
             --output phase25-artifacts/NSE.json.gz \
             https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz
+          curl --http1.1 --fail --location --retry 3 --retry-all-errors \
+            --user-agent 'Mozilla/5.0 IndiaAIFinancialAnalyst/0.7' \
+            --output phase25-artifacts/ind_niftytotalmarket_list.csv \
+            https://nsearchives.nseindia.com/content/indices/ind_niftytotalmarket_list.csv
       - name: Validate source artifacts and produce manifest
         run: |
           set -euo pipefail
@@ -148,80 +152,112 @@ jobs:
               'upstox_nse_eq_rows': len(up_eq),
               'upstox_sha256': hashlib.sha256((root / 'NSE.json.gz').read_bytes()).hexdigest(),
               'upstox_exact_isin_matches': len(eq),
-              'upstox_missing': 0,
-              'upstox_symbol_mismatches': 0,
-              'synthetic_fallback': False,
-          }
-          (root / 'manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding='utf-8')
-          print(json.dumps(manifest, indent=2, sort_keys=True))
-          PY
-      - name: Collect official NSE four-tier classifications
+              'upst      - name: Validate official NSE sector-classification subset
         run: |
           set -euo pipefail
           python - <<'PY'
-          import asyncio
           import csv
           import hashlib
           import json
           from pathlib import Path
 
-          from app.connectors.http_fetcher import SourceFetchError
-          from app.connectors.nse_classification import NseIndustryClassificationFetcher
-
           root = Path('phase25-artifacts')
-          rows = list(csv.DictReader((root / 'EQUITY_L.csv').open(encoding='utf-8-sig', newline='')))
-          targets = []
-          for row in rows:
+          canonical_rows = list(
+              csv.DictReader(
+                  (root / 'EQUITY_L.csv').open(encoding='utf-8-sig', newline='')
+              )
+          )
+          canonical = {}
+          for row in canonical_rows:
               if str(row.get(' SERIES') or row.get('SERIES') or '').strip().upper() != 'EQ':
                   continue
               symbol = str(row.get('SYMBOL') or '').strip().upper()
-              isin = str(row.get(' ISIN NUMBER') or row.get('ISIN NUMBER') or '').strip().upper()
+              isin = str(
+                  row.get(' ISIN NUMBER') or row.get('ISIN NUMBER') or ''
+              ).strip().upper()
               if symbol and isin:
-                  targets.append((symbol, isin))
+                  canonical[isin] = symbol
 
-          async def run():
-              results = []
-              failures = []
-              async with NseIndustryClassificationFetcher() as fetcher:
-                  for index, (symbol, isin) in enumerate(targets, start=1):
-                      last_error = None
-                      for attempt in range(3):
-                          try:
-                              item = await fetcher.fetch(symbol, expected_isin=isin)
-                              results.append(item.as_dict())
-                              last_error = None
-                              break
-                          except (SourceFetchError, TypeError, ValueError) as exc:
-                              last_error = str(exc)
-                              await asyncio.sleep(1.5 * (attempt + 1))
-                      if last_error is not None:
-                          failures.append({'symbol': symbol, 'isin': isin, 'error': last_error})
-                      if index % 100 == 0 or index == len(targets):
-                          print(json.dumps({'progress': index, 'total': len(targets), 'fetched': len(results), 'failed': len(failures)}), flush=True)
-                      if index < len(targets):
-                          await asyncio.sleep(0.35)
-              return results, failures
+          source_path = root / 'ind_niftytotalmarket_list.csv'
+          source_rows = list(
+              csv.DictReader(source_path.open(encoding='utf-8-sig', newline=''))
+          )
+          eq_rows = []
+          matched = []
+          unmatched = []
+          for row in source_rows:
+              if str(row.get('Series') or '').strip().upper() != 'EQ':
+                  continue
+              item = {
+                  'symbol': str(row.get('Symbol') or '').strip().upper(),
+                  'isin': str(row.get('ISIN Code') or '').strip().upper(),
+                  'sector': str(row.get('Industry') or '').strip(),
+              }
+              if not all(item.values()):
+                  raise SystemExit('Official NIFTY Total Market row is incomplete')
+              eq_rows.append(item)
+              if canonical.get(item['isin']) == item['symbol']:
+                  matched.append({
+                      **item,
+                      'source_uri': (
+                          'https://nsearchives.nseindia.com/content/indices/'
+                          'ind_niftytotalmarket_list.csv'
+                      ),
+                  })
+              else:
+                  unmatched.append(item)
 
-          results, failures = asyncio.run(run())
+          if len(eq_rows) < 700:
+              raise SystemExit(
+                  f'Official classification subset below safety floor: {len(eq_rows)}'
+              )
+          if len(matched) < 700:
+              raise SystemExit(
+                  f'Exact NSE symbol+ISIN classification matches below safety floor: {len(matched)}'
+              )
+
           payload = {
               'taxonomy': 'NSE_INDICES_4_TIER',
-              'source': 'https://www.nseindia.com/api/quote-equity?symbol=<NSE_SYMBOL>',
-              'canonical_nse_sha256': hashlib.sha256((root / 'EQUITY_L.csv').read_bytes()).hexdigest(),
-              'target_count': len(targets),
-              'fetched_count': len(results),
-              'failed_count': len(failures),
+              'classification_level': 'sector_only',
+              'source_reported_field': 'Industry',
+              'source_url': (
+                  'https://nsearchives.nseindia.com/content/indices/'
+                  'ind_niftytotalmarket_list.csv'
+              ),
+              'source_sha256': hashlib.sha256(source_path.read_bytes()).hexdigest(),
+              'canonical_nse_sha256': hashlib.sha256(
+                  (root / 'EQUITY_L.csv').read_bytes()
+              ).hexdigest(),
+              'source_eq_rows': len(eq_rows),
+              'exact_symbol_isin_matches': len(matched),
+              'unmatched_count': len(unmatched),
+              'unmatched': unmatched,
+              'full_four_tier_complete': False,
+              'production_ready': False,
               'synthetic_fallback': False,
-              'results': results,
-              'failures': failures,
+              'results': matched,
           }
           raw = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode('utf-8')
-          (root / 'nse-classification.json').write_bytes(raw)
-          (root / 'nse-classification-manifest.json').write_text(json.dumps({
-              'taxonomy': payload['taxonomy'],
-              'target_count': len(targets),
-              'fetched_count': len(results),
-              'failed_count': len(failures),
-              'sha256': hashlib.sha256(raw).hexdigest(),
+          (root / 'nse-sector-classification-subset.json').write_bytes(raw)
+          (root / 'nse-sector-classification-manifest.json').write_text(
+              json.dumps(
+                  {
+                      key: value
+                      for key, value in payload.items()
+                      if key not in {'results'}
+                  },
+                  indent=2,
+                  sort_keys=True,
+              ),
+              encoding='utf-8',
+          )
+          print(
+              (root / 'nse-sector-classification-manifest.json').read_text(
+                  encoding='utf-8'
+              )
+          )
+          PY
+           'sha256': hashlib.sha256(raw).hexdigest(),
               'failure_preview': failures[:50],
               'synthetic_fallback': False,
           }, indent=2, sort_keys=True), encoding='utf-8')
