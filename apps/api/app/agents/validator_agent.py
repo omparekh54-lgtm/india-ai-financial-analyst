@@ -465,6 +465,6 @@ def _primary_evidence_coverage(
 
 def _number(value: object) -> float | None:
     try:
-        return None if value is None else float(value)
+        return None if value is None else float(str(value))
     except (TypeError, ValueError):
         return None
