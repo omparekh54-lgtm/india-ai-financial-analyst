@@ -76,12 +76,20 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p phase25-artifacts
-          curl --fail --location --retry 3 \
-            --user-agent 'IndiaAIFinancialAnalyst/0.7 source-artifact-fetcher' \
-            --output phase25-artifacts/EQUITY_L.csv \
-            https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv
-          curl --fail --location --retry 3 \
-            --user-agent 'IndiaAIFinancialAnalyst/0.7 source-artifact-fetcher' \
+          NSE_PRIMARY='https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv'
+          NSE_FALLBACK='https://archives.nseindia.com/content/equities/EQUITY_L.csv'
+          if curl --http1.1 --fail --location --retry 3 --retry-all-errors \
+            --user-agent 'Mozilla/5.0 IndiaAIFinancialAnalyst/0.7' \
+            --output phase25-artifacts/EQUITY_L.csv "$NSE_PRIMARY"; then
+            echo "$NSE_PRIMARY" > phase25-artifacts/nse-source-url.txt
+          else
+            curl --http1.1 --fail --location --retry 3 --retry-all-errors \
+              --user-agent 'Mozilla/5.0 IndiaAIFinancialAnalyst/0.7' \
+              --output phase25-artifacts/EQUITY_L.csv "$NSE_FALLBACK"
+            echo "$NSE_FALLBACK" > phase25-artifacts/nse-source-url.txt
+          fi
+          curl --http1.1 --fail --location --retry 3 --retry-all-errors \
+            --user-agent 'Mozilla/5.0 IndiaAIFinancialAnalyst/0.7' \
             --output phase25-artifacts/NSE.json.gz \
             https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz
       - name: Validate source artifacts and produce manifest
@@ -113,7 +121,7 @@ jobs:
           if len(up_eq) < 1000:
               raise SystemExit(f'Upstox NSE_EQ rows below production threshold: {len(up_eq)}')
           manifest = {
-              'nse_source_url': 'https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv',
+              'nse_source_url': (root / 'nse-source-url.txt').read_text(encoding='utf-8').strip(),
               'nse_total_rows': len(rows),
               'nse_eq_rows': len(eq),
               'nse_sha256': hashlib.sha256(equity.read_bytes()).hexdigest(),
