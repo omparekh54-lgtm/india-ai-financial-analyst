@@ -1,6 +1,6 @@
 # Production QA workflow
 
-This workflow validates a deployed India AI Financial Analyst instance without creating synthetic research data, mutating the research corpus during QA, or spending LLM/search-provider quota by default.
+This workflow validates a deployed India AI Financial Analyst instance without creating synthetic research data, mutating the research corpus during QA, or spending LLM/search-provider quota unless the operator explicitly enables those integrations.
 
 ## 1. Structural preflight
 
@@ -10,7 +10,7 @@ Run from the API image/environment before traffic is admitted:
 python scripts/run_production_preflight.py
 ```
 
-This checks production configuration, PostgreSQL connectivity, pgvector, the semantic index, required tables, research ownership/RLS policies, private watchlist tables/RLS policies, and the reference-source approval constraint. It does not call market-data, broker, search, exchange, or LLM providers.
+This checks production configuration, PostgreSQL connectivity, pgvector, semantic-index requirements, required tables, research ownership/RLS controls and source-governance constraints. It does not call market-data, broker, search, exchange, or LLM providers.
 
 ## 2. Build the real production research corpus
 
@@ -35,47 +35,65 @@ Stages are:
 3. deterministic peer/security metrics derived only from source-linked inputs,
 4. the authoritative 16-agent readiness gate.
 
-The market context includes FRED USD/INR + Brent, explicit official RBI repo/CPI/IIP inputs, NIFTY 50 + India VIX history, India VIX normalized macro data, FII/FPI + DII cash flows, and RBI India 10Y.
-
-The controller can resume at a later stage without requiring already-completed market-stage inputs, for example:
-
-```bash
-python scripts/bootstrap_production_research_corpus.py --start-at financials
-```
-
 There is no synthetic, estimated, placeholder, or silent paid-provider fallback.
 
 ### Manual protected corpus workflow
 
-After the workflow file is available on the repository's default branch and the protected `production` environment is configured, operators can use:
+Operators can use `.github/workflows/production-corpus.yml` after the protected `production` environment is configured. It is `workflow_dispatch` only, requires `RUN_REAL_CORPUS`, uses read-only GitHub repository permission, prevents overlapping corpus runs, keeps credentials in Actions/environment secrets, and runs with `FREE_ONLY=true`.
 
-- `.github/workflows/production-corpus.yml`
+## 3. Corpus manifest and 16-agent readiness
 
-It is `workflow_dispatch` only and never runs from a normal push or pull request. It requires the exact confirmation text `RUN_REAL_CORPUS`, uses read-only GitHub repository permission, prevents overlapping corpus runs, keeps credentials in Actions/environment secrets, and runs with `FREE_ONLY=true`, external LLM calls disabled, and event research disabled.
+Use the Phase 25 read-only manifest after corpus ingestion:
 
-Required production secrets for a full market-stage run include `DATABASE_URL`, `FRED_API_KEY`, and `UPSTOX_DATA_ACCESS_TOKEN`. The official RBI repo/CPI/IIP source URLs are explicit workflow inputs rather than hidden fallback URLs.
+```bash
+python scripts/run_production_corpus_manifest.py --min-nse-eq-securities 1000
+```
 
-## 3. Authoritative corpus and agent readiness
+It returns corpus coverage, authoritative 16-agent readiness, blocking agents and concrete real-data next actions. It never mutates data.
 
-Use the read-only gate after corpus ingestion:
+The lower-level readiness and diagnostic commands remain available:
 
 ```bash
 python scripts/run_agent_readiness_gate.py
-```
-
-This command exits non-zero unless both the corpus contract and all 16 agent data contracts pass. Listing-age-aware financial and market policies are authoritative; do not replace them with universal eight-period or 200-bar checks for recent listings.
-
-For diagnostics without mutation:
-
-```bash
 python scripts/run_agent_coverage_gap_report.py
 ```
 
-The gap report uses the same authoritative financial-history, market-history, peer-metric, provenance, benchmark, macro and agent-readiness policies as the release gate.
+Listing-age-aware financial and market policies remain authoritative; do not replace them with universal eight-period or 200-bar checks for recent listings.
 
-## 4. Authenticated deployment smoke
+## 4. Representative real-company acceptance
 
-Set the token only through the environment so it does not appear in shell history:
+A production release must prove that persisted real research has passed through the evidence architecture:
+
+```bash
+export REAL_COMPANY_ACCEPTANCE_JOB_IDS='<job-1>,<job-2>,<job-3>,<job-4>,<job-5>'
+python scripts/run_real_company_acceptance.py
+```
+
+By default the gate requires at least five distinct real securities across four populated sectors. Every supplied job must be completed, resolve to a real security, contain a persisted report, have completed Agent 15 and Agent 16 runs, contain validated claims, and contain claim-to-evidence/source links. Non-production provenance markers fail the gate.
+
+The gate does not generate research jobs or acceptance fixtures.
+
+## 5. Provider activation policy
+
+Validate optional integration flags, credential presence and `FREE_ONLY` routing:
+
+```bash
+python scripts/run_provider_activation_gate.py
+```
+
+Enabled integrations fail closed when required credentials or a FREE_ONLY-compatible route are unavailable. The output is configuration/policy verification only; it does not pretend that credential presence proves endpoint health, quota, licensing or a live broker session.
+
+## 6. Deployment package and authenticated smoke
+
+The checked-in deployment package is `deploy/docker-compose.production.yml`. It contains the API, research worker, official-feed worker and live-market worker, plus a maintenance-only one-shot calibration service. The API has a container healthcheck and long-running services use init/graceful-stop handling.
+
+Run calibration explicitly or from an approved scheduler:
+
+```bash
+docker compose -f deploy/docker-compose.production.yml --profile maintenance run --rm research-calibration
+```
+
+For deployed API smoke, keep the token environment-only:
 
 ```bash
 export API_BASE_URL=https://api.example.com
@@ -83,21 +101,25 @@ export DEPLOYMENT_SMOKE_ACCESS_TOKEN='<short-lived Supabase access token>'
 python scripts/run_deployment_smoke.py --require-corpus-ready
 ```
 
-The smoke command performs GET requests only. It checks:
+The smoke command performs GET requests only and checks `/health`, `/ready`, all 16 registered roles, authenticated identity, authenticated corpus readiness, zero non-production sources and zero enabled unapproved official feeds. Remote targets must use HTTPS.
 
-- `/health`
-- `/ready`
-- all 16 registered research roles
-- authenticated identity
-- authenticated corpus readiness
-- zero detected non-production sources
-- zero enabled unapproved official feeds
+## 7. Operations, commercial approval, isolation and load
 
-Authenticated smoke checks require HTTPS for remote hosts. Plain HTTP is accepted only for localhost/loopback development targets. URLs containing embedded credentials are rejected.
+Read-only operations health:
 
-## 5. Two-user ownership isolation
+```bash
+python scripts/run_operations_health_report.py
+```
 
-Use an existing real research job owned by one test user. Tokens remain environment-only:
+Commercial/source approval gate:
+
+```bash
+python scripts/run_commercial_launch_gate.py
+```
+
+The commercial gate remains red unless production configuration, operations/corpus health and every configured user-display source scope have explicit active approval references. It never infers licensing permission.
+
+Two-user ownership isolation uses an existing real research job owned by one test user:
 
 ```bash
 export OWNER_ACCESS_TOKEN='<owner token>'
@@ -107,11 +129,7 @@ python scripts/verify_auth_isolation.py \
   --job-id '<existing owner research job UUID>'
 ```
 
-The check is read-only. It verifies the owner can read the job while a different authenticated user cannot read the same private research resource.
-
-## 6. Bounded read-only load probe
-
-The default load probe only targets health, readiness, and agent-registry GET endpoints:
+The bounded read-only load probe permits at most 500 requests and concurrency 25:
 
 ```bash
 python scripts/run_load_probe.py \
@@ -120,77 +138,70 @@ python scripts/run_load_probe.py \
   --concurrency 10
 ```
 
-Safety limits are enforced in code: at most 500 requests and concurrency 25. Only a fixed allow-list of GET endpoints is permitted; research creation and all other mutating/provider-backed routes are impossible to select.
+Only a fixed allow-list of GET endpoints is permitted. Research creation and other mutating/provider-backed routes cannot be selected.
 
-To include authenticated read-only checks, provide the token through the environment:
+## 8. Final one-command production release gate
 
-```bash
-export LOAD_PROBE_ACCESS_TOKEN='<short-lived Supabase access token>'
-python scripts/run_load_probe.py \
-  --api-base-url https://api.example.com \
-  --endpoint /v1/auth/me \
-  --endpoint /v1/system/data-readiness \
-  --requests 100 \
-  --concurrency 10
-```
-
-The output reports success/failure counts, HTTP status counts, endpoint counts, network error types, and p50/p95/max latency. Authenticated probes require HTTPS outside localhost and never put the bearer token in the URL.
-
-## 7. One-command production release gate
-
-After a real corpus exists and a deployed API is available, run the aggregate gate:
+After a real corpus exists and the API is deployed:
 
 ```bash
 export API_BASE_URL=https://api.example.com
 export AUTH_ISOLATION_JOB_ID='<existing owner research job UUID>'
+export REAL_COMPANY_ACCEPTANCE_JOB_IDS='<representative completed real job UUIDs>'
 export DEPLOYMENT_SMOKE_ACCESS_TOKEN='<smoke user token>'
 export OWNER_ACCESS_TOKEN='<owner token>'
 export OTHER_ACCESS_TOKEN='<different user token>'
 python scripts/run_production_release_gate.py
 ```
 
-Preview the required stages without secrets:
+Preview requirements without executing stages:
 
 ```bash
 python scripts/run_production_release_gate.py --plan-only
 ```
 
-The release gate is deliberately fail-closed and runs, in order:
+The Phase 30 gate is fixed and fail-closed. It runs, in order:
 
 1. structural production preflight,
-2. authoritative 16-agent corpus readiness,
-3. authenticated GET-only deployment smoke with corpus readiness required,
-4. two-user ownership isolation,
-5. bounded GET-only load probe.
+2. production corpus + all 16 agent readiness,
+3. representative real-company end-to-end acceptance,
+4. provider/integration activation policy,
+5. operations health,
+6. commercial/source approval,
+7. authenticated deployed API smoke,
+8. two-user ownership isolation,
+9. bounded GET-only load probe.
 
-A failure in any stage prevents `release_ready=true`. Access tokens are never accepted as CLI arguments.
+A failure in any stage prevents `release_ready=true`. Access tokens and provider credentials are environment-only and are never CLI arguments.
 
 ### Manual protected release workflow
 
-After the workflow file is available on the default branch and the protected `production` environment is configured, operators can use:
+The preferred production execution path is `.github/workflows/production-release-gate.yml`.
 
-- `.github/workflows/production-release-gate.yml`
+It is `workflow_dispatch` only, requires exact confirmation text `RUN_RELEASE_GATE`, uses read-only repository permission, prevents overlapping release-gate runs, requires HTTPS deployment inputs and representative real-company job IDs, and obtains access/provider credentials only from the protected GitHub Environment.
 
-It is `workflow_dispatch` only, requires the exact confirmation text `RUN_RELEASE_GATE`, uses read-only repository permission, prevents overlapping release-gate runs, requires HTTPS deployment inputs, and injects smoke/owner/other-user access tokens only from environment secrets.
+`COMMERCIAL_LAUNCH_ENABLED=true` is set only inside this explicitly invoked release workflow. Optional external LLM/data/live-market integrations remain disabled unless the operator turns on their workflow inputs; when enabled, their required secrets are validated before the gate runs.
 
-The workflow does not create research jobs or mutate the research corpus. It invokes the same fail-closed aggregate release gate described above and uploads the structured operator result as a short-retention artifact.
+The workflow does not create research jobs or mutate the research corpus. It uploads the structured release result as a short-retention artifact.
 
-## 8. CI production configuration check
+## 9. CI production configuration check
 
 Pull-request CI validates three independent surfaces:
 
-1. API Ruff + mypy + pytest, including scripts and production-workflow safety regression tests.
-2. Next.js production build, including the private watchlist workspace and evidence UI.
+1. API Ruff + mypy + pytest, including release controls and production-workflow safety regression tests.
+2. Next.js production build.
 3. `docker compose -f deploy/docker-compose.production.yml config` and the API Dockerfile.
-
-The workflow regression tests parse both manual production workflow definitions and assert that they remain dispatch-only, read-only to GitHub content, explicitly confirmed, non-cancelling under production concurrency locks, and free of CLI access-token arguments.
 
 This catches malformed application/process definitions without starting workers or calling external providers.
 
-## 9. What this QA deliberately does not do
+## 10. Supabase security/performance review
 
-These checks do not fabricate securities, prices, financial facts, filings, macro observations, benchmarks, peer metrics, transcripts, or evidence. They also do not automatically enable NSE/BSE development feed templates, Upstox live market, Tavily, Gemini, Groq, NVIDIA, Cerebras, or other external providers.
+After DDL changes and before launch, run the Supabase security and performance advisors. Resolve actionable security defects and unindexed foreign-key findings. Do not delete freshly created indexes merely because an empty/new table reports an INFO-level `unused_index` notice before production workload exists.
 
-Real provider activation and real-data backfills are separate go-live steps and must retain their source/licensing/provenance records. A green software CI run is not the same thing as a green live corpus readiness gate, and neither is the same thing as a completed deployment release gate.
+## 11. What this QA deliberately does not fake
 
-For the implementation-vs-activation status of phases 13–18, see `docs/PHASES_13_18_COMPLETION.md`.
+These checks do not fabricate securities, prices, financial facts, filings, macro observations, benchmarks, peer metrics, transcripts, evidence, source approvals, representative research jobs or provider success.
+
+A green software CI run is not the same thing as a green live corpus gate, and neither is the same thing as a completed commercial release gate. Genuine corpus population, representative real-company evidence, source/licensing approvals, production credentials for intentionally enabled integrations and an actual HTTPS deployment remain external go-live prerequisites.
+
+For the detailed Phase 25–30 contract, see `docs/PHASE_25_30_RELEASE_ACCEPTANCE.md`.
