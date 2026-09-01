@@ -1,0 +1,172 @@
+name: Production Corpus
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type RUN_REAL_CORPUS to allow real production data mutation
+        required: true
+        type: string
+      start_at:
+        description: Resume from this production corpus stage
+        required: true
+        default: market
+        type: choice
+        options:
+          - market
+          - financials
+          - peer_metrics
+          - readiness
+      repo_source_url:
+        description: Official RBI HTTPS export URL for repo rate; required when start_at=market
+        required: false
+        type: string
+      repo_date_column:
+        description: Optional repo-rate date column override
+        required: false
+        type: string
+      repo_value_column:
+        description: Optional repo-rate value column override
+        required: false
+        type: string
+      cpi_source_url:
+        description: Official RBI HTTPS export URL for CPI YoY; required when start_at=market
+        required: false
+        type: string
+      cpi_date_column:
+        description: Optional CPI date column override
+        required: false
+        type: string
+      cpi_value_column:
+        description: Optional CPI value column override
+        required: false
+        type: string
+      iip_source_url:
+        description: Official RBI HTTPS export URL for IIP YoY; required when start_at=market
+        required: false
+        type: string
+      iip_date_column:
+        description: Optional IIP date column override
+        required: false
+        type: string
+      iip_value_column:
+        description: Optional IIP value column override
+        required: false
+        type: string
+      min_nse_eq_securities:
+        description: Production minimum supported NSE EQ universe
+        required: true
+        default: "1000"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-research-corpus
+  cancel-in-progress: false
+
+jobs:
+  build-corpus:
+    name: Build real production corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    environment: production
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      APP_ENV: production
+      FREE_ONLY: "true"
+      ENABLE_EXTERNAL_DATA_CALLS: "true"
+      ENABLE_EXTERNAL_LLM_CALLS: "false"
+      ENABLE_EVENT_RESEARCH: "false"
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+      UPSTOX_DATA_ACCESS_TOKEN: ${{ secrets.UPSTOX_DATA_ACCESS_TOKEN }}
+      START_AT: ${{ inputs.start_at }}
+      MIN_NSE_EQ_SECURITIES: ${{ inputs.min_nse_eq_securities }}
+      REPO_SOURCE_URL: ${{ inputs.repo_source_url }}
+      REPO_DATE_COLUMN: ${{ inputs.repo_date_column }}
+      REPO_VALUE_COLUMN: ${{ inputs.repo_value_column }}
+      CPI_SOURCE_URL: ${{ inputs.cpi_source_url }}
+      CPI_DATE_COLUMN: ${{ inputs.cpi_date_column }}
+      CPI_VALUE_COLUMN: ${{ inputs.cpi_value_column }}
+      IIP_SOURCE_URL: ${{ inputs.iip_source_url }}
+      IIP_DATE_COLUMN: ${{ inputs.iip_date_column }}
+      IIP_VALUE_COLUMN: ${{ inputs.iip_value_column }}
+    steps:
+      - name: Confirmation guard
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM" != "RUN_REAL_CORPUS" ]]; then
+            echo "Refusing production corpus mutation: confirmation text did not match."
+            exit 2
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+
+      - name: Install API runtime
+        run: pip install -e ".[live_market]"
+
+      - name: Validate required environment secrets
+        run: |
+          set -euo pipefail
+          [[ -n "${DATABASE_URL:-}" ]] || { echo "DATABASE_URL secret is missing."; exit 2; }
+          if [[ "$START_AT" == "market" ]]; then
+            [[ -n "${FRED_API_KEY:-}" ]] || { echo "FRED_API_KEY secret is missing."; exit 2; }
+            [[ -n "${UPSTOX_DATA_ACCESS_TOKEN:-}" ]] || { echo "UPSTOX_DATA_ACCESS_TOKEN secret is missing."; exit 2; }
+            [[ -n "${REPO_SOURCE_URL:-}" ]] || { echo "repo_source_url input is required for market stage."; exit 2; }
+            [[ -n "${CPI_SOURCE_URL:-}" ]] || { echo "cpi_source_url input is required for market stage."; exit 2; }
+            [[ -n "${IIP_SOURCE_URL:-}" ]] || { echo "iip_source_url input is required for market stage."; exit 2; }
+          fi
+
+      - name: Build and validate production research corpus
+        run: |
+          set -euo pipefail
+          args=(
+            python scripts/bootstrap_production_research_corpus.py
+            --start-at "$START_AT"
+            --min-nse-eq-securities "$MIN_NSE_EQ_SECURITIES"
+          )
+          if [[ "$START_AT" == "market" ]]; then
+            args+=(--repo-source-url "$REPO_SOURCE_URL")
+            args+=(--cpi-source-url "$CPI_SOURCE_URL")
+            args+=(--iip-source-url "$IIP_SOURCE_URL")
+            [[ -n "${REPO_DATE_COLUMN:-}" ]] && args+=(--repo-date-column "$REPO_DATE_COLUMN")
+            [[ -n "${REPO_VALUE_COLUMN:-}" ]] && args+=(--repo-value-column "$REPO_VALUE_COLUMN")
+            [[ -n "${CPI_DATE_COLUMN:-}" ]] && args+=(--cpi-date-column "$CPI_DATE_COLUMN")
+            [[ -n "${CPI_VALUE_COLUMN:-}" ]] && args+=(--cpi-value-column "$CPI_VALUE_COLUMN")
+            [[ -n "${IIP_DATE_COLUMN:-}" ]] && args+=(--iip-date-column "$IIP_DATE_COLUMN")
+            [[ -n "${IIP_VALUE_COLUMN:-}" ]] && args+=(--iip-value-column "$IIP_VALUE_COLUMN")
+          fi
+          "${args[@]}" | tee production-corpus-result.json
+
+      - name: Publish operator summary
+        if: always()
+        run: |
+          {
+            echo "## Production corpus run"
+            echo
+            echo "- Requested start stage: \`$START_AT\`"
+            echo "- Synthetic fallback: disabled"
+            echo "- Paid LLM fallback: disabled"
+            echo "- Workflow completion reflects the fail-closed corpus/readiness exit code."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload corpus result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-corpus-result-${{ github.run_id }}
+          path: apps/api/production-corpus-result.json
+          if-no-files-found: ignore
+          retention-days: 14
