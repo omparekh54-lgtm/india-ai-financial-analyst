@@ -6,7 +6,7 @@ import hashlib
 import json
 
 from app.connectors.http_fetcher import SafeHttpFetcher
-from app.connectors.india_official import MacroSeriesSpec
+from app.connectors.india_official import MacroSeriesSpec, parse_rbi_macro_series
 from app.core.config import get_settings
 from app.db import create_database_engine
 from app.ingestion.india_official import OfficialIndiaIngestionService
@@ -16,7 +16,6 @@ from app.ingestion.official_macro_files import (
     validate_official_source_url,
     validate_rbi_series_key,
 )
-from app.connectors.india_official import parse_rbi_macro_series
 
 RBI_ALLOWED_DOMAINS = {"rbi.org.in", "statistics.rbi.org.in"}
 
