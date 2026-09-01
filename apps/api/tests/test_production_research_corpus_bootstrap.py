@@ -16,6 +16,15 @@ def _commands(**overrides: object):  # type: ignore[no-untyped-def]
         "financial_max_batches": 100,
         "peer_metric_batch_size": 100,
         "peer_metric_max_batches": 100,
+        "repo_source_url": "https://statistics.rbi.org.in/repo.csv",
+        "repo_date_column": "Date",
+        "repo_value_column": "Repo",
+        "cpi_source_url": "https://statistics.rbi.org.in/cpi.csv",
+        "cpi_date_column": None,
+        "cpi_value_column": None,
+        "iip_source_url": "https://statistics.rbi.org.in/iip.csv",
+        "iip_date_column": None,
+        "iip_value_column": None,
         "start_at": "market",
     }
     values.update(overrides)
@@ -30,6 +39,29 @@ def test_research_corpus_stage_order_is_fail_closed() -> None:
     assert "bootstrap_nse_financial_results_all.py" in stages[1].command[1]
     assert "bootstrap_derived_security_metrics_all.py" in stages[2].command[1]
     assert "run_agent_readiness_gate.py" in stages[3].command[1]
+
+
+def test_research_corpus_propagates_explicit_official_macro_inputs() -> None:
+    market = _commands()[0].command
+
+    assert market[market.index("--repo-source-url") + 1] == "https://statistics.rbi.org.in/repo.csv"
+    assert market[market.index("--repo-date-column") + 1] == "Date"
+    assert market[market.index("--repo-value-column") + 1] == "Repo"
+    assert market[market.index("--cpi-source-url") + 1] == "https://statistics.rbi.org.in/cpi.csv"
+    assert market[market.index("--iip-source-url") + 1] == "https://statistics.rbi.org.in/iip.csv"
+
+
+def test_research_corpus_requires_macro_sources_only_when_market_stage_runs() -> None:
+    with pytest.raises(ValueError, match="repo_source_url"):
+        _commands(repo_source_url=None)
+
+    stages = _commands(
+        start_at="financials",
+        repo_source_url=None,
+        cpi_source_url=None,
+        iip_source_url=None,
+    )
+    assert [stage.name for stage in stages] == ["financials", "peer_metrics", "readiness"]
 
 
 def test_research_corpus_can_resume_at_any_stage() -> None:
