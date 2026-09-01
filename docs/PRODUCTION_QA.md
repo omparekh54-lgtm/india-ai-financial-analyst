@@ -221,12 +221,15 @@ This gate covers the Vercel project link, protected environment contract, Supaba
 
 Before production deployment is promoted, collect non-secret activation evidence and run:
 
-    python scripts/run_production_activation_gate.py --plan-only
-    python scripts/run_production_activation_gate.py --evidence-json production-activation-evidence.json
+```bash
+python scripts/run_production_activation_gate.py --plan-only
+python scripts/run_production_activation_gate.py --evidence-json production-activation-evidence.json
+```
 
-The protected manual workflow is .github/workflows/production-activation-readiness.yml. It requires RUN_PRODUCTION_ACTIVATION, runs with read-only repository permission, rejects secret-like evidence keys, and uploads a structured activation artifact.
+The protected manual workflow is `.github/workflows/production-activation-readiness.yml`. It requires `RUN_PRODUCTION_ACTIVATION`, runs with read-only repository permission, rejects secret-like evidence keys, and uploads a structured activation artifact.
 
 This gate is stricter than Phase 37-42: it requires the actual Vercel project link, production environment readiness, real Supabase corpus evidence and final Supabase advisor/security evidence. It must be green before final production deployment and before Phase 30 live release acceptance.
+
 ## 14. Post-launch Phase 31-36 acceptance
 
 After Phase 30 is genuinely green, collect non-secret production evidence and run:
