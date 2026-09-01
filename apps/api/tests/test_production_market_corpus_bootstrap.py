@@ -30,6 +30,15 @@ def _commands(**overrides: object):
         "flow_max_age_days": 7,
         "vix_max_age_days": 7,
         "rbi_10y_max_age_days": 45,
+        "repo_source_url": "https://statistics.rbi.org.in/repo.csv",
+        "repo_date_column": "Date",
+        "repo_value_column": "Repo",
+        "cpi_source_url": "https://statistics.rbi.org.in/cpi.csv",
+        "cpi_date_column": None,
+        "cpi_value_column": None,
+        "iip_source_url": "https://statistics.rbi.org.in/iip.csv",
+        "iip_date_column": None,
+        "iip_value_column": None,
         "history_from_date": date(2025, 4, 18),
         "history_to_date": date(2026, 8, 31),
         "history_batch_size": 250,
@@ -65,6 +74,17 @@ def test_full_market_corpus_stage_order_and_contracts() -> None:
     assert "bootstrap_india_market_context.py" in market_context.command[1]
     assert "--benchmark-min-rows" in market_context.command
     assert "--rbi-10y-max-age-days" in market_context.command
+    assert market_context.command[market_context.command.index("--repo-source-url") + 1] == (
+        "https://statistics.rbi.org.in/repo.csv"
+    )
+    assert market_context.command[market_context.command.index("--repo-date-column") + 1] == "Date"
+    assert market_context.command[market_context.command.index("--repo-value-column") + 1] == "Repo"
+    assert market_context.command[market_context.command.index("--cpi-source-url") + 1] == (
+        "https://statistics.rbi.org.in/cpi.csv"
+    )
+    assert market_context.command[market_context.command.index("--iip-source-url") + 1] == (
+        "https://statistics.rbi.org.in/iip.csv"
+    )
 
     assert "bootstrap_upstox_market_history_all.py" in market_history.command[1]
     assert "--from-date" in market_history.command
@@ -79,8 +99,22 @@ def test_resume_start_at_returns_only_remaining_stages() -> None:
     stages = _commands(start_at="market_context")
     assert [stage.name for stage in stages] == ["market_context", "market_history"]
 
-    history_only = _commands(start_at="market_history")
+    history_only = _commands(
+        start_at="market_history",
+        repo_source_url=None,
+        cpi_source_url=None,
+        iip_source_url=None,
+    )
     assert [stage.name for stage in history_only] == ["market_history"]
+
+
+def test_market_context_sources_are_required_only_when_that_stage_will_run() -> None:
+    with pytest.raises(ValueError, match="repo_source_url"):
+        _commands(repo_source_url=None)
+    with pytest.raises(ValueError, match="cpi_source_url"):
+        _commands(cpi_source_url=None)
+    with pytest.raises(ValueError, match="iip_source_url"):
+        _commands(iip_source_url=None)
 
 
 def test_upstox_security_master_fallback_is_explicit_and_approved() -> None:
