@@ -186,9 +186,15 @@ def _phase_45_supabase_real_data(data: Mapping[str, Any]) -> ProductionActivatio
         < MIN_REPRESENTATIVE_RESEARCH_JOBS
     ):
         errors.append("representative_research_jobs_below_minimum")
-    if _number(data.get("agent_15_completed_count"), default=0) < MIN_REPRESENTATIVE_RESEARCH_JOBS:
+    if (
+        _number(data.get("agent_15_completed_count"), default=0)
+        < MIN_REPRESENTATIVE_RESEARCH_JOBS
+    ):
         errors.append("agent_15_acceptance_runs_below_minimum")
-    if _number(data.get("agent_16_completed_count"), default=0) < MIN_REPRESENTATIVE_RESEARCH_JOBS:
+    if (
+        _number(data.get("agent_16_completed_count"), default=0)
+        < MIN_REPRESENTATIVE_RESEARCH_JOBS
+    ):
         errors.append("agent_16_acceptance_runs_below_minimum")
     if _number(data.get("non_production_source_rows"), default=1) != 0:
         errors.append("non_production_source_rows_present")
