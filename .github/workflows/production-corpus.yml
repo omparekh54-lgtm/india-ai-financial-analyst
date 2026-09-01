@@ -150,6 +150,18 @@ jobs:
           fi
           "${args[@]}" | tee production-corpus-result.json
 
+      - name: Generate post-run corpus gap manifest
+        if: always()
+        run: |
+          set +e
+          python scripts/run_production_corpus_manifest.py \
+            --min-nse-eq-securities "$MIN_NSE_EQ_SECURITIES" \
+            > production-corpus-manifest.json
+          manifest_status=$?
+          cat production-corpus-manifest.json || true
+          echo "Manifest diagnostic exit code: $manifest_status"
+          exit 0
+
       - name: Publish operator summary
         if: always()
         run: |
@@ -159,14 +171,17 @@ jobs:
             echo "- Requested start stage: \`$START_AT\`"
             echo "- Synthetic fallback: disabled"
             echo "- Paid LLM fallback: disabled"
-            echo "- Workflow completion reflects the fail-closed corpus/readiness exit code."
+            echo "- A post-run read-only corpus gap manifest is attached for diagnostics."
+            echo "- Workflow completion still reflects the fail-closed corpus/bootstrap exit code."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload corpus result
+      - name: Upload corpus result and manifest
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: production-corpus-result-${{ github.run_id }}
-          path: apps/api/production-corpus-result.json
+          path: |
+            apps/api/production-corpus-result.json
+            apps/api/production-corpus-manifest.json
           if-no-files-found: ignore
           retention-days: 14
