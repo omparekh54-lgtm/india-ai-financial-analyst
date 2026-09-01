@@ -41,8 +41,13 @@ class ResearchJobWorker:
 
         try:
             mode = AnalysisMode(str(row.get("mode") or AnalysisMode.FULL.value))
-            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
-            depth = ResearchDepth(str(metadata.get("analysis_depth") or ResearchDepth.STANDARD.value))
+            raw_metadata = row.get("metadata")
+            metadata: dict[str, Any] = (
+                dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+            )
+            depth = ResearchDepth(
+                str(metadata.get("analysis_depth") or ResearchDepth.STANDARD.value)
+            )
             requested_by = _uuid(row.get("requested_by"))
             event_trigger = _event_trigger(metadata.get("event_trigger"))
             plan = build_event_research_plan(event_trigger, depth) if event_trigger else None
