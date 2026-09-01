@@ -204,4 +204,16 @@ These checks do not fabricate securities, prices, financial facts, filings, macr
 
 A green software CI run is not the same thing as a green live corpus gate, and neither is the same thing as a completed commercial release gate. Genuine corpus population, representative real-company evidence, source/licensing approvals, production credentials for intentionally enabled integrations and an actual HTTPS deployment remain external go-live prerequisites.
 
-For the detailed Phase 25–30 contract, see `docs/PHASE_25_30_RELEASE_ACCEPTANCE.md`.
+## 12. Post-launch Phase 31-36 acceptance
+
+After Phase 30 is genuinely green, collect non-secret production evidence and run:
+
+```bash
+python scripts/run_post_launch_acceptance_gate.py --plan-only
+python scripts/run_post_launch_acceptance_gate.py --evidence-json post-launch-evidence.json
+```
+
+The protected manual workflow is `.github/workflows/post-launch-acceptance.yml`. It requires `RUN_POST_LAUNCH_GATE`, runs with read-only repository permission, rejects secret-like evidence keys, and uploads a structured acceptance artifact.
+
+For the detailed Phase 25-30 contract, see `docs/PHASE_25_30_RELEASE_ACCEPTANCE.md`.
+For the detailed Phase 31-36 contract, see `docs/PHASE_31_36_POST_LAUNCH_ACCEPTANCE.md`.
