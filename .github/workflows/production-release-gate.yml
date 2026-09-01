@@ -23,6 +23,25 @@ on:
         description: Existing research job UUID owned by OWNER_ACCESS_TOKEN user
         required: true
         type: string
+      real_company_job_ids:
+        description: Comma-separated completed real research job UUIDs for representative acceptance
+        required: true
+        type: string
+      enable_external_llm_calls:
+        description: Validate and enable configured FREE_ONLY external LLM routes during release QA
+        required: true
+        default: false
+        type: boolean
+      enable_external_data_calls:
+        description: Validate and enable configured external web/data acquisition during release QA
+        required: true
+        default: false
+        type: boolean
+      enable_live_market:
+        description: Validate and enable Upstox live-market integration during release QA
+        required: true
+        default: false
+        type: boolean
       min_nse_eq_securities:
         description: Required production NSE EQ universe minimum
         required: true
@@ -58,17 +77,28 @@ jobs:
     env:
       APP_ENV: production
       FREE_ONLY: "true"
+      COMMERCIAL_LAUNCH_ENABLED: "true"
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+      FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      UPSTOX_CLIENT_ID: ${{ secrets.UPSTOX_CLIENT_ID }}
+      UPSTOX_CLIENT_SECRET: ${{ secrets.UPSTOX_CLIENT_SECRET }}
+      UPSTOX_REDIRECT_URI: ${{ secrets.UPSTOX_REDIRECT_URI }}
+      BROKER_TOKEN_ENCRYPTION_KEY: ${{ secrets.BROKER_TOKEN_ENCRYPTION_KEY }}
       DEPLOYMENT_SMOKE_ACCESS_TOKEN: ${{ secrets.DEPLOYMENT_SMOKE_ACCESS_TOKEN }}
       OWNER_ACCESS_TOKEN: ${{ secrets.OWNER_ACCESS_TOKEN }}
       OTHER_ACCESS_TOKEN: ${{ secrets.OTHER_ACCESS_TOKEN }}
       LOAD_PROBE_ACCESS_TOKEN: ${{ secrets.LOAD_PROBE_ACCESS_TOKEN }}
-      ENABLE_LIVE_MARKET: "false"
-      ENABLE_EXTERNAL_LLM_CALLS: "false"
-      ENABLE_EXTERNAL_DATA_CALLS: "false"
+      ENABLE_LIVE_MARKET: ${{ inputs.enable_live_market }}
+      ENABLE_EXTERNAL_LLM_CALLS: ${{ inputs.enable_external_llm_calls }}
+      ENABLE_EXTERNAL_DATA_CALLS: ${{ inputs.enable_external_data_calls }}
       ENABLE_EVENT_RESEARCH: "false"
       ENABLE_SEMANTIC_RETRIEVAL: "false"
       ENABLE_MULTIMODAL_DOCUMENT_ANALYSIS: "false"
@@ -78,6 +108,7 @@ jobs:
       WEB_APP_URL: ${{ inputs.web_app_url }}
       CORS_ORIGINS: ${{ inputs.cors_origins }}
       AUTH_ISOLATION_JOB_ID: ${{ inputs.owner_job_id }}
+      REAL_COMPANY_ACCEPTANCE_JOB_IDS: ${{ inputs.real_company_job_ids }}
       MIN_NSE_EQ_SECURITIES: ${{ inputs.min_nse_eq_securities }}
       LOAD_REQUESTS: ${{ inputs.load_requests }}
       LOAD_CONCURRENCY: ${{ inputs.load_concurrency }}
@@ -114,6 +145,15 @@ jobs:
           [[ -n "${DEPLOYMENT_SMOKE_ACCESS_TOKEN:-}" ]] || { echo "DEPLOYMENT_SMOKE_ACCESS_TOKEN secret is missing."; exit 2; }
           [[ -n "${OWNER_ACCESS_TOKEN:-}" ]] || { echo "OWNER_ACCESS_TOKEN secret is missing."; exit 2; }
           [[ -n "${OTHER_ACCESS_TOKEN:-}" ]] || { echo "OTHER_ACCESS_TOKEN secret is missing."; exit 2; }
+          [[ -n "${REAL_COMPANY_ACCEPTANCE_JOB_IDS:-}" ]] || { echo "real_company_job_ids is required."; exit 2; }
+          if [[ "$ENABLE_EXTERNAL_DATA_CALLS" == "true" ]]; then
+            [[ -n "${TAVILY_API_KEY:-}" ]] || { echo "TAVILY_API_KEY secret is required when external data calls are enabled."; exit 2; }
+          fi
+          if [[ "$ENABLE_LIVE_MARKET" == "true" ]]; then
+            [[ -n "${UPSTOX_CLIENT_ID:-}" && -n "${UPSTOX_CLIENT_SECRET:-}" && -n "${UPSTOX_REDIRECT_URI:-}" && -n "${BROKER_TOKEN_ENCRYPTION_KEY:-}" ]] || {
+              echo "Complete Upstox OAuth/encryption secrets are required when live market is enabled."; exit 2;
+            }
+          fi
 
       - name: Run production release gate
         run: |
@@ -134,8 +174,9 @@ jobs:
             echo
             echo "- API: \`$API_BASE_URL\`"
             echo "- Minimum NSE EQ universe: \`$MIN_NSE_EQ_SECURITIES\`"
-            echo "- Stages: preflight → corpus readiness → deployment smoke → auth isolation → load probe"
+            echo "- Stages: preflight → corpus → real-company acceptance → providers → operations → commercial/source approvals → deployment smoke → auth isolation → load"
             echo "- The workflow fails closed if any stage fails."
+            echo "- Provider credentials remain environment secrets and are never CLI arguments."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload release result
