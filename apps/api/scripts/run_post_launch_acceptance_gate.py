@@ -11,12 +11,50 @@ from app.core.post_launch_acceptance import (
     required_post_launch_evidence_contract,
 )
 
+_SECRET_KEY_MARKERS = (
+    "api_key",
+    "apikey",
+    "authorization",
+    "bearer",
+    "client_secret",
+    "password",
+    "private_key",
+    "secret",
+    "token",
+)
+
 
 def _load_json(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise TypeError("post-launch evidence file must contain a JSON object")
+    secret_paths = _secret_like_paths(payload)
+    if secret_paths:
+        raise ValueError(
+            "post-launch evidence must not contain secret-like keys: "
+            + ", ".join(secret_paths[:10])
+        )
     return payload
+
+
+def _secret_like_paths(value: object, prefix: str = "") -> list[str]:
+    if isinstance(value, dict):
+        paths: list[str] = []
+        for raw_key, child in value.items():
+            key = str(raw_key)
+            path = f"{prefix}.{key}" if prefix else key
+            normalized = key.lower().replace("-", "_")
+            if any(marker in normalized for marker in _SECRET_KEY_MARKERS):
+                paths.append(path)
+            paths.extend(_secret_like_paths(child, path))
+        return paths
+    if isinstance(value, list):
+        paths = []
+        for index, child in enumerate(value):
+            item_prefix = f"{prefix}[{index}]" if prefix else f"[{index}]"
+            paths.extend(_secret_like_paths(child, item_prefix))
+        return paths
+    return []
 
 
 def main() -> int:
