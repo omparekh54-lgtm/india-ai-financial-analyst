@@ -45,13 +45,13 @@ def build_commands(
     flow_max_age_days: int,
     vix_max_age_days: int,
     rbi_10y_max_age_days: int,
-    repo_source_url: str,
+    repo_source_url: str | None,
     repo_date_column: str | None,
     repo_value_column: str | None,
-    cpi_source_url: str,
+    cpi_source_url: str | None,
     cpi_date_column: str | None,
     cpi_value_column: str | None,
-    iip_source_url: str,
+    iip_source_url: str | None,
     iip_date_column: str | None,
     iip_value_column: str | None,
     history_from_date: date,
@@ -91,13 +91,18 @@ def build_commands(
         raise ValueError("approval_reference cannot be empty")
     if not access_token_env.strip():
         raise ValueError("access_token_env cannot be empty")
-    for name, value in (
-        ("repo_source_url", repo_source_url),
-        ("cpi_source_url", cpi_source_url),
-        ("iip_source_url", iip_source_url),
-    ):
-        if not value.strip():
-            raise ValueError(f"{name} is required for a reproducible production macro corpus")
+
+    includes_market_context = STAGE_ORDER.index(start_at) <= STAGE_ORDER.index("market_context")
+    if includes_market_context:
+        for name, value in (
+            ("repo_source_url", repo_source_url),
+            ("cpi_source_url", cpi_source_url),
+            ("iip_source_url", iip_source_url),
+        ):
+            if not value or not value.strip():
+                raise ValueError(
+                    f"{name} is required when the market_context stage will run"
+                )
 
     if provider == "nse" and (upstox_security_master_file or upstox_security_master_url):
         raise ValueError("Upstox security-master options require provider=upstox")
@@ -158,18 +163,15 @@ def build_commands(
         str(vix_max_age_days),
         "--rbi-10y-max-age-days",
         str(rbi_10y_max_age_days),
-        "--repo-source-url",
-        repo_source_url,
-        "--cpi-source-url",
-        cpi_source_url,
-        "--iip-source-url",
-        iip_source_url,
     ]
     for flag, value in (
+        ("--repo-source-url", repo_source_url),
         ("--repo-date-column", repo_date_column),
         ("--repo-value-column", repo_value_column),
+        ("--cpi-source-url", cpi_source_url),
         ("--cpi-date-column", cpi_date_column),
         ("--cpi-value-column", cpi_value_column),
+        ("--iip-source-url", iip_source_url),
         ("--iip-date-column", iip_date_column),
         ("--iip-value-column", iip_value_column),
     ):
@@ -281,13 +283,13 @@ def main() -> int:
     parser.add_argument("--flow-max-age-days", type=int, default=7)
     parser.add_argument("--vix-max-age-days", type=int, default=7)
     parser.add_argument("--rbi-10y-max-age-days", type=int, default=45)
-    parser.add_argument("--repo-source-url", required=True)
+    parser.add_argument("--repo-source-url")
     parser.add_argument("--repo-date-column")
     parser.add_argument("--repo-value-column")
-    parser.add_argument("--cpi-source-url", required=True)
+    parser.add_argument("--cpi-source-url")
     parser.add_argument("--cpi-date-column")
     parser.add_argument("--cpi-value-column")
-    parser.add_argument("--iip-source-url", required=True)
+    parser.add_argument("--iip-source-url")
     parser.add_argument("--iip-date-column")
     parser.add_argument("--iip-value-column")
     parser.add_argument(
