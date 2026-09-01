@@ -6,7 +6,7 @@ from app.core.post_launch_acceptance import (
     evaluate_post_launch_evidence,
     required_post_launch_evidence_contract,
 )
-from scripts.run_post_launch_acceptance_gate import main
+from scripts.run_post_launch_acceptance_gate import _load_json, main
 
 
 def _complete_evidence() -> dict[str, object]:
@@ -142,3 +142,18 @@ def test_post_launch_cli_evidence_file(tmp_path: Path, capsys) -> None:  # type:
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["ready"] is True
+
+
+def test_post_launch_cli_rejects_secret_like_evidence_keys(tmp_path: Path) -> None:
+    evidence = _complete_evidence()
+    evidence["cost_quota"] = {
+        **evidence["cost_quota"],  # type: ignore[arg-type]
+        "provider_api_key": "must-not-be-here",
+    }
+    evidence_path = tmp_path / "bad-evidence.json"
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+
+    import pytest
+
+    with pytest.raises(ValueError, match="secret-like keys"):
+        _load_json(evidence_path)
