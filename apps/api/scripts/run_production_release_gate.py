@@ -16,6 +16,10 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 RELEASE_STAGE_ORDER = (
     "preflight",
     "corpus_readiness",
+    "real_company_acceptance",
+    "provider_activation",
+    "operations_health",
+    "commercial_launch",
     "deployment_smoke",
     "auth_isolation",
     "load_probe",
@@ -74,6 +78,7 @@ def build_release_commands(
     if allow_http_localhost:
         auth_command.append("--allow-http-localhost")
 
+    threshold_args = ("--min-nse-eq-securities", str(min_nse_eq_securities))
     return (
         ReleaseStage(
             "preflight",
@@ -83,9 +88,32 @@ def build_release_commands(
             "corpus_readiness",
             (
                 python_executable,
-                str(scripts_dir / "run_agent_readiness_gate.py"),
-                "--min-nse-eq-securities",
-                str(min_nse_eq_securities),
+                str(scripts_dir / "run_production_corpus_manifest.py"),
+                *threshold_args,
+            ),
+        ),
+        ReleaseStage(
+            "real_company_acceptance",
+            (python_executable, str(scripts_dir / "run_real_company_acceptance.py")),
+        ),
+        ReleaseStage(
+            "provider_activation",
+            (python_executable, str(scripts_dir / "run_provider_activation_gate.py")),
+        ),
+        ReleaseStage(
+            "operations_health",
+            (
+                python_executable,
+                str(scripts_dir / "run_operations_health_report.py"),
+                *threshold_args,
+            ),
+        ),
+        ReleaseStage(
+            "commercial_launch",
+            (
+                python_executable,
+                str(scripts_dir / "run_commercial_launch_gate.py"),
+                *threshold_args,
             ),
         ),
         ReleaseStage(
@@ -153,9 +181,10 @@ def _run_stage(stage: ReleaseStage) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Run the fail-closed production release gate: configuration/database preflight, "
-            "authoritative 16-agent corpus readiness, authenticated GET-only deployment smoke, "
-            "two-user ownership isolation, and a bounded read-only load probe."
+            "Run the fail-closed Phase 25-30 production release gate: config/database preflight, "
+            "real corpus readiness, representative real-company evidence acceptance, FREE_ONLY "
+            "provider activation policy, operations health, commercial/source approval, deployed "
+            "API smoke, two-user ownership isolation, and bounded read-only load acceptance."
         )
     )
     parser.add_argument("--api-base-url", default=os.getenv("API_BASE_URL", ""))
@@ -173,13 +202,16 @@ def main() -> int:
             "requires": [
                 "API_BASE_URL or --api-base-url",
                 "AUTH_ISOLATION_JOB_ID or --job-id",
+                "REAL_COMPANY_ACCEPTANCE_JOB_IDS (>=5 distinct completed real securities by default)",
                 "DEPLOYMENT_SMOKE_ACCESS_TOKEN",
                 "OWNER_ACCESS_TOKEN",
                 "OTHER_ACCESS_TOKEN",
                 "optional LOAD_PROBE_ACCESS_TOKEN for authenticated safe endpoints",
+                "production provider credentials only for integrations explicitly enabled",
+                "explicit commercial source approval references for required user-display scopes",
             ],
             "stage_order": list(RELEASE_STAGE_ORDER),
-            "secrets_policy": "access_tokens_are_environment_only_and_never_cli_arguments",
+            "secrets_policy": "access_tokens_and_provider_credentials_are_environment_only_and_never_cli_arguments",
         }
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
@@ -211,7 +243,7 @@ def main() -> int:
                     "commands": [
                         {"name": stage.name, "command": list(stage.command)} for stage in stages
                     ],
-                    "secrets_policy": "access_tokens_are_environment_only_and_never_cli_arguments",
+                    "secrets_policy": "access_tokens_and_provider_credentials_are_environment_only_and_never_cli_arguments",
                 },
                 indent=2,
                 sort_keys=True,
