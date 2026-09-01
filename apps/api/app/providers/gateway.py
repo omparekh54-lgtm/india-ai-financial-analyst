@@ -3,10 +3,18 @@ from __future__ import annotations
 import asyncio
 from math import ceil
 from time import monotonic
+from typing import TypedDict
 
 from app.core.config import Settings
 from app.providers.client import ChatMessage, ChatResult, ProviderCallError, build_client
 from app.providers.router import Capability, ProviderRouter
+
+
+class JobUsage(TypedDict):
+    calls: int
+    reserved_tokens: int
+    actual_tokens: int
+    provider_attempts: dict[str, int]
 
 
 class ProviderGateway:
@@ -18,7 +26,7 @@ class ProviderGateway:
         self._failure_counts: dict[str, int] = {}
         self._blocked_until: dict[str, float] = {}
         self._budget_lock = asyncio.Lock()
-        self._job_usage: dict[str, dict[str, object]] = {}
+        self._job_usage: dict[str, JobUsage] = {}
 
     @property
     def enabled(self) -> bool:
@@ -78,15 +86,22 @@ class ProviderGateway:
         )
 
     def job_usage(self, budget_key: str) -> dict[str, object]:
-        usage = self._job_usage.get(budget_key) or {}
-        provider_attempts = usage.get("provider_attempts")
+        usage = self._job_usage.get(budget_key)
+        if usage is None:
+            calls = 0
+            reserved_tokens = 0
+            actual_tokens = 0
+            provider_attempts: dict[str, int] = {}
+        else:
+            calls = usage["calls"]
+            reserved_tokens = usage["reserved_tokens"]
+            actual_tokens = usage["actual_tokens"]
+            provider_attempts = dict(usage["provider_attempts"])
         return {
-            "calls": int(usage.get("calls") or 0),
-            "reserved_tokens": int(usage.get("reserved_tokens") or 0),
-            "actual_tokens": int(usage.get("actual_tokens") or 0),
-            "provider_attempts": (
-                dict(provider_attempts) if isinstance(provider_attempts, dict) else {}
-            ),
+            "calls": calls,
+            "reserved_tokens": reserved_tokens,
+            "actual_tokens": actual_tokens,
+            "provider_attempts": provider_attempts,
             "max_calls": self.settings.llm_max_calls_per_job,
             "max_reserved_tokens": self.settings.llm_max_reserved_tokens_per_job,
         }
@@ -106,35 +121,29 @@ class ProviderGateway:
         async with self._budget_lock:
             usage = self._job_usage.setdefault(
                 budget_key,
-                {
-                    "calls": 0,
-                    "reserved_tokens": 0,
-                    "actual_tokens": 0,
-                    "provider_attempts": {},
-                },
+                JobUsage(
+                    calls=0,
+                    reserved_tokens=0,
+                    actual_tokens=0,
+                    provider_attempts={},
+                ),
             )
-            calls = int(usage.get("calls") or 0)
-            reserved = int(usage.get("reserved_tokens") or 0)
-            if calls + 1 > self.settings.llm_max_calls_per_job:
+            if usage["calls"] + 1 > self.settings.llm_max_calls_per_job:
                 raise ProviderCallError(
                     "Per-job LLM call budget exhausted; deterministic research continues without "
                     "additional LLM enrichment",
                     retryable=False,
                 )
-            if reserved + reserve > self.settings.llm_max_reserved_tokens_per_job:
+            if usage["reserved_tokens"] + reserve > self.settings.llm_max_reserved_tokens_per_job:
                 raise ProviderCallError(
                     "Per-job LLM token budget exhausted; deterministic research continues without "
                     "additional LLM enrichment",
                     retryable=False,
                 )
 
-            attempts = usage.get("provider_attempts")
-            if not isinstance(attempts, dict):
-                attempts = {}
-                usage["provider_attempts"] = attempts
-            attempts[provider] = int(attempts.get(provider) or 0) + 1
-            usage["calls"] = calls + 1
-            usage["reserved_tokens"] = reserved + reserve
+            usage["provider_attempts"][provider] = usage["provider_attempts"].get(provider, 0) + 1
+            usage["calls"] += 1
+            usage["reserved_tokens"] += reserve
 
     async def _record_actual_usage(self, budget_key: str, result: ChatResult) -> None:
         actual = int(result.input_tokens or 0) + int(result.output_tokens or 0)
@@ -143,7 +152,7 @@ class ProviderGateway:
         async with self._budget_lock:
             usage = self._job_usage.get(budget_key)
             if usage is not None:
-                usage["actual_tokens"] = int(usage.get("actual_tokens") or 0) + actual
+                usage["actual_tokens"] += actual
 
     def _circuit_open(self, provider: str) -> bool:
         until = self._blocked_until.get(provider)
