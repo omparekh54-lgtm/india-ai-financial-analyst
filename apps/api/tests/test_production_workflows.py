@@ -76,10 +76,36 @@ def test_production_release_workflow_is_manual_fail_closed_and_secret_safe() -> 
     assert "--api-key" not in command_section
 
 
+def test_post_launch_acceptance_workflow_is_manual_fail_closed_and_secret_safe() -> None:
+    workflow = _workflow("post-launch-acceptance.yml")
+    triggers = workflow["on"]
+    assert isinstance(triggers, dict)
+    assert set(triggers) == {"workflow_dispatch"}
+    assert workflow["permissions"] == {"contents": "read"}
+
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    job = jobs["post-launch-gate"]
+    assert isinstance(job, dict)
+    assert job["environment"] == "production"
+
+    text = (WORKFLOWS / "post-launch-acceptance.yml").read_text(encoding="utf-8")
+    assert "RUN_POST_LAUNCH_GATE" in text
+    assert "run_post_launch_acceptance_gate.py" in text
+    assert "POST_LAUNCH_EVIDENCE_JSON" in text
+    assert "post-launch-evidence.json" in text
+    assert "workflow_dispatch" in text
+    assert "secrets." not in text
+    assert "--api-key" not in text
+    assert "--token" not in text
+    assert "--client-secret" not in text
+
+
 def test_manual_workflows_have_non_cancelling_production_concurrency_locks() -> None:
     for filename, group in (
         ("production-corpus.yml", "production-research-corpus"),
         ("production-release-gate.yml", "production-release-gate"),
+        ("post-launch-acceptance.yml", "post-launch-acceptance"),
     ):
         workflow = _workflow(filename)
         concurrency = workflow["concurrency"]
