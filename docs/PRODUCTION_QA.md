@@ -204,7 +204,20 @@ These checks do not fabricate securities, prices, financial facts, filings, macr
 
 A green software CI run is not the same thing as a green live corpus gate, and neither is the same thing as a completed commercial release gate. Genuine corpus population, representative real-company evidence, source/licensing approvals, production credentials for intentionally enabled integrations and an actual HTTPS deployment remain external go-live prerequisites.
 
-## 12. Post-launch Phase 31-36 acceptance
+## 12. Deployment readiness Phase 37-42
+
+Before creating or promoting a Vercel production deployment, collect non-secret deployment evidence and run:
+
+```bash
+python scripts/run_deployment_readiness_gate.py --plan-only
+python scripts/run_deployment_readiness_gate.py --evidence-json deployment-readiness-evidence.json
+```
+
+The protected manual workflow is `.github/workflows/deployment-readiness.yml`. It requires `RUN_DEPLOYMENT_READINESS`, runs with read-only repository permission, rejects secret-like evidence keys, and uploads a structured deployment-readiness artifact.
+
+This gate covers the Vercel project link, protected environment contract, Supabase migration/security state, exact build artifact commit, auth/traffic preparation and final release runbook. It should be green before Phase 30 is run against a live HTTPS deployment.
+
+## 13. Post-launch Phase 31-36 acceptance
 
 After Phase 30 is genuinely green, collect non-secret production evidence and run:
 
@@ -217,3 +230,4 @@ The protected manual workflow is `.github/workflows/post-launch-acceptance.yml`.
 
 For the detailed Phase 25-30 contract, see `docs/PHASE_25_30_RELEASE_ACCEPTANCE.md`.
 For the detailed Phase 31-36 contract, see `docs/PHASE_31_36_POST_LAUNCH_ACCEPTANCE.md`.
+For the detailed Phase 37-42 contract, see `docs/PHASE_37_42_DEPLOYMENT_READINESS.md`.
