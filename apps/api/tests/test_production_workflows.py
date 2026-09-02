@@ -201,6 +201,19 @@ def test_production_promotion_workflow_is_manual_fail_closed_and_secret_safe() -
     assert "--client-secret" not in text
 
 
+def test_live_market_worker_exits_cleanly_when_feature_is_disabled() -> None:
+    text = (REPO_ROOT / "apps/api/scripts/run_live_market_worker.py").read_text(
+        encoding="utf-8",
+    )
+
+    assert "Live market worker is disabled" in text
+    assert "return 0" in text.split("if not settings.enable_live_market:", 1)[1].split(
+        "if not settings.broker_token_encryption_key:",
+        1,
+    )[0]
+    assert "raise RuntimeError(\"ENABLE_LIVE_MARKET must be true" not in text
+
+
 def test_manual_workflows_have_non_cancelling_production_concurrency_locks() -> None:
     for filename, group in (
         ("production-corpus.yml", "production-research-corpus"),
