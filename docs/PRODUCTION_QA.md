@@ -245,3 +245,18 @@ For the detailed Phase 25-30 contract, see `docs/PHASE_25_30_RELEASE_ACCEPTANCE.
 For the detailed Phase 31-36 contract, see `docs/PHASE_31_36_POST_LAUNCH_ACCEPTANCE.md`.
 For the detailed Phase 37-42 contract, see `docs/PHASE_37_42_DEPLOYMENT_READINESS.md`.
 For the detailed Phase 43-46 contract, see `docs/PHASE_43_46_PRODUCTION_ACTIVATION.md`.
+
+## 15. Deployment cutover Phase 47-50
+
+After Railway and Vercel are connected, collect non-secret cutover evidence and run:
+
+```bash
+python scripts/run_deployment_cutover_gate.py --plan-only
+python scripts/run_deployment_cutover_gate.py --evidence-json deployment-cutover-evidence.json
+```
+
+The protected manual workflow is `.github/workflows/deployment-cutover.yml`. It requires `RUN_DEPLOYMENT_CUTOVER`, runs with read-only repository permission, rejects secret-like evidence keys, and uploads a structured cutover artifact.
+
+This gate covers the live Railway API and workers, Vercel preview-to-backend wiring, production-promotion controls and final acceptance handoff. It does not override the real-corpus, Supabase security, commercial launch or post-launch acceptance gates.
+
+For the detailed Phase 47-50 contract, see `docs/PHASE_47_50_DEPLOYMENT_CUTOVER.md`.

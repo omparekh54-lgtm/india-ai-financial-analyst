@@ -1,0 +1,105 @@
+name: Deployment Cutover Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type RUN_DEPLOYMENT_CUTOVER to evaluate Phases 47-50
+        required: true
+        type: string
+      evidence_json:
+        description: Non-secret JSON evidence object for deployment cutover
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deployment-cutover
+  cancel-in-progress: false
+
+jobs:
+  deployment-cutover:
+    name: Fail-closed Phase 47-50 deployment cutover
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      APP_ENV: production
+      FREE_ONLY: "true"
+      DEPLOYMENT_CUTOVER_EVIDENCE_JSON: deployment-cutover-evidence.json
+      DEPLOYMENT_CUTOVER_EVIDENCE_JSON_INPUT: ${{ inputs.evidence_json }}
+    steps:
+      - name: Confirmation guard
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM" != "RUN_DEPLOYMENT_CUTOVER" ]]; then
+            echo "Refusing deployment cutover: confirmation text did not match."
+            exit 2
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+
+      - name: Install API runtime
+        run: pip install -e .
+
+      - name: Write non-secret cutover evidence file
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          raw = os.environ.get("DEPLOYMENT_CUTOVER_EVIDENCE_JSON_INPUT", "").strip()
+          if not raw:
+              raise SystemExit("evidence_json input is required")
+          payload = json.loads(raw)
+          if not isinstance(payload, dict):
+              raise SystemExit("evidence_json must be a JSON object")
+          Path(os.environ["DEPLOYMENT_CUTOVER_EVIDENCE_JSON"]).write_text(
+              json.dumps(payload, indent=2, sort_keys=True),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Run Phase 47-50 gate
+        run: |
+          set -euo pipefail
+          python scripts/run_deployment_cutover_gate.py \
+            --evidence-json "$DEPLOYMENT_CUTOVER_EVIDENCE_JSON" \
+            | tee deployment-cutover-result.json
+
+      - name: Publish deployment-cutover summary
+        if: always()
+        run: |
+          {
+            echo "## Phase 47-50 deployment cutover"
+            echo
+            echo "- Evidence file: $DEPLOYMENT_CUTOVER_EVIDENCE_JSON"
+            echo "- Secrets: not accepted in evidence JSON"
+            echo "- Phases: Railway backend, Vercel wiring, promotion controls, live acceptance handoff"
+            echo "- The workflow fails closed if any phase fails."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload deployment-cutover result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-cutover-result-${{ github.run_id }}
+          path: |
+            apps/api/deployment-cutover-result.json
+          if-no-files-found: ignore
+          retention-days: 14
