@@ -260,3 +260,18 @@ The protected manual workflow is `.github/workflows/deployment-cutover.yml`. It 
 This gate covers the live Railway API and workers, Vercel preview-to-backend wiring, production-promotion controls and final acceptance handoff. It does not override the real-corpus, Supabase security, commercial launch or post-launch acceptance gates.
 
 For the detailed Phase 47-50 contract, see `docs/PHASE_47_50_DEPLOYMENT_CUTOVER.md`.
+
+## 16. Production promotion Phase 51-54
+
+After the preview deployment has been verified and before final production launch is treated as complete, collect non-secret production-promotion evidence and run:
+
+```bash
+python scripts/run_production_promotion_gate.py --plan-only
+python scripts/run_production_promotion_gate.py --evidence-json production-promotion-evidence.json
+```
+
+The protected manual workflow is `.github/workflows/production-promotion.yml`. It requires `RUN_PRODUCTION_PROMOTION`, runs with read-only repository permission, rejects secret-like evidence keys, and uploads a structured production-promotion artifact.
+
+This gate covers production branch promotion, production Vercel domain verification, Railway backend post-promotion sync and the launch decision register. A `go` launch decision requires the real corpus gate, Supabase security status, Sentry monitoring and npm audit to be fully resolved. A `conditional_go` or `blocked` decision must record the accepted exceptions and operator signoff instead of presenting the project as fully launched.
+
+For the detailed Phase 51-54 contract, see `docs/PHASE_51_54_PRODUCTION_PROMOTION.md`.

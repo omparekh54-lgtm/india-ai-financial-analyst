@@ -1,0 +1,105 @@
+name: Production Promotion Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type RUN_PRODUCTION_PROMOTION to evaluate Phases 51-54
+        required: true
+        type: string
+      evidence_json:
+        description: Non-secret JSON evidence object for production promotion
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-promotion
+  cancel-in-progress: false
+
+jobs:
+  production-promotion:
+    name: Fail-closed Phase 51-54 production promotion
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      APP_ENV: production
+      FREE_ONLY: "true"
+      PRODUCTION_PROMOTION_EVIDENCE_JSON: production-promotion-evidence.json
+      PRODUCTION_PROMOTION_EVIDENCE_JSON_INPUT: ${{ inputs.evidence_json }}
+    steps:
+      - name: Confirmation guard
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM" != "RUN_PRODUCTION_PROMOTION" ]]; then
+            echo "Refusing production promotion: confirmation text did not match."
+            exit 2
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+
+      - name: Install API runtime
+        run: pip install -e .
+
+      - name: Write non-secret promotion evidence file
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          raw = os.environ.get("PRODUCTION_PROMOTION_EVIDENCE_JSON_INPUT", "").strip()
+          if not raw:
+              raise SystemExit("evidence_json input is required")
+          payload = json.loads(raw)
+          if not isinstance(payload, dict):
+              raise SystemExit("evidence_json must be a JSON object")
+          Path(os.environ["PRODUCTION_PROMOTION_EVIDENCE_JSON"]).write_text(
+              json.dumps(payload, indent=2, sort_keys=True),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Run Phase 51-54 gate
+        run: |
+          set -euo pipefail
+          python scripts/run_production_promotion_gate.py \
+            --evidence-json "$PRODUCTION_PROMOTION_EVIDENCE_JSON" \
+            | tee production-promotion-result.json
+
+      - name: Publish production-promotion summary
+        if: always()
+        run: |
+          {
+            echo "## Phase 51-54 production promotion"
+            echo
+            echo "- Evidence file: $PRODUCTION_PROMOTION_EVIDENCE_JSON"
+            echo "- Secrets: not accepted in evidence JSON"
+            echo "- Phases: production branch, Vercel domain, Railway sync, launch register"
+            echo "- The workflow fails closed if any phase fails."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload production-promotion result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-promotion-result-${{ github.run_id }}
+          path: |
+            apps/api/production-promotion-result.json
+          if-no-files-found: ignore
+          retention-days: 14
