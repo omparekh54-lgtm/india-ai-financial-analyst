@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ProviderRouteCost = Literal["free", "paid"]
@@ -80,13 +80,28 @@ class Settings(BaseSettings):
     sentry_dsn: str | None = None
     posthog_key: str | None = None
     posthog_host: str = "https://us.i.posthog.com"
-    enable_product_telemetry: bool = False
+    enable_product_telemetry: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ENABLE_PRODUCT_TELEMETRY", "ENABLE_TELEMETRY"),
+    )
 
-    enable_live_market: bool = False
-    enable_external_llm_calls: bool = False
-    enable_external_data_calls: bool = False
+    enable_live_market: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ENABLE_LIVE_MARKET", "ENABLE_LIVE_MARKET_DATA"),
+    )
+    enable_external_llm_calls: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ENABLE_EXTERNAL_LLM_CALLS", "ENABLE_EXTERNAL_PROVIDERS"),
+    )
+    enable_external_data_calls: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ENABLE_EXTERNAL_DATA_CALLS", "ENABLE_EXTERNAL_PROVIDERS"),
+    )
     # Event-triggered background research remains off until the real corpus gate is green.
-    enable_event_research: bool = False
+    enable_event_research: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ENABLE_EVENT_RESEARCH", "ENABLE_EVENT_SIGNALS"),
+    )
     enable_semantic_retrieval: bool = False
     enable_multimodal_document_analysis: bool = False
     enable_audio_transcription: bool = False
@@ -112,7 +127,10 @@ class Settings(BaseSettings):
 
     # Product usage controls are disabled until the operator explicitly enables them. The limits
     # are conservative free-plan defaults and can be changed without a code deployment.
-    enable_usage_limits: bool = False
+    enable_usage_limits: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ENABLE_USAGE_LIMITS", "ENABLE_USAGE_BILLING"),
+    )
     daily_research_job_limit: int = Field(default=10, ge=1, le=1000)
     daily_deep_research_job_limit: int = Field(default=3, ge=1, le=250)
     daily_event_research_job_limit: int = Field(default=20, ge=1, le=1000)
