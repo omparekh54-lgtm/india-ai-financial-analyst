@@ -1,0 +1,152 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #080b10;
+  color: #f3f5f7;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: radial-gradient(circle at top, #121923 0, #080b10 45%); }
+button, input { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: wait; opacity: .7; }
+a { color: inherit; }
+.shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 72px 0 96px; }
+.hero { padding: 52px 0 42px; }
+.eyebrow { letter-spacing: .16em; font-size: 12px; color: #9aa8b8; font-weight: 700; text-transform: uppercase; }
+h1 { max-width: 860px; font-size: clamp(44px, 7vw, 82px); line-height: .98; margin: 16px 0 24px; letter-spacing: -.045em; }
+h2 { max-width: 760px; font-size: clamp(28px, 4vw, 48px); line-height: 1.05; letter-spacing: -.03em; margin: 12px 0 30px; }
+.subhead { max-width: 760px; color: #b7c0cc; font-size: 20px; line-height: 1.6; }
+.searchCard { display: flex; gap: 12px; max-width: 780px; margin-top: 34px; padding: 10px; border: 1px solid #25303d; border-radius: 18px; background: rgba(16,22,30,.88); }
+.searchCard input { flex: 1; border: 0; outline: 0; color: white; background: transparent; padding: 16px 18px; min-width: 0; }
+.searchCard button, .quickModes button { border: 1px solid #334154; border-radius: 12px; color: #f4f7fa; background: #17202a; padding: 14px 18px; }
+.searchCard button { background: #f1f5f9; color: #0b0e12; font-weight: 800; }
+.controlBlock { max-width: 920px; margin-top: 22px; }
+.controlLabel { display: grid; gap: 4px; margin-bottom: 10px; }
+.controlLabel strong { font-size: 13px; letter-spacing: .04em; }
+.controlLabel span { color: #7f8c99; font-size: 12px; }
+.quickModes { display: flex; flex-wrap: wrap; gap: 10px; }
+.quickModes .modeActive { border-color: #7ce2aa; background: rgba(124,226,170,.12); }
+.depthGrid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; max-width: 920px; }
+.depthCard { display: grid; gap: 6px; text-align: left; border: 1px solid #293746; border-radius: 14px; padding: 14px 16px; color: #dce3e9; background: rgba(13,19,26,.82); }
+.depthCard small { color: #7f8c99; line-height: 1.45; }
+.depthActive { border-color: #7ce2aa; background: rgba(124,226,170,.09); box-shadow: inset 0 0 0 1px rgba(124,226,170,.08); }
+.errorText { color: #ff9f9f; margin-top: 16px; }
+.runStatus { color: #8fdcb2; margin-top: 18px; }
+.panel { margin-top: 48px; border: 1px solid #202a36; border-radius: 24px; padding: 30px; background: rgba(13,18,24,.8); }
+.agentGrid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; }
+.agentCard, .metricCard { border: 1px solid #202c38; background: #0d131a; border-radius: 16px; padding: 18px; }
+.agentCard { display: grid; grid-template-columns: 12px 1fr; column-gap: 10px; }
+.agentCard small { grid-column: 2; color: #7f8c99; margin-top: 7px; }
+.statusDot { width: 8px; height: 8px; border-radius: 999px; background: #7ce2aa; margin-top: 6px; box-shadow: 0 0 18px rgba(124,226,170,.45); }
+.warningDot { background: #e5bd72; box-shadow: 0 0 18px rgba(229,189,114,.35); }
+.confidenceGrid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; margin-top: 14px; }
+.metricCard { min-height: 122px; display: flex; flex-direction: column; justify-content: space-between; }
+.metricCard span { color: #91a0af; }
+.metricCard strong { font-size: 34px; }
+.resultHeader { display: flex; align-items: end; justify-content: space-between; gap: 24px; }
+.resultHeader h2 { margin-bottom: 12px; }
+.resultMeta { color: #91a0af; margin: 0; line-height: 1.5; }
+.validationBadge { min-width: 150px; border: 1px solid #2f5340; background: rgba(124,226,170,.07); border-radius: 16px; padding: 16px; display: grid; gap: 7px; }
+.validationBadge span { color: #91a0af; font-size: 13px; }
+.validationBadge strong { font-size: 22px; }
+.reportActions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
+.reportActions button { border: 1px solid #2e3c4b; border-radius: 10px; padding: 9px 12px; background: #101821; color: #aeb9c5; }
+.reportActions button:hover { border-color: #547089; color: #eef2f5; }
+.narrativePanel { margin-top: 14px; background: linear-gradient(145deg, rgba(20,31,39,.92), rgba(13,18,24,.88)); }
+.narrativeSummary { max-width: 980px; margin: 16px 0 24px; color: #e6ebf0; font-size: 18px; line-height: 1.7; }
+.narrativeGrid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; }
+.narrativeCard { border: 1px solid #283746; border-radius: 16px; padding: 18px; background: rgba(9,14,20,.58); }
+.narrativeCard > strong { display: block; margin-bottom: 12px; }
+.narrativeCard ul { margin: 0; padding-left: 20px; color: #b7c0cc; }
+.narrativeCard li { margin: 9px 0; line-height: 1.5; }
+.narrativeCard small { color: #7f8c99; }
+.confidenceNote { margin: 18px 0 0; color: #a9b5c1; line-height: 1.55; }
+.validationWarnings { display: grid; gap: 7px; margin-top: 18px; padding: 14px 16px; border: 1px solid #5a4731; border-radius: 14px; background: rgba(87,60,27,.12); color: #dbc18f; }
+.validationWarnings span { font-size: 13px; line-height: 1.45; }
+.reportGrid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; margin-top: 14px; }
+.reportSection { border: 1px solid #202a36; border-radius: 20px; padding: 24px; background: rgba(13,18,24,.8); }
+.claimList { display: grid; gap: 10px; margin-top: 16px; }
+.claimCard { border: 1px solid #25303c; border-radius: 14px; padding: 16px; background: #0c1218; }
+.claimCard > p { line-height: 1.5; margin: 12px 0; }
+.claimTopline { display: flex; gap: 10px; justify-content: space-between; align-items: center; color: #8e9baa; font-size: 12px; }
+.claimStatus { text-transform: uppercase; letter-spacing: .08em; border: 1px solid #314052; border-radius: 999px; padding: 5px 8px; }
+.claimStatus.verified { color: #7ce2aa; border-color: #315d45; }
+.claimStatus.supported { color: #9ac8ff; border-color: #315272; }
+.claimStatus.inferred { color: #e6c780; border-color: #62563a; }
+.claimCard details { border-top: 1px solid #1e2934; padding-top: 10px; }
+.claimCard summary { color: #9ac8ff; cursor: pointer; font-size: 13px; }
+.evidenceList { display: grid; gap: 8px; margin-top: 10px; }
+.evidenceList a, .evidenceList small { display: grid; gap: 4px; text-decoration: none; border: 1px solid #202c38; border-radius: 10px; padding: 10px; color: #b7c0cc; }
+.evidenceList a[href="#"] { cursor: default; }
+.evidenceList a strong { color: #e8edf2; font-size: 13px; }
+.evidenceList a span, .evidenceList a small { color: #81909f; font-size: 11px; border: 0; padding: 0; line-height: 1.45; }
+.evidenceList code { color: #667787; font-size: 10px; overflow-wrap: anywhere; }
+.evidenceExplorerPanel { background: linear-gradient(145deg, rgba(12,22,29,.94), rgba(10,15,21,.9)); }
+.evidenceExplorerHeader { display: flex; justify-content: space-between; align-items: start; gap: 20px; }
+.evidenceExplorerHeader h2 { margin-bottom: 8px; }
+.evidenceCount { min-width: 120px; border: 1px solid #2a3d4e; border-radius: 14px; padding: 12px; display: grid; gap: 4px; text-align: right; }
+.evidenceCount strong { font-size: 24px; }
+.evidenceCount span { color: #80909f; font-size: 11px; }
+.explorerList { display: grid; gap: 8px; margin-top: 20px; }
+.explorerClaim { border: 1px solid #202d39; border-radius: 14px; padding: 0 14px; background: rgba(8,13,18,.55); }
+.explorerClaim > summary { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; cursor: pointer; padding: 14px 0; list-style-position: outside; }
+.explorerClaim > summary strong { font-size: 13px; line-height: 1.45; }
+.explorerClaim > summary small { color: #738291; white-space: nowrap; }
+.explorerEvidenceList { padding-bottom: 14px; }
+.specialPanel { background: linear-gradient(135deg, rgba(14,28,28,.9), rgba(13,18,24,.86)); }
+.driverList { display: grid; gap: 10px; }
+.driverCard { border: 1px solid #29413d; border-radius: 14px; padding: 14px; }
+.driverCard p { margin-bottom: 0; color: #b7c0cc; line-height: 1.5; }
+.changeGrid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+.changeCard { border: 1px solid #25303c; border-radius: 14px; padding: 16px; }
+.changeCard p { color: #b7c0cc; line-height: 1.45; }
+.changeCard small { color: #7f8c99; }
+.agentRunPanel { margin-top: 14px; }
+.disclaimer { color: #6f7d8b; font-size: 12px; max-width: 800px; line-height: 1.5; margin: 18px 4px; }
+.authCard { max-width: 780px; margin-top: 28px; border: 1px solid #25303d; border-radius: 18px; background: rgba(13,18,24,.88); padding: 16px; color: #b7c0cc; }
+.authWarning { display: grid; gap: 6px; border-color: #5e4b31; background: rgba(68,51,28,.2); }
+.signedInCard { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.signedInCard > div { display: grid; gap: 5px; }
+.signedInCard small, .authMessage, .mutedText { color: #7f8c99; }
+.secureBadge { width: fit-content; font-size: 10px; letter-spacing: .14em; color: #7ce2aa; font-weight: 800; }
+.secondaryButton, .authTabs button, .authFields button { border: 1px solid #334154; border-radius: 10px; color: #f4f7fa; background: #17202a; padding: 11px 14px; }
+.authForm { display: grid; gap: 12px; }
+.authTabs { display: flex; gap: 8px; }
+.authTabs button { color: #91a0af; }
+.authTabs .authTabActive { color: #f3f5f7; border-color: #50715f; background: rgba(124,226,170,.08); }
+.authFields { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; }
+.authFields input { min-width: 0; border: 1px solid #293644; outline: 0; border-radius: 10px; background: #0b1016; color: #f3f5f7; padding: 12px 14px; }
+.authFields button { background: #f1f5f9; color: #0b0e12; font-weight: 800; }
+.historyPanel h2 { margin-bottom: 20px; }
+.historyList { display: grid; gap: 8px; }
+.historyRow { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid #202c38; border-radius: 14px; background: #0d131a; color: inherit; padding: 14px 16px; text-align: left; transition: border-color .15s ease, background .15s ease; }
+.historyRow:not(:disabled):hover { border-color: #3b5266; background: #111923; }
+.historyRow:focus-visible { outline: 2px solid #7ce2aa; outline-offset: 2px; }
+.historyRow > div:first-child { display: grid; gap: 5px; }
+.historyRow span, .historyRow small { color: #81909f; font-size: 12px; }
+.historyMeta { display: flex; align-items: center; gap: 10px; text-align: right; }
+@media (max-width: 860px) {
+  .agentGrid { grid-template-columns: repeat(2,1fr); }
+  .confidenceGrid, .reportGrid, .changeGrid, .narrativeGrid { grid-template-columns: repeat(2,1fr); }
+  .depthGrid { grid-template-columns: 1fr; }
+  .narrativeCard:last-child { grid-column: 1 / -1; }
+  .resultHeader, .evidenceExplorerHeader { align-items: start; flex-direction: column; }
+  .evidenceCount { text-align: left; }
+  .authFields { grid-template-columns: 1fr 1fr; }
+  .authFields button { grid-column: 1 / -1; }
+  .explorerClaim > summary { grid-template-columns: auto 1fr; }
+  .explorerClaim > summary small { grid-column: 2; }
+}
+@media (max-width: 560px) {
+  .shell { width: min(100% - 24px,1180px); padding-top: 24px; }
+  .searchCard { flex-direction: column; }
+  .agentGrid, .confidenceGrid, .reportGrid, .changeGrid, .narrativeGrid { grid-template-columns: 1fr; }
+  .narrativeCard:last-child { grid-column: auto; }
+  .signedInCard, .historyRow { align-items: stretch; flex-direction: column; }
+  .authFields { grid-template-columns: 1fr; }
+  .authFields button { grid-column: auto; }
+  .historyMeta { justify-content: space-between; text-align: left; }
+  .explorerClaim > summary { grid-template-columns: 1fr; }
+  .explorerClaim > summary small { grid-column: auto; }
+}

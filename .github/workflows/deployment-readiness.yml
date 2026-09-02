@@ -1,0 +1,105 @@
+name: Deployment Readiness Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type RUN_DEPLOYMENT_READINESS to evaluate Phases 37-42
+        required: true
+        type: string
+      evidence_json:
+        description: Non-secret JSON evidence object for deployment readiness
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deployment-readiness
+  cancel-in-progress: false
+
+jobs:
+  deployment-readiness:
+    name: Fail-closed Phase 37-42 deployment readiness
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      APP_ENV: production
+      FREE_ONLY: "true"
+      DEPLOYMENT_READINESS_EVIDENCE_JSON: deployment-readiness-evidence.json
+      DEPLOYMENT_READINESS_EVIDENCE_JSON_INPUT: ${{ inputs.evidence_json }}
+    steps:
+      - name: Confirmation guard
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM" != "RUN_DEPLOYMENT_READINESS" ]]; then
+            echo "Refusing deployment readiness: confirmation text did not match."
+            exit 2
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+
+      - name: Install API runtime
+        run: pip install -e .
+
+      - name: Write non-secret evidence file
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          raw = os.environ.get("DEPLOYMENT_READINESS_EVIDENCE_JSON_INPUT", "").strip()
+          if not raw:
+              raise SystemExit("evidence_json input is required")
+          payload = json.loads(raw)
+          if not isinstance(payload, dict):
+              raise SystemExit("evidence_json must be a JSON object")
+          Path(os.environ["DEPLOYMENT_READINESS_EVIDENCE_JSON"]).write_text(
+              json.dumps(payload, indent=2, sort_keys=True),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Run Phase 37-42 gate
+        run: |
+          set -euo pipefail
+          python scripts/run_deployment_readiness_gate.py \
+            --evidence-json "$DEPLOYMENT_READINESS_EVIDENCE_JSON" \
+            | tee deployment-readiness-result.json
+
+      - name: Publish deployment-readiness summary
+        if: always()
+        run: |
+          {
+            echo "## Phase 37-42 deployment readiness"
+            echo
+            echo "- Evidence file: \`$DEPLOYMENT_READINESS_EVIDENCE_JSON\`"
+            echo "- Secrets: not accepted in evidence JSON"
+            echo "- Phases: Vercel linkage, env contract, database migration, build artifacts, auth traffic, final runbook"
+            echo "- The workflow fails closed if any phase fails."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload deployment-readiness result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-readiness-result-${{ github.run_id }}
+          path: |
+            apps/api/deployment-readiness-result.json
+          if-no-files-found: ignore
+          retention-days: 14

@@ -1,0 +1,105 @@
+name: Production Activation Readiness Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type RUN_PRODUCTION_ACTIVATION to evaluate Phases 43-46
+        required: true
+        type: string
+      evidence_json:
+        description: Non-secret JSON evidence object for production activation
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-activation-readiness
+  cancel-in-progress: false
+
+jobs:
+  production-activation-readiness:
+    name: Fail-closed Phase 43-46 production activation readiness
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      APP_ENV: production
+      FREE_ONLY: "true"
+      PRODUCTION_ACTIVATION_EVIDENCE_JSON: production-activation-evidence.json
+      PRODUCTION_ACTIVATION_EVIDENCE_JSON_INPUT: ${{ inputs.evidence_json }}
+    steps:
+      - name: Confirmation guard
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM" != "RUN_PRODUCTION_ACTIVATION" ]]; then
+            echo "Refusing production activation: confirmation text did not match."
+            exit 2
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+
+      - name: Install API runtime
+        run: pip install -e .
+
+      - name: Write non-secret activation evidence file
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          raw = os.environ.get("PRODUCTION_ACTIVATION_EVIDENCE_JSON_INPUT", "").strip()
+          if not raw:
+              raise SystemExit("evidence_json input is required")
+          payload = json.loads(raw)
+          if not isinstance(payload, dict):
+              raise SystemExit("evidence_json must be a JSON object")
+          Path(os.environ["PRODUCTION_ACTIVATION_EVIDENCE_JSON"]).write_text(
+              json.dumps(payload, indent=2, sort_keys=True),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Run Phase 43-46 gate
+        run: |
+          set -euo pipefail
+          python scripts/run_production_activation_gate.py \
+            --evidence-json "$PRODUCTION_ACTIVATION_EVIDENCE_JSON" \
+            | tee production-activation-result.json
+
+      - name: Publish production-activation summary
+        if: always()
+        run: |
+          {
+            echo "## Phase 43-46 production activation readiness"
+            echo
+            echo "- Evidence file: $PRODUCTION_ACTIVATION_EVIDENCE_JSON"
+            echo "- Secrets: not accepted in evidence JSON"
+            echo "- Phases: Vercel live project, production env, Supabase real data, Supabase security"
+            echo "- The workflow fails closed if any phase fails."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload production-activation result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-activation-result-${{ github.run_id }}
+          path: |
+            apps/api/production-activation-result.json
+          if-no-files-found: ignore
+          retention-days: 14

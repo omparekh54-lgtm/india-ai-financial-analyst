@@ -1,0 +1,105 @@
+name: Post-Launch Acceptance Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type RUN_POST_LAUNCH_GATE to evaluate Phases 31-36
+        required: true
+        type: string
+      evidence_json:
+        description: Non-secret JSON evidence object collected from production systems
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: post-launch-acceptance
+  cancel-in-progress: false
+
+jobs:
+  post-launch-gate:
+    name: Fail-closed Phase 31-36 acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      APP_ENV: production
+      FREE_ONLY: "true"
+      POST_LAUNCH_EVIDENCE_JSON: post-launch-evidence.json
+      POST_LAUNCH_EVIDENCE_JSON_INPUT: ${{ inputs.evidence_json }}
+    steps:
+      - name: Confirmation guard
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM" != "RUN_POST_LAUNCH_GATE" ]]; then
+            echo "Refusing post-launch acceptance: confirmation text did not match."
+            exit 2
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+
+      - name: Install API runtime
+        run: pip install -e .
+
+      - name: Write non-secret evidence file
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          raw = os.environ.get("POST_LAUNCH_EVIDENCE_JSON_INPUT", "").strip()
+          if not raw:
+              raise SystemExit("evidence_json input is required")
+          payload = json.loads(raw)
+          if not isinstance(payload, dict):
+              raise SystemExit("evidence_json must be a JSON object")
+          Path(os.environ["POST_LAUNCH_EVIDENCE_JSON"]).write_text(
+              json.dumps(payload, indent=2, sort_keys=True),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Run Phase 31-36 gate
+        run: |
+          set -euo pipefail
+          python scripts/run_post_launch_acceptance_gate.py \
+            --evidence-json "$POST_LAUNCH_EVIDENCE_JSON" \
+            | tee post-launch-acceptance-result.json
+
+      - name: Publish post-launch summary
+        if: always()
+        run: |
+          {
+            echo "## Phase 31-36 post-launch acceptance"
+            echo
+            echo "- Evidence file: \`$POST_LAUNCH_EVIDENCE_JSON\`"
+            echo "- Secrets: not accepted in evidence JSON"
+            echo "- Phases: observability, freshness, research quality, security, cost/quota, rollback/incident readiness"
+            echo "- The workflow fails closed if any phase fails."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload post-launch result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-launch-acceptance-result-${{ github.run_id }}
+          path: |
+            apps/api/post-launch-acceptance-result.json
+          if-no-files-found: ignore
+          retention-days: 14

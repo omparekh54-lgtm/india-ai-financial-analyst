@@ -1,0 +1,28 @@
+.readinessBar {
+  width: min(1180px, calc(100% - 40px));
+  margin: 10px auto -34px;
+  border: 1px solid #3d4651;
+  border-radius: 12px;
+  padding: 10px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: #9eabb8;
+  background: rgba(13,18,24,.92);
+}
+.readinessBar strong { color: #e5eaf0; }
+.readinessBar details { margin-left: auto; }
+.readinessBar summary { cursor: pointer; color: #b6c1cc; }
+.readinessBar details span { display: block; margin-top: 7px; max-width: 720px; color: #8b99a7; line-height: 1.45; text-align: right; }
+.readinessDot { width: 8px; height: 8px; border-radius: 999px; flex: 0 0 auto; }
+.readinessGreen { border-color: #315d45; background: rgba(30,68,48,.13); }
+.readinessGreen .readinessDot { background: #7ce2aa; box-shadow: 0 0 14px rgba(124,226,170,.4); }
+.readinessAmber { border-color: #5a4731; background: rgba(87,60,27,.12); }
+.readinessAmber .readinessDot { background: #e5bd72; box-shadow: 0 0 14px rgba(229,189,114,.3); }
+@media (max-width: 700px) {
+  .readinessBar { width: min(100% - 24px,1180px); margin-bottom: -20px; }
+  .readinessBar details { width: 100%; margin-left: 18px; }
+  .readinessBar details span { text-align: left; }
+}
