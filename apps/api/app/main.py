@@ -8,7 +8,7 @@ from uuid import UUID
 import sentry_sdk
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import ORJSONResponse, RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.auth import AuthenticatedUser, require_authenticated_user
@@ -55,7 +55,6 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     version="0.10.0",
-    default_response_class=ORJSONResponse,
     lifespan=lifespan,
 )
 app.add_middleware(
@@ -77,8 +76,8 @@ app.include_router(usage_router)
 async def research_usage_limit_handler(
     _request: Request,
     exc: ResearchUsageLimitError,
-) -> ORJSONResponse:
-    return ORJSONResponse(
+) -> JSONResponse:
+    return JSONResponse(
         status_code=429,
         content={
             "detail": {
@@ -132,14 +131,14 @@ async def health() -> dict[str, object]:
     }
 
 
-@app.get("/ready", response_class=ORJSONResponse)
-async def readiness() -> ORJSONResponse:
+@app.get("/ready", response_class=JSONResponse)
+async def readiness() -> JSONResponse:
     config_report = audit_settings(settings)
     db_ok = None
     if settings.database_url:
         db_ok = await database_health(create_database_engine(settings.database_url))
     ready = config_report.ready and db_ok is not False
-    return ORJSONResponse(
+    return JSONResponse(
         status_code=200 if ready else 503,
         content={
             "status": "ready" if ready else "not_ready",
