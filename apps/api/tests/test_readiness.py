@@ -56,6 +56,24 @@ def test_live_market_requires_complete_encrypted_upstox_configuration() -> None:
     assert "broker_encryption_invalid" in _codes(invalid_key)
 
 
+def test_railway_legacy_feature_flag_env_aliases_are_supported() -> None:
+    settings = Settings(
+        _env_file=None,
+        ENABLE_LIVE_MARKET_DATA="true",
+        ENABLE_EXTERNAL_PROVIDERS="true",
+        ENABLE_EVENT_SIGNALS="true",
+        ENABLE_TELEMETRY="true",
+        ENABLE_USAGE_BILLING="true",
+    )
+
+    assert settings.enable_live_market is True
+    assert settings.enable_external_llm_calls is True
+    assert settings.enable_external_data_calls is True
+    assert settings.enable_event_research is True
+    assert settings.enable_product_telemetry is True
+    assert settings.enable_usage_limits is True
+
+
 def test_valid_production_core_configuration_is_ready() -> None:
     settings = Settings(
         app_env="production",
