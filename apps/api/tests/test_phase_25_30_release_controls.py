@@ -1,4 +1,5 @@
 from uuid import UUID
+from pathlib import Path
 
 from app.core.config import Settings
 from app.core.provider_activation import evaluate_provider_activation
@@ -86,3 +87,10 @@ def test_real_company_acceptance_rejects_missing_evidence_and_nonproduction_mark
     assert report.ready is False
     assert any("claim_evidence_links_missing" in error for error in report.errors)
     assert any("nonproduction_source_marker_detected" in error for error in report.errors)
+
+
+def test_real_company_nonproduction_sql_scanner_uses_metadata_values_only() -> None:
+    source = Path("app/core/real_company_acceptance.py").read_text(encoding="utf-8")
+
+    assert "coalesce(src.metadata::text" not in source
+    assert "jsonb_each_text(coalesce(src.metadata, '{}'::jsonb))" in source

@@ -78,8 +78,19 @@ async def evaluate_real_company_acceptance(
           count(distinct ce.claim_id) as evidence_linked_claim_count,
           count(distinct ec.source_id) as linked_source_count,
           count(distinct src.id) filter (
-            where lower(concat_ws(' ', coalesce(src.source_uri,''), coalesce(src.source_type,''),
-              coalesce(src.title,''), coalesce(src.metadata::text,''))) ~ :nonproduction_re
+            where lower(
+              concat_ws(
+                ' ',
+                coalesce(src.source_uri, ''),
+                coalesce(src.source_type, ''),
+                coalesce(src.title, '')
+              )
+            ) ~ :nonproduction_re
+            or exists (
+              select 1
+              from jsonb_each_text(coalesce(src.metadata, '{}'::jsonb)) as metadata_values(key, value)
+              where lower(metadata_values.value) ~ :nonproduction_re
+            )
           ) as nonproduction_source_count
         from research_jobs j
         left join securities s on s.id=j.security_id
