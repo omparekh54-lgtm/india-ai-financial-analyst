@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import signal
 
 from app.brokers.repository import BrokerRepository
@@ -8,13 +9,16 @@ from app.core.config import get_settings
 from app.db import create_database_engine
 from app.market.upstox_stream import UpstoxLiveMarketWorker
 
+logger = logging.getLogger(__name__)
+
 
 async def _run() -> int:
     settings = get_settings()
     if not settings.database_url:
         raise RuntimeError("DATABASE_URL is not configured")
     if not settings.enable_live_market:
-        raise RuntimeError("ENABLE_LIVE_MARKET must be true to run the live market worker")
+        logger.warning("Live market worker is disabled; set ENABLE_LIVE_MARKET=true to run it")
+        return 0
     if not settings.broker_token_encryption_key:
         raise RuntimeError("BROKER_TOKEN_ENCRYPTION_KEY is not configured")
 
