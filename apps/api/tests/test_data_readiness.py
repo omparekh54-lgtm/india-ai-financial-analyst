@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from pathlib import Path
 
 from app.core.data_readiness import DataCoverage, evaluate_data_coverage
 
@@ -203,3 +204,10 @@ def test_fully_sourced_material_data_has_no_provenance_error() -> None:
     report = evaluate_data_coverage(_coverage())
     assert report.ready is True
     assert not any("without source provenance" in error for error in report.errors)
+
+
+def test_nonproduction_sql_scanner_does_not_match_false_synthetic_flag() -> None:
+    source = Path("app/core/data_readiness.py").read_text(encoding="utf-8")
+
+    assert "coalesce(metadata::text" not in source
+    assert "jsonb_each_text(coalesce(metadata, '{}'::jsonb))" in source

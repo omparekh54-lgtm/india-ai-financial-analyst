@@ -145,10 +145,15 @@ async def load_data_coverage(engine: AsyncEngine) -> DataCoverage:
                 ' ',
                 coalesce(source_uri, ''),
                 coalesce(source_type, ''),
-                coalesce(title, ''),
-                coalesce(metadata::text, '')
+                coalesce(title, '')
               )
             ) ~ '(^|[^a-z0-9])(synthetic|mock|fake|dummy|fixture|sample|generated|placeholder)([^a-z0-9]|$)'
+            or exists (
+              select 1
+              from jsonb_each_text(coalesce(metadata, '{}'::jsonb)) as metadata_values(key, value)
+              where lower(metadata_values.value) ~
+                '(^|[^a-z0-9])(synthetic|mock|fake|dummy|fixture|sample|generated|placeholder)([^a-z0-9]|$)'
+            )
           ) as nonproduction_sources,
           (select count(*) from evidence_chunks) as evidence_chunks,
           (select count(*) from evidence_chunks where embedding is not null) as embedded_evidence_chunks,
