@@ -141,7 +141,9 @@ class Settings(BaseSettings):
     # after source-governance review confirms a provider is not used in user-visible output.
     commercial_launch_enabled: bool = False
     commercial_require_free_only: bool = True
-    commercial_required_source_scopes: str = "NSE:*,BSE:*,RBI:*,FRED:*,TAVILY:*,UPSTOX:*"
+    commercial_required_source_scopes: str = (
+        "NSE:*,BSE:*,RBI:*,FRED:*,TAVILY:*,UPSTOX:*,YFINANCE:market_history"
+    )
 
     max_agent_concurrency: int = Field(default=6, ge=1, le=16)
     max_research_job_seconds: int = Field(default=240, ge=30, le=1800)

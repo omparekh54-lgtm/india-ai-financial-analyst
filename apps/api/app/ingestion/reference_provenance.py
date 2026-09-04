@@ -234,6 +234,80 @@ async def upsert_reference_source(
     return UUID(str(source_id))
 
 
+async def upsert_restricted_external_source(
+    engine: AsyncEngine,
+    *,
+    security_id: UUID,
+    source_type: str,
+    source_uri: str,
+    title: str,
+    published_at: datetime | None,
+    checksum: str,
+    freshness: str,
+    metadata: dict[str, object],
+) -> UUID:
+    """Persist an external source that is allowed for internal research only."""
+    normalized_type = source_type.strip().lower()
+    if not normalized_type or normalized_type.startswith("reference_"):
+        raise ValueError("restricted source_type must be non-empty and cannot use reference_*")
+    normalized_freshness = freshness.strip().lower()
+    if normalized_freshness not in {"near_live", "periodic", "historical"}:
+        raise ValueError("restricted source freshness must be near_live, periodic, or historical")
+    parameters = {
+        "security_id": security_id,
+        "source_type": normalized_type,
+        "source_uri": validate_source_uri(source_uri),
+        "title": title.strip() or None,
+        "published_at": published_at,
+        "freshness": normalized_freshness,
+        "checksum": checksum,
+        "metadata": json.dumps(
+            {
+                **metadata,
+                "production_approved": False,
+                "commercial_display_approved": False,
+                "allowed_use": "internal_research",
+                "provenance_class": "restricted_external_source",
+                "licensing_status": "not_approved_for_commercial_display",
+            }
+        ),
+    }
+    async with engine.begin() as connection:
+        source_id = await connection.scalar(
+            text(
+                """
+                insert into sources (
+                    security_id, source_type, source_uri, title, published_at,
+                    retrieved_at, freshness, checksum, metadata
+                ) values (
+                    :security_id, :source_type, :source_uri, :title, :published_at,
+                    now(), :freshness, :checksum, cast(:metadata as jsonb)
+                )
+                on conflict do nothing
+                returning id
+                """
+            ),
+            parameters,
+        )
+        if source_id is None:
+            source_id = await connection.scalar(
+                text(
+                    """
+                    select id from sources
+                    where security_id=:security_id
+                      and source_uri=:source_uri
+                      and coalesce(published_at, '1970-01-01 00:00:00+00'::timestamptz)
+                        = coalesce(:published_at, '1970-01-01 00:00:00+00'::timestamptz)
+                    limit 1
+                    """
+                ),
+                parameters,
+            )
+        if source_id is None:
+            raise RuntimeError("unable to resolve restricted source after upsert")
+    return UUID(str(source_id))
+
+
 def _is_official_host(host: str) -> bool:
     return any(host == suffix or host.endswith(f".{suffix}") for suffix in _OFFICIAL_SOURCE_HOST_SUFFIXES)
 
