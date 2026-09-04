@@ -6,11 +6,13 @@ import signal
 
 from app.core.config import get_settings
 from app.db import create_database_engine
+from app.observability import configure_sentry
 from app.workers.official_feeds import OfficialFeedWorker
 
 
 async def _run() -> int:
     settings = get_settings()
+    configure_sentry(settings, service="official-feed-worker")
     if not settings.database_url:
         raise RuntimeError("DATABASE_URL is not configured")
 

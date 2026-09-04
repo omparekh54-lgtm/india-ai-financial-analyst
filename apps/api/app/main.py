@@ -5,7 +5,6 @@ from typing import Annotated
 from urllib.parse import urlencode
 from uuid import UUID
 
-import sentry_sdk
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
@@ -24,6 +23,7 @@ from app.core.research_gate import ResearchCorpusNotReadyError, enforce_research
 from app.core.usage import ResearchUsageLimitError
 from app.db import create_database_engine, database_health
 from app.monitoring_api import router as monitoring_router
+from app.observability import configure_sentry
 from app.orchestration.plan import AnalysisMode, ResearchDepth, build_research_plan
 from app.portfolio_api import router as portfolio_router
 from app.providers.router import Capability, ProviderRouter
@@ -36,12 +36,7 @@ from app.watchlists_api import router as watchlists_router
 settings = get_settings()
 CurrentUser = Annotated[AuthenticatedUser, Depends(require_authenticated_user)]
 
-if settings.sentry_dsn:
-    sentry_sdk.init(
-        dsn=settings.sentry_dsn,
-        environment=settings.app_env,
-        traces_sample_rate=0.1,
-    )
+configure_sentry(settings, service="api")
 
 
 @asynccontextmanager
