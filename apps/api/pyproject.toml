@@ -38,6 +38,9 @@ embeddings = [
 live_market = [
   "upstox-python-sdk>=2.23,<3"
 ]
+market_imports = [
+  "yfinance>=1.0,<2"
+]
 documents = [
   "docling>=2.113,<3"
 ]
