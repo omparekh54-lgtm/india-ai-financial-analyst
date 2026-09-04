@@ -7,10 +7,12 @@ from app.brokers.repository import BrokerRepository
 from app.core.config import get_settings
 from app.db import create_database_engine
 from app.market.upstox_stream import UpstoxLiveMarketWorker
+from app.observability import configure_sentry
 
 
 async def _run() -> int:
     settings = get_settings()
+    configure_sentry(settings, service="live-market-worker")
     if not settings.database_url:
         raise RuntimeError("DATABASE_URL is not configured")
     if not settings.enable_live_market:

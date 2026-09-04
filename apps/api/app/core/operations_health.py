@@ -98,10 +98,31 @@ async def load_operations_health(
                            where e.snapshot_id=snap.id and e.horizon_sessions=20
                          )) as due_20_session_calibrations,
                       (select count(*) from monitoring_alerts where read_at is null)
-                        as total_unread_monitoring_alerts
+                        as total_unread_monitoring_alerts,
+                      (select count(*) from live_market_subscriptions
+                         where active_until > :now) as active_live_subscriptions,
+                      (select count(*) from broker_stream_leases
+                         where leased_until > :now) as active_live_stream_leases,
+                      (select count(*) from user_live_quotes
+                         where received_at >= :now - make_interval(secs => :quote_fresh_seconds))
+                        as fresh_live_quotes,
+                      (select count(*)
+                         from live_market_subscriptions sub
+                         where sub.active_until > :now
+                           and not exists (
+                             select 1 from user_live_quotes quote
+                             where quote.user_id=sub.user_id
+                               and quote.security_id=sub.security_id
+                               and quote.provider=sub.provider
+                               and quote.received_at >=
+                                 :now - make_interval(secs => :quote_fresh_seconds)
+                           )) as stale_active_live_subscriptions
                     """
                 ),
-                {"now": now},
+                {
+                    "now": now,
+                    "quote_fresh_seconds": settings.live_market_quote_fresh_seconds,
+                },
             )
         ).mappings().one()
 
@@ -121,6 +142,15 @@ async def load_operations_health(
     if int(row["stale_enabled_official_feeds"] or 0) > 0:
         errors.append(f"Stale enabled official feeds: {row['stale_enabled_official_feeds']}")
 
+    live_errors, live_warnings = evaluate_live_market_operations(
+        enabled=settings.enable_live_market,
+        active_subscriptions=int(row["active_live_subscriptions"] or 0),
+        active_leases=int(row["active_live_stream_leases"] or 0),
+        fresh_quotes=int(row["fresh_live_quotes"] or 0),
+        stale_subscriptions=int(row["stale_active_live_subscriptions"] or 0),
+    )
+    errors.extend(live_errors)
+
     warnings = list(corpus.warnings)
     if int(row["stale_queued_jobs"] or 0) > 0:
         warnings.append(f"Research jobs queued over 15 minutes: {row['stale_queued_jobs']}")
@@ -136,6 +166,7 @@ async def load_operations_health(
         warnings.append(
             f"Mature snapshots waiting for 20-session calibration: {row['due_20_session_calibrations']}"
         )
+    warnings.extend(live_warnings)
 
     return OperationsHealthReport(
         ready=not errors,
@@ -149,3 +180,30 @@ def _value(value: Any) -> object:
     if isinstance(value, datetime):
         return value.isoformat()
     return value
+
+
+def evaluate_live_market_operations(
+    *,
+    enabled: bool,
+    active_subscriptions: int,
+    active_leases: int,
+    fresh_quotes: int,
+    stale_subscriptions: int,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if not enabled:
+        return (), ()
+
+    errors: list[str] = []
+    warnings: list[str] = []
+    if active_subscriptions == 0:
+        warnings.append("Live market is enabled but has no active user subscriptions.")
+    else:
+        if active_leases == 0:
+            errors.append("Live market has active subscriptions but no active stream lease.")
+        if fresh_quotes == 0:
+            errors.append("Live market has active subscriptions but no fresh quotes.")
+        if stale_subscriptions > 0:
+            errors.append(
+                f"Active live-market subscriptions without fresh quotes: {stale_subscriptions}"
+            )
+    return tuple(errors), tuple(warnings)
