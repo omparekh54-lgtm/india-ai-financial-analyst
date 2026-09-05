@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import json
 from dataclasses import asdict, dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import text
@@ -26,6 +26,27 @@ class HistoryTarget:
     symbol: str
     legal_name: str
     exchange: str
+
+
+def resolve_date_range(
+    *,
+    from_date: date | None,
+    to_date: date | None,
+    lookback_days: int | None,
+    today: date | None = None,
+) -> tuple[date, date]:
+    end_date = to_date or today or datetime.now(UTC).date()
+    if lookback_days is not None:
+        if lookback_days < 1 or lookback_days > 365:
+            raise ValueError("--lookback-days must be between 1 and 365")
+        start_date = end_date - timedelta(days=lookback_days)
+    elif from_date is not None:
+        start_date = from_date
+    else:
+        raise ValueError("one of --from-date or --lookback-days is required")
+    if start_date > end_date:
+        raise ValueError("--from-date cannot be after --to-date")
+    return start_date, end_date
 
 
 async def _target_for_identifier(engine: AsyncEngine, identifier: str) -> HistoryTarget:
@@ -106,8 +127,14 @@ async def _run() -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--security", action="append", help="NSE symbol, BSE code, or ISIN")
     group.add_argument("--all", action="store_true", help="Process a bounded NSE batch")
-    parser.add_argument("--from-date", type=date.fromisoformat, required=True)
-    parser.add_argument("--to-date", type=date.fromisoformat, default=datetime.now(UTC).date())
+    date_group = parser.add_mutually_exclusive_group(required=True)
+    date_group.add_argument("--from-date", type=date.fromisoformat)
+    date_group.add_argument(
+        "--lookback-days",
+        type=int,
+        help="Rolling calendar-day window ending at --to-date or today",
+    )
+    parser.add_argument("--to-date", type=date.fromisoformat)
     parser.add_argument("--interval", default="1d")
     parser.add_argument("--limit", type=int, default=25)
     parser.add_argument("--after-symbol")
@@ -116,8 +143,14 @@ async def _run() -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    if args.from_date > args.to_date:
-        parser.error("--from-date cannot be after --to-date")
+    try:
+        from_date, to_date = resolve_date_range(
+            from_date=args.from_date,
+            to_date=args.to_date,
+            lookback_days=args.lookback_days,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.limit < 1 or args.limit > 100:
         parser.error("--limit must be between 1 and 100")
     if args.request_delay_seconds < 0 or args.request_delay_seconds > 10:
@@ -164,8 +197,8 @@ async def _run() -> int:
                 fetched = await client.fetch_history(
                     target.symbol,
                     exchange=target.exchange,
-                    from_date=args.from_date,
-                    to_date=args.to_date,
+                    from_date=from_date,
+                    to_date=to_date,
                     interval=args.interval,
                 )
                 source_id = await upsert_restricted_external_source(
@@ -181,8 +214,8 @@ async def _run() -> int:
                         "provider": "yfinance",
                         "yahoo_symbol": fetched.yahoo_symbol,
                         "interval": args.interval,
-                        "from_date": args.from_date.isoformat(),
-                        "to_date": args.to_date.isoformat(),
+                        "from_date": from_date.isoformat(),
+                        "to_date": to_date.isoformat(),
                         "importer": "backfill_yfinance_market_history",
                     },
                 )

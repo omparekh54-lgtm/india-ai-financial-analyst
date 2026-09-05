@@ -9,6 +9,7 @@ from app.connectors.yahoo_finance import (
     parse_history_frame,
     yahoo_symbol,
 )
+from scripts.backfill_yfinance_market_history import resolve_date_range
 
 
 def test_yahoo_symbol_maps_indian_exchanges() -> None:
@@ -69,4 +70,22 @@ async def test_client_rejects_intraday_window_over_sixty_days() -> None:
             from_date=date(2026, 1, 1),
             to_date=date(2026, 4, 1),
             interval="1m",
+        )
+
+
+def test_resolve_date_range_supports_rolling_refresh() -> None:
+    assert resolve_date_range(
+        from_date=None,
+        to_date=None,
+        lookback_days=10,
+        today=date(2026, 9, 5),
+    ) == (date(2026, 8, 26), date(2026, 9, 5))
+
+
+def test_resolve_date_range_rejects_unbounded_lookback() -> None:
+    with pytest.raises(ValueError, match="between 1 and 365"):
+        resolve_date_range(
+            from_date=None,
+            to_date=date(2026, 9, 5),
+            lookback_days=366,
         )
