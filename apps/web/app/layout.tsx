@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { BrokerConnectionBar } from "./broker-connection-bar";
+import { ErrorMonitor } from "./error-monitor";
 import "./broker.css";
 import "./globals.css";
 import "./readiness.css";
@@ -16,6 +17,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="en">
       <body>
+        <ErrorMonitor />
         <BrokerConnectionBar />
         <SystemReadinessBar />
         <nav
