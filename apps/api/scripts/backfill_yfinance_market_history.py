@@ -108,14 +108,21 @@ async def _all_targets(
                 await connection.execute(
                     text(
                         """
-                    select id, nse_symbol, legal_name,
-                           metadata->>'date_of_listing' as date_of_listing
-                    from securities
-                    where primary_exchange='NSE'
-                      and coalesce(metadata->>'nse_series', 'EQ')='EQ'
-                      and nse_symbol is not null
-                      and (:after_symbol is null or nse_symbol > :after_symbol)
-                    order by nse_symbol
+                    select s.id, s.nse_symbol, s.legal_name,
+                           s.metadata->>'date_of_listing' as date_of_listing
+                    from securities s
+                    left join lateral (
+                        select max(mb.ts) as latest_bar_ts
+                        from market_bars mb
+                        where mb.security_id = s.id
+                          and mb.interval = '1d'
+                          and mb.provider = 'yfinance'
+                    ) coverage on true
+                    where s.primary_exchange='NSE'
+                      and coalesce(s.metadata->>'nse_series', 'EQ')='EQ'
+                      and s.nse_symbol is not null
+                      and (:after_symbol is null or s.nse_symbol > :after_symbol)
+                    order by coverage.latest_bar_ts asc nulls first, s.nse_symbol
                     limit :limit
                     """
                     ),
