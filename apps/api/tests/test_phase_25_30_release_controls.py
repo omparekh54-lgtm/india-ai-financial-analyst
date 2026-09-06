@@ -1,5 +1,5 @@
-from uuid import UUID
 from pathlib import Path
+from uuid import UUID
 
 from app.core.config import Settings
 from app.core.provider_activation import evaluate_provider_activation

@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -9,7 +10,7 @@ from app.connectors.yahoo_finance import (
     parse_history_frame,
     yahoo_symbol,
 )
-from scripts.backfill_yfinance_market_history import resolve_date_range
+from scripts.backfill_yfinance_market_history import previous_completed_day, resolve_date_range
 
 
 def test_yahoo_symbol_maps_indian_exchanges() -> None:
@@ -89,3 +90,17 @@ def test_resolve_date_range_rejects_unbounded_lookback() -> None:
             to_date=date(2026, 9, 5),
             lookback_days=366,
         )
+
+
+def test_previous_completed_day_uses_india_calendar_date() -> None:
+    assert previous_completed_day(
+        now=datetime(2026, 9, 2, 0, 15, tzinfo=ZoneInfo("Asia/Kolkata"))
+    ) == date(2026, 9, 1)
+    assert previous_completed_day(
+        now=datetime(2026, 9, 1, 20, 0, tzinfo=UTC)
+    ) == date(2026, 9, 1)
+
+
+def test_previous_completed_day_rejects_naive_clock() -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        previous_completed_day(now=datetime(2026, 9, 2, 12, 0))  # noqa: DTZ001

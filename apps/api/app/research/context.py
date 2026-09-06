@@ -76,6 +76,17 @@ class DatabaseResearchContextLoader:
                         select ts, open, high, low, close, volume, provider, is_adjusted
                         from market_bars
                         where security_id = :security_id and interval in ('1d', 'day', 'daily')
+                          and source_id is not null
+                          and (ts at time zone 'Asia/Kolkata')::date
+                              < (now() at time zone 'Asia/Kolkata')::date
+                          and provider = (
+                            select provider from market_bars
+                            where security_id = :security_id and interval in ('1d', 'day', 'daily')
+                              and source_id is not null
+                              and (ts at time zone 'Asia/Kolkata')::date
+                                  < (now() at time zone 'Asia/Kolkata')::date
+                            group by provider order by count(*) desc, provider limit 1
+                          )
                         order by ts desc
                         limit 260
                         """
@@ -83,6 +94,55 @@ class DatabaseResearchContextLoader:
                     {"security_id": security_id},
                 )
             ).mappings().all()
+
+            history_profile_row = (
+                await connection.execute(
+                    text(
+                        """
+                        with daily as (
+                          select ts, close::double precision as close,
+                                 high::double precision as high,
+                                 low::double precision as low
+                          from market_bars
+                          where security_id = :security_id
+                            and interval in ('1d', 'day', 'daily')
+                            and source_id is not null
+                            and (ts at time zone 'Asia/Kolkata')::date
+                                < (now() at time zone 'Asia/Kolkata')::date
+                            and provider = (
+                              select provider from market_bars
+                              where security_id = :security_id
+                                and interval in ('1d', 'day', 'daily')
+                                and source_id is not null
+                                and (ts at time zone 'Asia/Kolkata')::date
+                                    < (now() at time zone 'Asia/Kolkata')::date
+                              group by provider order by count(*) desc, provider limit 1
+                            )
+                        ), path as (
+                          select *, max(close) over (
+                            order by ts rows between unbounded preceding and current row
+                          ) as running_peak
+                          from daily
+                        )
+                        select
+                          count(*) as trading_sessions,
+                          min(ts) as first_bar_at,
+                          max(ts) as last_bar_at,
+                          (array_agg(close order by ts))[1] as first_close,
+                          (array_agg(close order by ts desc))[1] as latest_close,
+                          max(high) as all_time_high,
+                          min(low) as all_time_low,
+                          min(
+                            case when running_peak > 0
+                              then ((close / running_peak) - 1.0) * 100.0
+                            end
+                          ) as max_drawdown_pct
+                        from path
+                        """
+                    ),
+                    {"security_id": security_id},
+                )
+            ).mappings().one()
 
             event_rows = (
                 await connection.execute(
@@ -141,6 +201,10 @@ class DatabaseResearchContextLoader:
         quote = _market_quote(bar_rows)
         if quote:
             context["market_quote"] = quote
+
+        history_profile = _market_history_profile(history_profile_row)
+        if history_profile:
+            context["market_history_profile"] = history_profile
 
         valuation_inputs = _valuation_factual_inputs(security, financials, quote)
         if valuation_inputs:
@@ -254,6 +318,35 @@ def _market_quote(rows: list[Row]) -> dict[str, object] | None:
         "provider": latest["provider"],
         "is_delayed": True,
         "as_of": latest["ts"].isoformat(),
+    }
+
+
+def _market_history_profile(row: Row) -> dict[str, object]:
+    sessions = int(row.get("trading_sessions") or 0)
+    first_close = _float(row.get("first_close"))
+    latest_close = _float(row.get("latest_close"))
+    if sessions <= 0 or first_close is None or latest_close is None:
+        return {}
+    lifetime_return = None
+    if first_close != 0:
+        lifetime_return = (latest_close / first_close - 1.0) * 100.0
+    return {
+        "trading_sessions": sessions,
+        "first_bar_at": _iso(row.get("first_bar_at")),
+        "last_bar_at": _iso(row.get("last_bar_at")),
+        "first_close": first_close,
+        "latest_close": latest_close,
+        "all_time_high": _float(row.get("all_time_high")),
+        "all_time_low": _float(row.get("all_time_low")),
+        "lifetime_return_pct": lifetime_return,
+        "max_drawdown_pct": _float(row.get("max_drawdown_pct")),
+        "frequency": "daily",
+        "is_delayed": True,
+        "limitation": (
+            "Available stored price history only, not verified IPO-to-date completeness. "
+            "Prices are not total-return adjusted; splits, dividends and missing sessions "
+            "can distort lifetime returns and drawdowns."
+        ),
     }
 
 

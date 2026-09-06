@@ -1,6 +1,8 @@
 import json
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from time import monotonic
 from typing import Annotated
 from urllib.parse import urlencode
 from uuid import UUID
@@ -23,7 +25,7 @@ from app.core.research_gate import ResearchCorpusNotReadyError, enforce_research
 from app.core.usage import ResearchUsageLimitError
 from app.db import create_database_engine, database_health
 from app.monitoring_api import router as monitoring_router
-from app.observability import configure_sentry
+from app.observability import capture_browser_error, configure_sentry
 from app.orchestration.plan import AnalysisMode, ResearchDepth, build_research_plan
 from app.portfolio_api import router as portfolio_router
 from app.providers.router import Capability, ProviderRouter
@@ -37,6 +39,20 @@ settings = get_settings()
 CurrentUser = Annotated[AuthenticatedUser, Depends(require_authenticated_user)]
 
 configure_sentry(settings, service="api")
+
+# Per-process abuse guard for authenticated browser telemetry; bounded memory.
+_browser_error_windows: OrderedDict[UUID, tuple[float, int]] = OrderedDict()
+
+
+def _allow_browser_error(user_id: UUID) -> bool:
+    now = monotonic()
+    started, count = _browser_error_windows.pop(user_id, (now, 0))
+    if now - started >= 60:
+        started, count = now, 0
+    _browser_error_windows[user_id] = (started, count + 1)
+    if len(_browser_error_windows) > 10000:
+        _browser_error_windows.popitem(last=False)
+    return count < 5
 
 
 @asynccontextmanager
@@ -97,6 +113,16 @@ class ResearchRunRequest(ResearchPlanRequest):
     """Public research request. Evidence/context injection is intentionally not accepted."""
 
 
+class BrowserErrorRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str = Field(min_length=1, max_length=40)
+    message: str = Field(min_length=1, max_length=1000)
+    page_path: str = Field(min_length=1, max_length=500, pattern=r"^/")
+    stack: str | None = Field(default=None, max_length=4000)
+    metadata: dict[str, str] = Field(default_factory=dict, max_length=10)
+
+
 @app.get("/health")
 async def health() -> dict[str, object]:
     db_ok = None
@@ -110,6 +136,7 @@ async def health() -> dict[str, object]:
         "database_configured": bool(settings.database_url),
         "database_healthy": db_ok,
         "auth_configured": bool(settings.supabase_url and settings.supabase_publishable_key),
+        "error_monitoring_configured": bool(settings.sentry_dsn),
         "upstox_oauth_configured": bool(
             settings.upstox_client_id
             and settings.upstox_client_secret
@@ -191,6 +218,24 @@ async def data_readiness(_user: CurrentUser) -> dict[str, object]:
 @app.get("/v1/auth/me")
 async def auth_me(user: CurrentUser) -> dict[str, object]:
     return {"id": str(user.id), "email": user.email}
+
+
+@app.post("/v1/system/browser-errors", status_code=202)
+async def report_browser_error(
+    report: BrowserErrorRequest,
+    _user: CurrentUser,
+) -> dict[str, object]:
+    if not _allow_browser_error(_user.id):
+        raise HTTPException(status_code=429, detail="Browser error reporting rate limit reached")
+    captured = capture_browser_error(
+        settings,
+        kind=report.kind,
+        message=report.message,
+        page_path=report.page_path,
+        stack=report.stack,
+        metadata=report.metadata,
+    )
+    return {"accepted": True, "external_monitoring_configured": captured}
 
 
 @app.get("/v1/brokers")

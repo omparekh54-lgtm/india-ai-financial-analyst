@@ -98,3 +98,27 @@ async def test_technical_agent_does_not_fake_derivatives_when_context_is_absent(
     )
 
     assert "derivatives" not in output.metrics
+
+
+@pytest.mark.asyncio
+async def test_technical_agent_exposes_listing_to_date_market_profile() -> None:
+    output = await TechnicalDerivativesAgent().run(
+        AgentInput(
+            job_id=uuid4(),
+            query="EXAMPLE",
+            context={
+                "market_bars": _bars(),
+                "market_history_profile": {
+                    "trading_sessions": 5200,
+                    "all_time_high": 3217.6,
+                    "all_time_low": 8.2,
+                    "lifetime_return_pct": 9412.5,
+                    "max_drawdown_pct": -62.4,
+                },
+            },
+        )
+    )
+
+    assert output.metrics["trading_sessions"] == pytest.approx(5200)
+    assert output.metrics["lifetime_return_pct"] == pytest.approx(9412.5)
+    assert output.metrics["max_drawdown_pct"] == pytest.approx(-62.4)

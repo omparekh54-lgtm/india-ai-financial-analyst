@@ -42,6 +42,18 @@ class TechnicalDerivativesAgent:
             "atr_14": _last_valid(atr(high, low, close)),
             "realized_volatility_20d": _last_valid(realized_volatility(close)),
         }
+        history_profile = agent_input.context.get("market_history_profile")
+        if isinstance(history_profile, dict):
+            for name in (
+                "trading_sessions",
+                "all_time_high",
+                "all_time_low",
+                "lifetime_return_pct",
+                "max_drawdown_pct",
+            ):
+                history_value = _number(history_profile.get(name))
+                if history_value is not None:
+                    metrics[name] = history_value
         derivatives = _derivatives_metrics(agent_input.context.get("derivatives"))
         if derivatives:
             metrics["derivatives"] = derivatives
@@ -89,6 +101,8 @@ class TechnicalDerivativesAgent:
             )
 
         warnings: list[str] = []
+        if isinstance(history_profile, dict) and history_profile.get("limitation"):
+            warnings.append(str(history_profile["limitation"]))
         if not evidence_ids:
             warnings.append("Technical calculations lack market-data provenance")
         if derivatives and not any("derivative" in item.source_type.lower() for item in evidence):
