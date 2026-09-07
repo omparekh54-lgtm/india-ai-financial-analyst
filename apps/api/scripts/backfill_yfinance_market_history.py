@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import json
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -33,6 +33,7 @@ class HistoryTarget:
     legal_name: str
     exchange: str
     listing_date: date | None
+    checkpoint: dict[str, object] | None = None
 
 
 def previous_completed_day(*, now: datetime | None = None) -> date:
@@ -41,6 +42,44 @@ def previous_completed_day(*, now: datetime | None = None) -> date:
     if current.tzinfo is None:
         raise ValueError("now must be timezone-aware")
     return current.astimezone(_INDIA_TIMEZONE).date() - timedelta(days=1)
+
+
+def refresh_end_day(*, now: datetime | None = None) -> date:
+    current = now or datetime.now(_INDIA_TIMEZONE)
+    if current.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    local = current.astimezone(_INDIA_TIMEZONE)
+    if local.weekday() < 5 and local.hour >= 18:
+        return local.date()
+    return local.date() - timedelta(days=1)
+
+
+def refresh_start_day(target: HistoryTarget) -> date:
+    checkpoint = target.checkpoint or {}
+    latest = checkpoint.get("last_bar_date")
+    if checkpoint.get("initial_history_imported") and latest:
+        # Re-fetch an overlap to pick up recent provider corrections and holidays.
+        return max(
+            target.listing_date or _NSE_FALLBACK_START,
+            date.fromisoformat(str(latest)) - timedelta(days=7),
+        )
+    return target.listing_date or _NSE_FALLBACK_START
+
+
+async def save_checkpoint(
+    engine: AsyncEngine, target: HistoryTarget, updates: dict[str, object]
+) -> None:
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("""
+                update securities set metadata = jsonb_set(
+                    coalesce(metadata, '{}'::jsonb), '{yahoo_history_import}',
+                    coalesce(metadata->'yahoo_history_import', '{}'::jsonb)
+                        || cast(:updates as jsonb)), updated_at = now()
+                where id = :security_id
+            """),
+            {"security_id": target.security_id, "updates": json.dumps(updates)},
+        )
 
 
 def resolve_date_range(
@@ -101,6 +140,8 @@ async def _all_targets(
     *,
     limit: int,
     after_symbol: str | None,
+    daily_refresh: bool = False,
+    to_date: date | None = None,
 ) -> list[HistoryTarget]:
     async with engine.connect() as connection:
         rows = (
@@ -109,7 +150,8 @@ async def _all_targets(
                     text(
                         """
                     select s.id, s.nse_symbol, s.legal_name,
-                           s.metadata->>'date_of_listing' as date_of_listing
+                           s.metadata->>'date_of_listing' as date_of_listing,
+                           s.metadata->'yahoo_history_import' as checkpoint
                     from securities s
                     left join lateral (
                         select max(mb.ts) as latest_bar_ts
@@ -123,6 +165,12 @@ async def _all_targets(
                       and s.nse_symbol is not null
                       and (cast(:after_symbol as text) is null
                            or s.nse_symbol > cast(:after_symbol as text))
+                      and (not :daily_refresh or (
+                          coalesce(s.metadata->'yahoo_history_import'->>'checked_through', '')
+                              < cast(:to_date as text)
+                          and coalesce(
+                              s.metadata->'yahoo_history_import'->>'retry_after', '')
+                              < cast(:now as text)))
                     order by coverage.latest_bar_ts asc nulls first, s.nse_symbol
                     limit :limit
                     """
@@ -130,6 +178,9 @@ async def _all_targets(
                     {
                         "after_symbol": after_symbol.upper() if after_symbol else None,
                         "limit": limit,
+                        "daily_refresh": daily_refresh,
+                        "to_date": to_date.isoformat() if to_date else "",
+                        "now": datetime.now(UTC).isoformat(),
                     },
                 )
             )
@@ -143,6 +194,7 @@ async def _all_targets(
             str(row["legal_name"]),
             "NSE",
             _parse_listing_date(row.get("date_of_listing")),
+            row.get("checkpoint"),
         )
         for row in rows
     ]
@@ -181,9 +233,18 @@ async def _run() -> int:
     parser.add_argument("--request-delay-seconds", type=float, default=0.5)
     parser.add_argument("--confirm-yahoo-research-use", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--daily-refresh",
+        action="store_true",
+        help="Sweep all eligible stocks with durable checkpoints and incremental daily updates",
+    )
     args = parser.parse_args()
 
-    to_date = args.to_date or previous_completed_day()
+    if args.daily_refresh and (not args.all or not args.from_listing or args.interval != "1d"):
+        parser.error("--daily-refresh requires --all --from-listing --interval 1d")
+    to_date = args.to_date or (
+        refresh_end_day() if args.daily_refresh else previous_completed_day()
+    )
     from_date: date | None = None
     if not args.from_listing:
         try:
@@ -194,8 +255,9 @@ async def _run() -> int:
             )
         except ValueError as exc:
             parser.error(str(exc))
-    if args.limit < 1 or args.limit > 100:
-        parser.error("--limit must be between 1 and 100")
+    max_limit = 10000 if args.daily_refresh else 100
+    if args.limit < 1 or args.limit > max_limit:
+        parser.error(f"--limit must be between 1 and {max_limit}")
     if args.request_delay_seconds < 0 or args.request_delay_seconds > 10:
         parser.error("--request-delay-seconds must be between 0 and 10")
     if args.after_symbol and not args.all:
@@ -210,7 +272,13 @@ async def _run() -> int:
     engine = create_database_engine(settings.database_url)
     try:
         targets = (
-            await _all_targets(engine, limit=args.limit, after_symbol=args.after_symbol)
+            await _all_targets(
+                engine,
+                limit=args.limit,
+                after_symbol=args.after_symbol,
+                daily_refresh=args.daily_refresh,
+                to_date=to_date,
+            )
             if args.all
             else [await _target_for_identifier(engine, value) for value in args.security or []]
         )
@@ -250,10 +318,10 @@ async def _run() -> int:
         for position, target in enumerate(targets):
             try:
                 target_from_date = (
-                    target.listing_date or _NSE_FALLBACK_START
-                    if args.from_listing
-                    else from_date
+                    target.listing_date or _NSE_FALLBACK_START if args.from_listing else from_date
                 )
+                if args.daily_refresh:
+                    target_from_date = refresh_start_day(target)
                 if target_from_date is None:
                     raise ValueError("history start date could not be resolved")
                 if target_from_date > to_date:
@@ -272,7 +340,10 @@ async def _run() -> int:
                     engine,
                     security_id=target.security_id,
                     source_type="restricted_market_data",
-                    source_uri=fetched.source_url,
+                    source_uri=(
+                        f"{fetched.source_url}?from={target_from_date}&to={to_date}"
+                        f"&interval={args.interval}"
+                    ),
                     title=f"Yahoo Finance delayed market history - {target.symbol}",
                     published_at=max(bar.ts for bar in fetched.bars),
                     checksum=fetched.response_sha256,
@@ -283,7 +354,14 @@ async def _run() -> int:
                         "interval": args.interval,
                         "from_date": target_from_date.isoformat(),
                         "to_date": to_date.isoformat(),
-                        "range_policy": "listing_to_previous_day" if args.from_listing else "bounded",
+                        "range_policy": (
+                            "incremental_daily"
+                            if args.daily_refresh
+                            and (target.checkpoint or {}).get("initial_history_imported")
+                            else "listing_to_previous_day"
+                            if args.from_listing
+                            else "bounded"
+                        ),
                         "listing_date_available": target.listing_date is not None,
                         "importer": "backfill_yfinance_market_history",
                     },
@@ -293,6 +371,29 @@ async def _run() -> int:
                     bars=list(fetched.bars),
                     source_id=source_id,
                 )
+                if args.daily_refresh:
+                    first = min(bar.ts for bar in fetched.bars).astimezone(_INDIA_TIMEZONE).date()
+                    last = max(bar.ts for bar in fetched.bars).astimezone(_INDIA_TIMEZONE).date()
+                    await save_checkpoint(
+                        engine,
+                        target,
+                        {
+                            "initial_history_imported": True,
+                            "status": "imported_available_history",
+                            "checked_through": to_date.isoformat(),
+                            "first_bar_date": (target.checkpoint or {}).get(
+                                "first_bar_date", first.isoformat()
+                            ),
+                            "last_bar_date": last.isoformat(),
+                            "listing_date": target.listing_date.isoformat()
+                            if target.listing_date
+                            else None,
+                            "last_source_id": str(source_id),
+                            "last_attempt_at": datetime.now(UTC).isoformat(),
+                            "retry_after": "",
+                            "last_error": None,
+                        },
+                    )
                 results.append(
                     {
                         "symbol": target.symbol,
@@ -305,6 +406,18 @@ async def _run() -> int:
                 failures += 1
                 results.append({"symbol": target.symbol, "ok": False, "error": str(exc)})
                 sentry_sdk.capture_exception(exc)
+                if args.daily_refresh:
+                    await save_checkpoint(
+                        engine,
+                        target,
+                        {
+                            "status": "failed_or_unavailable",
+                            "last_error": str(exc)[:500],
+                            "last_attempt_at": datetime.now(UTC).isoformat(),
+                            "retry_after": (datetime.now(UTC) + timedelta(hours=24)).isoformat(),
+                        },
+                    )
+            print(json.dumps({"event": "symbol_result", **results[-1]}), flush=True)
             if position + 1 < len(targets) and args.request_delay_seconds:
                 await asyncio.sleep(args.request_delay_seconds)
 
