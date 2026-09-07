@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -10,13 +11,51 @@ from app.connectors.yahoo_finance import (
     parse_history_frame,
     yahoo_symbol,
 )
-from scripts.backfill_yfinance_market_history import previous_completed_day, resolve_date_range
+from scripts.backfill_yfinance_market_history import (
+    HistoryTarget,
+    previous_completed_day,
+    refresh_end_day,
+    refresh_start_day,
+    resolve_date_range,
+)
 
 
 def test_yahoo_symbol_maps_indian_exchanges() -> None:
     assert yahoo_symbol("RELIANCE", "NSE") == "RELIANCE.NS"
     assert yahoo_symbol("500325", "BSE") == "500325.BO"
     assert yahoo_symbol("INFY.NS", "NSE") == "INFY.NS"
+
+
+def test_daily_refresh_only_includes_today_after_six_pm_india() -> None:
+    tz = ZoneInfo("Asia/Kolkata")
+    assert refresh_end_day(now=datetime(2026, 9, 7, 17, 59, tzinfo=tz)) == date(2026, 9, 6)
+    assert refresh_end_day(now=datetime(2026, 9, 7, 18, 0, tzinfo=tz)) == date(2026, 9, 7)
+
+
+def test_daily_refresh_starts_from_listing_until_checkpointed() -> None:
+    target = HistoryTarget(uuid4(), "TEST", "Test", "NSE", date(2001, 1, 1))
+    assert refresh_start_day(target) == date(2001, 1, 1)
+    failed = HistoryTarget(
+        target.security_id,
+        "TEST",
+        "Test",
+        "NSE",
+        target.listing_date,
+        {"status": "failed_or_unavailable", "last_bar_date": "2026-09-04"},
+    )
+    assert refresh_start_day(failed) == date(2001, 1, 1)
+
+
+def test_daily_refresh_rechecks_overlap_after_successful_initial_import() -> None:
+    target = HistoryTarget(
+        uuid4(),
+        "TEST",
+        "Test",
+        "NSE",
+        date(2001, 1, 1),
+        {"initial_history_imported": True, "last_bar_date": "2026-09-04"},
+    )
+    assert refresh_start_day(target) == date(2026, 8, 28)
 
 
 def test_parse_history_frame_normalizes_ohlcv() -> None:
@@ -96,9 +135,7 @@ def test_previous_completed_day_uses_india_calendar_date() -> None:
     assert previous_completed_day(
         now=datetime(2026, 9, 2, 0, 15, tzinfo=ZoneInfo("Asia/Kolkata"))
     ) == date(2026, 9, 1)
-    assert previous_completed_day(
-        now=datetime(2026, 9, 1, 20, 0, tzinfo=UTC)
-    ) == date(2026, 9, 1)
+    assert previous_completed_day(now=datetime(2026, 9, 1, 20, 0, tzinfo=UTC)) == date(2026, 9, 1)
 
 
 def test_previous_completed_day_rejects_naive_clock() -> None:
