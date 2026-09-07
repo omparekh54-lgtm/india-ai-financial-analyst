@@ -37,7 +37,7 @@ class MarketBarIngestor:
     ) -> dict[str, int]:
         normalized = [normalize_market_bar(bar) for bar in bars]
         async with self.engine.begin() as connection:
-            for bar in normalized:
+            for offset in range(0, len(normalized), 500):
                 await connection.execute(
                     text(
                         """
@@ -59,11 +59,14 @@ class MarketBarIngestor:
                             source_id = coalesce(excluded.source_id, market_bars.source_id)
                         """
                     ),
-                    {
-                        "security_id": security_id,
-                        "source_id": source_id,
-                        **_bar_parameters(bar),
-                    },
+                    [
+                        {
+                            "security_id": security_id,
+                            "source_id": source_id,
+                            **_bar_parameters(bar),
+                        }
+                        for bar in normalized[offset : offset + 500]
+                    ],
                 )
         return {"input_count": len(bars), "normalized_count": len(normalized)}
 
