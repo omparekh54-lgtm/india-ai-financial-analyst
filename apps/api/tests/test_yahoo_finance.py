@@ -1,4 +1,5 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -11,6 +12,7 @@ from app.connectors.yahoo_finance import (
     parse_history_frame,
     yahoo_symbol,
 )
+from app.ingestion.market import MarketBarIngestor, MarketBarInput
 from scripts.backfill_yfinance_market_history import (
     HistoryTarget,
     previous_completed_day,
@@ -56,6 +58,38 @@ def test_daily_refresh_rechecks_overlap_after_successful_initial_import() -> Non
         {"initial_history_imported": True, "last_bar_date": "2026-09-04"},
     )
     assert refresh_start_day(target) == date(2026, 8, 28)
+
+
+@pytest.mark.asyncio
+async def test_history_bulk_write_preserves_every_bar_and_source() -> None:
+    connection = AsyncMock()
+    engine = MagicMock()
+    engine.begin.return_value.__aenter__ = AsyncMock(return_value=connection)
+    engine.begin.return_value.__aexit__ = AsyncMock(return_value=False)
+    security_id, source_id = uuid4(), uuid4()
+    bars = [
+        MarketBarInput(
+            ts=datetime(2020, 1, 1, tzinfo=UTC) + timedelta(days=index),
+            open=100,
+            high=110,
+            low=90,
+            close=105,
+            volume=1000,
+            provider="yfinance",
+        )
+        for index in range(1001)
+    ]
+    result = await MarketBarIngestor(engine).ingest_security_bars(
+        security_id=security_id,
+        bars=bars,
+        source_id=source_id,
+    )
+    batches = [call.args[1] for call in connection.execute.await_args_list]
+    assert [len(batch) for batch in batches] == [500, 500, 1]
+    rows = [row for batch in batches for row in batch]
+    assert [row["ts"] for row in rows] == [bar.ts for bar in bars]
+    assert all(row["source_id"] == source_id and row["security_id"] == security_id for row in rows)
+    assert result["normalized_count"] == 1001
 
 
 def test_parse_history_frame_normalizes_ohlcv() -> None:
