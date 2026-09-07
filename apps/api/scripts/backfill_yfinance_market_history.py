@@ -54,8 +54,20 @@ def refresh_end_day(*, now: datetime | None = None) -> date:
     return local.date() - timedelta(days=1)
 
 
-def refresh_start_day(target: HistoryTarget) -> date:
+def refresh_start_day(
+    target: HistoryTarget, *, end_day: date | None = None, recent_days: int | None = None
+) -> date:
     checkpoint = target.checkpoint or {}
+    if recent_days is not None:
+        if end_day is None or not 30 <= recent_days <= 730:
+            raise ValueError("recent history requires an end date and 30–730 calendar days")
+        floor = max(
+            target.listing_date or _NSE_FALLBACK_START, end_day - timedelta(days=recent_days)
+        )
+        latest_recent = checkpoint.get("recent_last_bar_date") or checkpoint.get("last_bar_date")
+        if latest_recent:
+            return max(floor, date.fromisoformat(str(latest_recent)) - timedelta(days=7))
+        return floor
     latest = checkpoint.get("last_bar_date")
     if checkpoint.get("initial_history_imported") and latest:
         # Re-fetch an overlap to pick up recent provider corrections and holidays.
@@ -234,11 +246,22 @@ async def _run() -> int:
     parser.add_argument("--confirm-yahoo-research-use", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
+        "--recent-history-days",
+        type=int,
+        help="Daily refresh only: bound downloads to 30–730 calendar days; "
+        "does not delete existing bars or mark full history complete",
+    )
+    parser.add_argument(
         "--daily-refresh",
         action="store_true",
         help="Sweep all eligible stocks with durable checkpoints and incremental daily updates",
     )
     args = parser.parse_args()
+
+    if args.recent_history_days is not None and (
+        not args.daily_refresh or not 30 <= args.recent_history_days <= 730
+    ):
+        parser.error("--recent-history-days requires --daily-refresh and a value from 30 to 730")
 
     if args.daily_refresh and (not args.all or not args.from_listing or args.interval != "1d"):
         parser.error("--daily-refresh requires --all --from-listing --interval 1d")
@@ -271,6 +294,16 @@ async def _run() -> int:
     configure_sentry(settings, service="yfinance-eod-importer")
     engine = create_database_engine(settings.database_url)
     try:
+        if not args.dry_run:
+            async with engine.connect() as connection:
+                readonly = await connection.scalar(text("show transaction_read_only"))
+            if readonly == "on":
+                print(json.dumps({"status": "blocked", "reason": "database_read_only"}), flush=True)
+                sentry_sdk.capture_message(
+                    "Market import blocked: database read-only", level="error"
+                )
+                sentry_sdk.flush(timeout=2)
+                return 2
         targets = (
             await _all_targets(
                 engine,
@@ -296,7 +329,13 @@ async def _run() -> int:
                             {
                                 **asdict(target),
                                 "planned_from_date": (
-                                    target.listing_date or _NSE_FALLBACK_START
+                                    refresh_start_day(
+                                        target,
+                                        end_day=to_date,
+                                        recent_days=args.recent_history_days,
+                                    )
+                                    if args.daily_refresh
+                                    else target.listing_date or _NSE_FALLBACK_START
                                     if args.from_listing
                                     else from_date
                                 ),
@@ -321,7 +360,9 @@ async def _run() -> int:
                     target.listing_date or _NSE_FALLBACK_START if args.from_listing else from_date
                 )
                 if args.daily_refresh:
-                    target_from_date = refresh_start_day(target)
+                    target_from_date = refresh_start_day(
+                        target, end_day=to_date, recent_days=args.recent_history_days
+                    )
                 if target_from_date is None:
                     raise ValueError("history start date could not be resolved")
                 if target_from_date > to_date:
@@ -355,7 +396,9 @@ async def _run() -> int:
                         "from_date": target_from_date.isoformat(),
                         "to_date": to_date.isoformat(),
                         "range_policy": (
-                            "incremental_daily"
+                            "recent_daily_window"
+                            if args.recent_history_days is not None
+                            else "incremental_daily"
                             if args.daily_refresh
                             and (target.checkpoint or {}).get("initial_history_imported")
                             else "listing_to_previous_day"
@@ -378,13 +421,22 @@ async def _run() -> int:
                         engine,
                         target,
                         {
-                            "initial_history_imported": True,
-                            "status": "imported_available_history",
+                            "initial_history_imported": (
+                                bool((target.checkpoint or {}).get("initial_history_imported"))
+                                if args.recent_history_days is not None
+                                else True
+                            ),
+                            "status": (
+                                "imported_recent_history"
+                                if args.recent_history_days is not None
+                                else "imported_available_history"
+                            ),
                             "checked_through": to_date.isoformat(),
                             "first_bar_date": (target.checkpoint or {}).get(
                                 "first_bar_date", first.isoformat()
                             ),
                             "last_bar_date": last.isoformat(),
+                            "recent_last_bar_date": last.isoformat(),
                             "listing_date": target.listing_date.isoformat()
                             if target.listing_date
                             else None,
