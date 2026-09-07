@@ -121,7 +121,8 @@ async def _all_targets(
                     where s.primary_exchange='NSE'
                       and coalesce(s.metadata->>'nse_series', 'EQ')='EQ'
                       and s.nse_symbol is not null
-                      and (:after_symbol is null or s.nse_symbol > :after_symbol)
+                      and (cast(:after_symbol as text) is null
+                           or s.nse_symbol > cast(:after_symbol as text))
                     order by coverage.latest_bar_ts asc nulls first, s.nse_symbol
                     limit :limit
                     """
