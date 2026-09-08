@@ -46,10 +46,10 @@ class TechnicalDerivativesAgent:
         if isinstance(history_profile, dict):
             for name in (
                 "trading_sessions",
-                "all_time_high",
-                "all_time_low",
-                "lifetime_return_pct",
-                "max_drawdown_pct",
+                "observed_period_high",
+                "observed_period_low",
+                "observed_period_return_pct",
+                "observed_period_max_drawdown_pct",
             ):
                 history_value = _number(history_profile.get(name))
                 if history_value is not None:
