@@ -154,6 +154,7 @@ async def _all_targets(
     after_symbol: str | None,
     daily_refresh: bool = False,
     to_date: date | None = None,
+    supported_only: bool = False,
 ) -> list[HistoryTarget]:
     async with engine.connect() as connection:
         rows = (
@@ -171,10 +172,12 @@ async def _all_targets(
                         where mb.security_id = s.id
                           and mb.interval = '1d'
                           and mb.provider = 'yfinance'
+                          and mb.source_id is not null
                     ) coverage on true
                     where s.primary_exchange='NSE'
                       and coalesce(s.metadata->>'nse_series', 'EQ')='EQ'
                       and s.nse_symbol is not null
+                      and (not :supported_only or coverage.latest_bar_ts is not null)
                       and (cast(:after_symbol as text) is null
                            or s.nse_symbol > cast(:after_symbol as text))
                       and (not :daily_refresh or (
@@ -191,6 +194,7 @@ async def _all_targets(
                         "after_symbol": after_symbol.upper() if after_symbol else None,
                         "limit": limit,
                         "daily_refresh": daily_refresh,
+                        "supported_only": supported_only,
                         "to_date": to_date.isoformat() if to_date else "",
                         "now": datetime.now(UTC).isoformat(),
                     },
@@ -246,6 +250,10 @@ async def _run() -> int:
     parser.add_argument("--confirm-yahoo-research-use", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
+        "--supported-only", action="store_true",
+        help="Refresh only securities that already have stored Yahoo daily bars",
+    )
+    parser.add_argument(
         "--recent-history-days",
         type=int,
         help="Daily refresh only: bound downloads to 30–730 calendar days; "
@@ -258,6 +266,8 @@ async def _run() -> int:
     )
     args = parser.parse_args()
 
+    if args.supported_only and (not args.daily_refresh or args.recent_history_days is None):
+        parser.error("--supported-only requires --daily-refresh and --recent-history-days")
     if args.recent_history_days is not None and (
         not args.daily_refresh or not 30 <= args.recent_history_days <= 730
     ):
@@ -297,11 +307,19 @@ async def _run() -> int:
         if not args.dry_run:
             async with engine.connect() as connection:
                 readonly = await connection.scalar(text("show transaction_read_only"))
+                database_bytes = await connection.scalar(
+                    text("select pg_database_size(current_database())")
+                )
             if readonly == "on":
                 print(json.dumps({"status": "blocked", "reason": "database_read_only"}), flush=True)
                 sentry_sdk.capture_message(
                     "Market import blocked: database read-only", level="error"
                 )
+                sentry_sdk.flush(timeout=2)
+                return 2
+            if int(database_bytes or 0) >= 450_000_000:
+                print(json.dumps({"status": "blocked", "reason": "database_capacity"}), flush=True)
+                sentry_sdk.capture_message("Market import blocked: storage headroom low", level="error")
                 sentry_sdk.flush(timeout=2)
                 return 2
         targets = (
@@ -311,6 +329,7 @@ async def _run() -> int:
                 after_symbol=args.after_symbol,
                 daily_refresh=args.daily_refresh,
                 to_date=to_date,
+                supported_only=args.supported_only,
             )
             if args.all
             else [await _target_for_identifier(engine, value) for value in args.security or []]
@@ -355,6 +374,16 @@ async def _run() -> int:
         results: list[dict[str, object]] = []
         failures = 0
         for position, target in enumerate(targets):
+            if position and position % 100 == 0:
+                async with engine.connect() as connection:
+                    database_bytes = await connection.scalar(
+                        text("select pg_database_size(current_database())")
+                    )
+                if int(database_bytes or 0) >= 450_000_000:
+                    sentry_sdk.capture_message("Market import stopped: storage headroom low", level="error")
+                    sentry_sdk.flush(timeout=2)
+                    print(json.dumps({"status": "blocked", "reason": "database_capacity"}), flush=True)
+                    return 2
             try:
                 target_from_date = (
                     target.listing_date or _NSE_FALLBACK_START if args.from_listing else from_date
