@@ -88,15 +88,15 @@ async def load_market_history_coverage(
                       s.id,
                       s.nse_symbol,
                       s.metadata->>'date_of_listing' as date_of_listing,
-                      count(distinct mb.ts::date) filter (
+                      count(distinct (mb.ts at time zone 'Asia/Kolkata')::date) filter (
                         where mb.source_id is not null
                           and mb.interval in ('1d', 'day', 'daily')
                       ) as sourced_daily_bars,
-                      min(mb.ts::date) filter (
+                      min((mb.ts at time zone 'Asia/Kolkata')::date) filter (
                         where mb.source_id is not null
                           and mb.interval in ('1d', 'day', 'daily')
                       ) as first_sourced_bar_date,
-                      max(mb.ts::date) filter (
+                      max((mb.ts at time zone 'Asia/Kolkata')::date) filter (
                         where mb.source_id is not null
                           and mb.interval in ('1d', 'day', 'daily')
                       ) as last_sourced_bar_date
