@@ -26,9 +26,10 @@ def create_database_engine(database_url: str) -> AsyncEngine:
 
 
 async def database_health(engine: AsyncEngine) -> bool:
+    """Research requires writes; a readable but read-only database is degraded."""
     try:
         async with engine.connect() as connection:
-            await connection.execute(text("select 1"))
-        return True
+            mode = await connection.scalar(text("show transaction_read_only"))
+        return mode == "off"
     except Exception:  # noqa: BLE001 - health probes intentionally collapse DB failures to false
         return False
