@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 from uuid import UUID
 
+import sentry_sdk
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings, get_settings
@@ -42,9 +45,7 @@ class ResearchJobWorker:
         try:
             mode = AnalysisMode(str(row.get("mode") or AnalysisMode.FULL.value))
             raw_metadata = row.get("metadata")
-            metadata: dict[str, Any] = (
-                dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
-            )
+            metadata: dict[str, Any] = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
             depth = ResearchDepth(
                 str(metadata.get("analysis_depth") or ResearchDepth.STANDARD.value)
             )
@@ -52,9 +53,7 @@ class ResearchJobWorker:
             event_trigger = _event_trigger(metadata.get("event_trigger"))
             plan = build_event_research_plan(event_trigger, depth) if event_trigger else None
             event_context = metadata.get("event_context")
-            context: dict[str, Any] = (
-                dict(event_context) if isinstance(event_context, dict) else {}
-            )
+            context: dict[str, Any] = dict(event_context) if isinstance(event_context, dict) else {}
             if event_trigger is not None:
                 context["event_trigger"] = event_trigger.value
 
@@ -72,11 +71,33 @@ class ResearchJobWorker:
         return True
 
     async def run_forever(self) -> None:
-        await self.queue.requeue_stale_running_jobs(
-            older_than_seconds=max(300, self.settings.max_research_job_seconds * 2)
-        )
+        failures = 0
+        needs_recovery = True
         while True:
-            worked = await self.poll_once()
+            try:
+                if needs_recovery:
+                    await self.queue.requeue_stale_running_jobs(
+                        older_than_seconds=max(300, self.settings.max_research_job_seconds * 2)
+                    )
+                    needs_recovery = False
+                worked = await self.poll_once()
+                failures = 0
+            except SQLAlchemyError:
+                failures += 1
+                needs_recovery = True
+                # Database exception strings can contain SQL parameters and user queries.
+                logging.getLogger(__name__).error("Research worker database unavailable")
+                if failures == 1:
+                    sentry_sdk.capture_message(
+                        "Research worker database unavailable", level="error"
+                    )
+                if failures >= 5:
+                    sentry_sdk.flush(timeout=2)
+                    raise RuntimeError(
+                        "Research worker stopped after five database failures"
+                    ) from None
+                await asyncio.sleep(min(60, 5 * 2 ** (failures - 1)))
+                continue
             if not worked:
                 await asyncio.sleep(self.settings.research_worker_poll_seconds)
 

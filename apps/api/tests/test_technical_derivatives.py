@@ -110,15 +110,15 @@ async def test_technical_agent_exposes_listing_to_date_market_profile() -> None:
                 "market_bars": _bars(),
                 "market_history_profile": {
                     "trading_sessions": 5200,
-                    "all_time_high": 3217.6,
-                    "all_time_low": 8.2,
-                    "lifetime_return_pct": 9412.5,
-                    "max_drawdown_pct": -62.4,
+                    "observed_period_high": 3217.6,
+                    "observed_period_low": 8.2,
+                    "observed_period_return_pct": 9412.5,
+                    "observed_period_max_drawdown_pct": -62.4,
                 },
             },
         )
     )
 
     assert output.metrics["trading_sessions"] == pytest.approx(5200)
-    assert output.metrics["lifetime_return_pct"] == pytest.approx(9412.5)
-    assert output.metrics["max_drawdown_pct"] == pytest.approx(-62.4)
+    assert output.metrics["observed_period_return_pct"] == pytest.approx(9412.5)
+    assert output.metrics["observed_period_max_drawdown_pct"] == pytest.approx(-62.4)

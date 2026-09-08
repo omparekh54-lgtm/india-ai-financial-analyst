@@ -267,7 +267,7 @@ def test_bootstrap_plan_can_explicitly_use_upstox_master_fallback() -> None:
     assert "bootstrap_nse_universe.py" in plan[0].command[1]
     assert "upstox" in plan[0].command
     assert "--upstox-file" in plan[0].command
-    assert "/data/NSE.json.gz" in plan[0].command
+    assert str(Path("/data/NSE.json.gz")) in plan[0].command
     assert "SG-2026-08-31-01" in plan[0].command
 
 

@@ -336,16 +336,18 @@ def _market_history_profile(row: Row) -> dict[str, object]:
         "last_bar_at": _iso(row.get("last_bar_at")),
         "first_close": first_close,
         "latest_close": latest_close,
-        "all_time_high": _float(row.get("all_time_high")),
-        "all_time_low": _float(row.get("all_time_low")),
-        "lifetime_return_pct": lifetime_return,
-        "max_drawdown_pct": _float(row.get("max_drawdown_pct")),
+        "observed_period_high": _float(row.get("all_time_high")),
+        "observed_period_low": _float(row.get("all_time_low")),
+        "observed_period_return_pct": lifetime_return,
+        "observed_period_max_drawdown_pct": _float(row.get("max_drawdown_pct")),
+        "history_scope": "available_stored_bars",
+        "full_listing_history_verified": False,
         "frequency": "daily",
         "is_delayed": True,
         "limitation": (
             "Available stored price history only, not verified IPO-to-date completeness. "
             "Prices are not total-return adjusted; splits, dividends and missing sessions "
-            "can distort lifetime returns and drawdowns."
+            "can distort observed-period returns and drawdowns."
         ),
     }
 
