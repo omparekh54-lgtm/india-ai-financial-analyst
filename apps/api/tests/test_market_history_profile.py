@@ -20,8 +20,11 @@ def test_market_history_profile_summarizes_full_history() -> None:
     )
 
     assert profile["trading_sessions"] == 5000
-    assert profile["lifetime_return_pct"] == pytest.approx(2400.0)
-    assert profile["max_drawdown_pct"] == pytest.approx(-55.0)
+    assert profile["observed_period_return_pct"] == pytest.approx(2400.0)
+    assert profile["observed_period_max_drawdown_pct"] == pytest.approx(-55.0)
+    assert profile["full_listing_history_verified"] is False
+    assert "lifetime_return_pct" not in profile
+    assert "all_time_high" not in profile
     assert profile["is_delayed"] is True
 
 
