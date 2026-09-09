@@ -1,10 +1,7 @@
 "use client";
 
-import type { Session } from "@supabase/supabase-js";
 import type { FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
-
-import { getSupabaseBrowserClient } from "../lib/supabase";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const JOB_POLL_INTERVAL_MS = 1000;
@@ -166,14 +163,6 @@ type MetricChange = {
 };
 
 export default function HomePage() {
-  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
-  const [session, setSession] = useState<Session | null>(null);
-  const [authReady, setAuthReady] = useState(false);
-  const [authMode, setAuthMode] = useState<"sign_in" | "sign_up">("sign_in");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [authLoading, setAuthLoading] = useState(false);
-  const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState("full_analysis");
   const [depth, setDepth] = useState<ResearchDepth>("standard");
@@ -188,44 +177,17 @@ export default function HomePage() {
   const [runProgress, setRunProgress] = useState(0);
 
   useEffect(() => {
-    if (!supabase) {
-      setAuthReady(true);
-      return;
-    }
-
-    let active = true;
-    void supabase.auth.getSession().then(({ data }) => {
-      if (!active) return;
-      setSession(data.session);
-      setAuthReady(true);
-    });
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
-      setAuthReady(true);
-    });
-
-    return () => {
-      active = false;
-      data.subscription.unsubscribe();
-    };
-  }, [supabase]);
+    void loadHistory().then(setHistory).catch(() => setHistory([]));
+  }, []);
 
   useEffect(() => {
-    if (!session) {
-      setHistory([]);
-      return;
-    }
-    void loadHistory(session.access_token).then(setHistory).catch(() => setHistory([]));
-  }, [session]);
-
-  useEffect(() => {
-    if (!session || !result?.job_id) {
+    if (!result?.job_id) {
       setEvidenceExplorer(null);
       return;
     }
     let active = true;
     setEvidenceLoading(true);
-    void loadEvidenceExplorer(session.access_token, result.job_id)
+    void loadEvidenceExplorer(result.job_id)
       .then((payload) => {
         if (active) setEvidenceExplorer(payload);
       })
@@ -238,67 +200,11 @@ export default function HomePage() {
     return () => {
       active = false;
     };
-  }, [session, result?.job_id]);
-
-  async function submitAuth(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!supabase) {
-      setAuthMessage("Supabase browser authentication is not configured.");
-      return;
-    }
-    if (!email.trim() || !password) return;
-
-    setAuthLoading(true);
-    setAuthMessage(null);
-    setError(null);
-    try {
-      if (authMode === "sign_up") {
-        const { data, error: signUpError } = await supabase.auth.signUp({
-          email: email.trim(),
-          password,
-        });
-        if (signUpError) throw signUpError;
-        if (data.session) {
-          setAuthMessage("Account created and signed in.");
-        } else {
-          setAuthMessage("Account created. Check your email to confirm the account, then sign in.");
-          setAuthMode("sign_in");
-        }
-      } else {
-        const { error: signInError } = await supabase.auth.signInWithPassword({
-          email: email.trim(),
-          password,
-        });
-        if (signInError) throw signInError;
-        setPassword("");
-        setAuthMessage("Signed in. Your research runs are private to this account.");
-      }
-    } catch (authError) {
-      setAuthMessage(authError instanceof Error ? authError.message : "Authentication failed");
-    } finally {
-      setAuthLoading(false);
-    }
-  }
-
-  async function signOut() {
-    if (!supabase) return;
-    await supabase.auth.signOut();
-    setResult(null);
-    setEvidenceExplorer(null);
-    setHistory([]);
-    setHistoryLoadingId(null);
-    setRunStage("received");
-    setRunProgress(0);
-    setAuthMessage("Signed out.");
-  }
+  }, [result?.job_id]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!query.trim()) return;
-    if (!session) {
-      setError("Sign in before starting a research run.");
-      return;
-    }
 
     setLoading(true);
     setError(null);
@@ -310,7 +216,6 @@ export default function HomePage() {
       const response = await fetch(`${API_BASE}/v1/research/enqueue`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ query: query.trim(), mode, depth }),
@@ -322,7 +227,6 @@ export default function HomePage() {
       setRunProgress(1);
 
       const stored = await waitForResearchJob(
-        session.access_token,
         queued.job_id,
         (stage, progress) => {
           setRunStage(stage);
@@ -341,7 +245,7 @@ export default function HomePage() {
       setDepth(storedDepth);
       setRunStage("complete");
       setRunProgress(100);
-      setHistory(await loadHistory(session.access_token));
+      setHistory(await loadHistory());
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to run research");
     } finally {
@@ -350,12 +254,11 @@ export default function HomePage() {
   }
 
   async function openSavedResearch(jobId: string) {
-    if (!session) return;
     setHistoryLoadingId(jobId);
     setError(null);
     setEvidenceExplorer(null);
     try {
-      const stored = await loadResearchJob(session.access_token, jobId);
+      const stored = await loadResearchJob(jobId);
       if (!stored.report_json) throw new Error("This research run does not have a saved report yet.");
       const storedDepth = resolveJobDepth(stored);
       setResult({
@@ -396,22 +299,6 @@ export default function HomePage() {
           source-linked research with an independent validation gate before publication.
         </p>
 
-        <AuthPanel
-          ready={authReady}
-          configured={Boolean(supabase)}
-          session={session}
-          mode={authMode}
-          email={email}
-          password={password}
-          loading={authLoading}
-          message={authMessage}
-          onMode={setAuthMode}
-          onEmail={setEmail}
-          onPassword={setPassword}
-          onSubmit={submitAuth}
-          onSignOut={signOut}
-        />
-
         <form className="searchCard" onSubmit={submit}>
           <input
             aria-label="Company or ticker"
@@ -419,8 +306,8 @@ export default function HomePage() {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
-          <button type="submit" disabled={loading || !session}>
-            {loading ? `${humanize(runStage)} ${runProgress}%` : session ? "Analyze" : "Sign in to analyze"}
+          <button type="submit" disabled={loading}>
+            {loading ? `${humanize(runStage)} ${runProgress}%` : "Analyze"}
           </button>
         </form>
 
@@ -476,19 +363,16 @@ export default function HomePage() {
           result={result}
           evidenceExplorer={evidenceExplorer}
           evidenceLoading={evidenceLoading}
-          accessToken={session?.access_token ?? null}
         />
       ) : (
         <PipelineOverview />
       )}
 
-      {session ? (
-        <RecentResearch
-          jobs={history}
-          loadingId={historyLoadingId}
-          onOpen={(jobId) => void openSavedResearch(jobId)}
-        />
-      ) : null}
+      <RecentResearch
+        jobs={history}
+        loadingId={historyLoadingId}
+        onOpen={(jobId) => void openSavedResearch(jobId)}
+      />
 
       <section className="confidenceGrid">
         {confidenceCards.map(([label, value]) => (
@@ -504,106 +388,6 @@ export default function HomePage() {
   );
 }
 
-function AuthPanel({
-  ready,
-  configured,
-  session,
-  mode,
-  email,
-  password,
-  loading,
-  message,
-  onMode,
-  onEmail,
-  onPassword,
-  onSubmit,
-  onSignOut,
-}: {
-  ready: boolean;
-  configured: boolean;
-  session: Session | null;
-  mode: "sign_in" | "sign_up";
-  email: string;
-  password: string;
-  loading: boolean;
-  message: string | null;
-  onMode: (mode: "sign_in" | "sign_up") => void;
-  onEmail: (value: string) => void;
-  onPassword: (value: string) => void;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  onSignOut: () => void | Promise<void>;
-}) {
-  if (!ready) return <div className="authCard"><span>Checking secure session…</span></div>;
-  if (!configured) {
-    return (
-      <div className="authCard authWarning">
-        <strong>Authentication configuration required</strong>
-        <span>Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY.</span>
-      </div>
-    );
-  }
-  if (session) {
-    return (
-      <div className="authCard signedInCard">
-        <div>
-          <span className="secureBadge">PRIVATE RESEARCH</span>
-          <strong>{session.user.email ?? "Authenticated analyst"}</strong>
-          <small>Runs, reports and evidence graphs are isolated to your account.</small>
-        </div>
-        <button type="button" className="secondaryButton" onClick={() => void onSignOut()}>
-          Sign out
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <form className="authCard authForm" onSubmit={onSubmit}>
-      <div className="authTabs">
-        <button
-          type="button"
-          className={mode === "sign_in" ? "authTabActive" : undefined}
-          onClick={() => onMode("sign_in")}
-        >
-          Sign in
-        </button>
-        <button
-          type="button"
-          className={mode === "sign_up" ? "authTabActive" : undefined}
-          onClick={() => onMode("sign_up")}
-        >
-          Create account
-        </button>
-      </div>
-      <div className="authFields">
-        <input
-          aria-label="Email"
-          type="email"
-          autoComplete="email"
-          placeholder="analyst@example.com"
-          value={email}
-          onChange={(event) => onEmail(event.target.value)}
-          required
-        />
-        <input
-          aria-label="Password"
-          type="password"
-          autoComplete={mode === "sign_in" ? "current-password" : "new-password"}
-          placeholder="Password"
-          value={password}
-          onChange={(event) => onPassword(event.target.value)}
-          minLength={8}
-          required
-        />
-        <button type="submit" disabled={loading}>
-          {loading ? "Please wait…" : mode === "sign_in" ? "Sign in" : "Create account"}
-        </button>
-      </div>
-      {message ? <small className="authMessage">{message}</small> : null}
-    </form>
-  );
-}
-
 function RecentResearch({
   jobs,
   loadingId,
@@ -616,7 +400,7 @@ function RecentResearch({
   return (
     <section className="panel historyPanel">
       <div>
-        <p className="eyebrow">YOUR PRIVATE RESEARCH</p>
+        <p className="eyebrow">RECENT RESEARCH</p>
         <h2>Recent runs</h2>
       </div>
       {jobs.length ? (
@@ -646,7 +430,7 @@ function RecentResearch({
           ))}
         </div>
       ) : (
-        <p className="mutedText">No research runs yet for this account.</p>
+        <p className="mutedText">No research runs yet.</p>
       )}
     </section>
   );
@@ -656,12 +440,10 @@ function ResearchResult({
   result,
   evidenceExplorer,
   evidenceLoading,
-  accessToken,
 }: {
   result: ResearchResponse;
   evidenceExplorer: EvidenceExplorerPayload | null;
   evidenceLoading: boolean;
-  accessToken: string | null;
 }) {
   const report = result.report;
   const security = report.security ?? {};
@@ -692,7 +474,7 @@ function ResearchResult({
         </div>
       </section>
 
-      <ReportActions jobId={result.job_id} accessToken={accessToken} />
+      <ReportActions jobId={result.job_id} />
 
       {report.executive_summary || report.narrative || report.warnings?.length ? (
         <AnalystNarrative
@@ -755,14 +537,13 @@ function ResearchResult({
   );
 }
 
-function ReportActions({ jobId, accessToken }: { jobId: string; accessToken: string | null }) {
-  if (!accessToken) return null;
+function ReportActions({ jobId }: { jobId: string }) {
   return (
     <section className="reportActions" aria-label="Report exports">
-      <button type="button" onClick={() => void downloadExport(accessToken, jobId, "markdown")}>
+      <button type="button" onClick={() => void downloadExport(jobId, "markdown")}>
         Export Markdown
       </button>
-      <button type="button" onClick={() => void downloadExport(accessToken, jobId, "json")}>
+      <button type="button" onClick={() => void downloadExport(jobId, "json")}>
         Export JSON
       </button>
     </section>
@@ -1024,18 +805,17 @@ function PipelineOverview() {
   );
 }
 
-async function loadHistory(accessToken: string): Promise<ResearchJobSummary[]> {
+async function loadHistory(): Promise<ResearchJobSummary[]> {
   const response = await fetch(`${API_BASE}/v1/research/jobs?limit=20`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
   });
   if (!response.ok) return [];
   const body = await response.json();
   return Array.isArray(body?.jobs) ? body.jobs as ResearchJobSummary[] : [];
 }
 
-async function loadResearchJob(accessToken: string, jobId: string): Promise<StoredResearchJob> {
+async function loadResearchJob(jobId: string): Promise<StoredResearchJob> {
   const response = await fetch(`${API_BASE}/v1/research/jobs/${encodeURIComponent(jobId)}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
     cache: "no-store",
   });
   const body = await response.json();
@@ -1044,13 +824,12 @@ async function loadResearchJob(accessToken: string, jobId: string): Promise<Stor
 }
 
 async function waitForResearchJob(
-  accessToken: string,
   jobId: string,
   onProgress: (stage: string, progress: number) => void,
 ): Promise<StoredResearchJob> {
   const deadline = Date.now() + JOB_POLL_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    const job = await loadResearchJob(accessToken, jobId);
+    const job = await loadResearchJob(jobId);
     const metadata = job.job_metadata ?? {};
     const stage = typeof metadata.research_stage === "string"
       ? metadata.research_stage
@@ -1083,12 +862,9 @@ async function waitForResearchJob(
   throw new Error("Research job did not complete within the client polling window. The durable job remains saved and can be reopened from history.");
 }
 
-async function loadEvidenceExplorer(
-  accessToken: string,
-  jobId: string,
-): Promise<EvidenceExplorerPayload> {
+async function loadEvidenceExplorer(jobId: string): Promise<EvidenceExplorerPayload> {
   const response = await fetch(`${API_BASE}/v1/research/jobs/${encodeURIComponent(jobId)}/evidence`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
   });
   const body = await response.json();
   if (!response.ok) throw new Error(apiErrorMessage(body, response.status));
@@ -1096,13 +872,11 @@ async function loadEvidenceExplorer(
 }
 
 async function downloadExport(
-  accessToken: string,
   jobId: string,
   format: "markdown" | "json",
 ) {
   const response = await fetch(
     `${API_BASE}/v1/research/jobs/${encodeURIComponent(jobId)}/export?format=${format}`,
-    { headers: { Authorization: `Bearer ${accessToken}` } },
   );
   if (!response.ok) {
     const body = await response.json().catch(() => null);

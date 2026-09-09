@@ -1,10 +1,8 @@
 "use client";
 
-import type { Session } from "@supabase/supabase-js";
 import type { FormEvent } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
-import { getSupabaseBrowserClient } from "../../lib/supabase";
 import styles from "./watchlists.module.css";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -36,9 +34,6 @@ type WatchlistPayload = {
 };
 
 export default function WatchlistsPage() {
-  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
-  const [session, setSession] = useState<Session | null>(null);
-  const [authReady, setAuthReady] = useState(false);
   const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
@@ -48,41 +43,14 @@ export default function WatchlistsPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!supabase) {
-      setAuthReady(true);
-      return;
-    }
-    let active = true;
-    void supabase.auth.getSession().then(({ data }) => {
-      if (!active) return;
-      setSession(data.session);
-      setAuthReady(true);
-    });
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
-      setAuthReady(true);
-    });
-    return () => {
-      active = false;
-      data.subscription.unsubscribe();
-    };
-  }, [supabase]);
-
-  useEffect(() => {
-    if (!session) {
-      setWatchlists([]);
-      setSelectedId(null);
-      return;
-    }
-    void refresh(session.access_token);
-  }, [session]);
+    void refresh();
+  }, []);
 
   const selected = watchlists.find((watchlist) => watchlist.id === selectedId) ?? watchlists[0] ?? null;
 
-  async function refresh(token: string) {
+  async function refresh() {
     setError(null);
     const response = await fetch(`${API_BASE}/v1/watchlists`, {
-      headers: { Authorization: `Bearer ${token}` },
       cache: "no-store",
     });
     const body = await response.json();
@@ -97,7 +65,7 @@ export default function WatchlistsPage() {
 
   async function createWatchlist(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!session || !newName.trim()) return;
+    if (!newName.trim()) return;
     setLoading(true);
     setError(null);
     setMessage(null);
@@ -105,7 +73,6 @@ export default function WatchlistsPage() {
       const response = await fetch(`${API_BASE}/v1/watchlists`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ name: newName.trim() }),
@@ -114,7 +81,7 @@ export default function WatchlistsPage() {
       if (!response.ok) throw new Error(apiErrorMessage(body, response.status));
       setNewName("");
       setSelectedId(String(body.id));
-      await refresh(session.access_token);
+      await refresh();
       setMessage("Watchlist created.");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to create watchlist");
@@ -124,18 +91,16 @@ export default function WatchlistsPage() {
   }
 
   async function deleteWatchlist(watchlistId: string) {
-    if (!session) return;
     setLoading(true);
     setError(null);
     setMessage(null);
     try {
       const response = await fetch(`${API_BASE}/v1/watchlists/${watchlistId}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${session.access_token}` },
       });
       const body = await response.json();
       if (!response.ok) throw new Error(apiErrorMessage(body, response.status));
-      await refresh(session.access_token);
+      await refresh();
       setMessage("Watchlist deleted.");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to delete watchlist");
@@ -146,7 +111,7 @@ export default function WatchlistsPage() {
 
   async function addSecurity(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!session || !selected || !securityQuery.trim()) return;
+    if (!selected || !securityQuery.trim()) return;
     setLoading(true);
     setError(null);
     setMessage(null);
@@ -154,7 +119,6 @@ export default function WatchlistsPage() {
       const response = await fetch(`${API_BASE}/v1/watchlists/${selected.id}/items/resolve`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -165,7 +129,7 @@ export default function WatchlistsPage() {
       const body = await response.json();
       if (!response.ok) throw new Error(apiErrorMessage(body, response.status));
       setSecurityQuery("");
-      await refresh(session.access_token);
+      await refresh();
       setMessage("Security added with event research enabled.");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to add security");
@@ -175,14 +139,13 @@ export default function WatchlistsPage() {
   }
 
   async function updateItem(item: WatchlistItem, eventResearchEnabled: boolean) {
-    if (!session || !selected) return;
+    if (!selected) return;
     setLoading(true);
     setError(null);
     try {
       const response = await fetch(`${API_BASE}/v1/watchlists/${selected.id}/items`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -193,7 +156,7 @@ export default function WatchlistsPage() {
       });
       const body = await response.json();
       if (!response.ok) throw new Error(apiErrorMessage(body, response.status));
-      await refresh(session.access_token);
+      await refresh();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to update watchlist item");
     } finally {
@@ -202,17 +165,16 @@ export default function WatchlistsPage() {
   }
 
   async function removeItem(securityId: string) {
-    if (!session || !selected) return;
+    if (!selected) return;
     setLoading(true);
     setError(null);
     try {
       const response = await fetch(`${API_BASE}/v1/watchlists/${selected.id}/items/${securityId}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${session.access_token}` },
       });
       const body = await response.json();
       if (!response.ok) throw new Error(apiErrorMessage(body, response.status));
-      await refresh(session.access_token);
+      await refresh();
       setMessage("Security removed.");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to remove security");
@@ -221,29 +183,11 @@ export default function WatchlistsPage() {
     }
   }
 
-  if (!authReady) {
-    return <main className={styles.shell}>Checking session…</main>;
-  }
-
-  if (!session) {
-    return (
-      <main className={styles.shell}>
-        <section className={styles.hero}>
-          <div>
-            <p className={styles.eyebrow}>PRIVATE EVENT RESEARCH</p>
-            <h1>Watchlists</h1>
-            <p>Sign in on the research terminal first. Watchlists are private to your account.</p>
-          </div>
-        </section>
-      </main>
-    );
-  }
-
   return (
     <main className={styles.shell}>
       <section className={styles.hero}>
         <div>
-          <p className={styles.eyebrow}>PRIVATE EVENT RESEARCH</p>
+          <p className={styles.eyebrow}>EVENT RESEARCH</p>
           <h1>Watchlists</h1>
           <p>
             Track Indian listed companies and opt into event-triggered What Changed? research for

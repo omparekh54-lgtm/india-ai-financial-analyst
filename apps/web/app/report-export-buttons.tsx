@@ -1,46 +1,21 @@
 "use client";
 
-import type { Session } from "@supabase/supabase-js";
-import { useEffect, useMemo, useState } from "react";
-
-import { getSupabaseBrowserClient } from "../lib/supabase";
+import { useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 type ExportFormat = "markdown" | "json";
 
 export function ReportExportButtons({ jobId }: { jobId: string }) {
-  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
-  const [session, setSession] = useState<Session | null>(null);
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!supabase) return;
-    let active = true;
-    void supabase.auth.getSession().then(({ data }) => {
-      if (active) setSession(data.session);
-    });
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
-    });
-    return () => {
-      active = false;
-      data.subscription.unsubscribe();
-    };
-  }, [supabase]);
-
   async function download(format: ExportFormat) {
-    if (!session) {
-      setMessage("Sign in to export this private report.");
-      return;
-    }
     setExporting(format);
     setMessage(null);
     try {
       const response = await fetch(
         `${API_BASE}/v1/research/jobs/${encodeURIComponent(jobId)}/export?format=${format}`,
-        { headers: { Authorization: `Bearer ${session.access_token}` } },
       );
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));

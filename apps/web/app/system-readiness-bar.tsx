@@ -1,9 +1,6 @@
 "use client";
 
-import type { Session } from "@supabase/supabase-js";
-import { useEffect, useMemo, useState } from "react";
-
-import { getSupabaseBrowserClient } from "../lib/supabase";
+import { useEffect, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
@@ -25,34 +22,11 @@ type ReadinessPayload = {
 };
 
 export function SystemReadinessBar() {
-  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
-  const [session, setSession] = useState<Session | null>(null);
   const [payload, setPayload] = useState<ReadinessPayload | null>(null);
 
   useEffect(() => {
-    if (!supabase) return;
     let active = true;
-    void supabase.auth.getSession().then(({ data }) => {
-      if (active) setSession(data.session);
-    });
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      if (active) setSession(nextSession);
-    });
-    return () => {
-      active = false;
-      data.subscription.unsubscribe();
-    };
-  }, [supabase]);
-
-  useEffect(() => {
-    if (!session) {
-      setPayload(null);
-      return;
-    }
-    let active = true;
-    void fetch(`${API_BASE}/v1/system/data-readiness`, {
-      headers: { Authorization: `Bearer ${session.access_token}` },
-    })
+    void fetch(`${API_BASE}/v1/system/data-readiness`)
       .then(async (response) => {
         if (!response.ok) throw new Error(`Readiness API returned ${response.status}`);
         return response.json() as Promise<ReadinessPayload>;
@@ -66,9 +40,9 @@ export function SystemReadinessBar() {
     return () => {
       active = false;
     };
-  }, [session]);
+  }, []);
 
-  if (!session || !payload) return null;
+  if (!payload) return null;
 
   const agents = payload.agent_readiness?.agents ?? [];
   const readyCount = agents.filter((agent) => agent.ready).length;

@@ -13,6 +13,7 @@ from app.core.config import Settings, get_settings
 _bearer = HTTPBearer(auto_error=False)
 BearerCredentials = Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)]
 SettingsDependency = Annotated[Settings, Depends(get_settings)]
+PUBLIC_USER_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 
 @dataclass(frozen=True)
@@ -97,7 +98,7 @@ async def require_authenticated_user(
     settings: SettingsDependency,
 ) -> AuthenticatedUser:
     if credentials is None or credentials.scheme.lower() != "bearer":
-        raise _unauthorized("Bearer authentication is required")
+        return AuthenticatedUser(id=PUBLIC_USER_ID, email="public@india-ai-financial-analyst.local")
     return await SupabaseAuthVerifier(settings).verify(credentials.credentials)
 
 

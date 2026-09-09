@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.auth import AuthenticatedUser, require_authenticated_user
+from app.auth import PUBLIC_USER_ID, AuthenticatedUser, require_authenticated_user
 from app.brokers.repository import BrokerRepository
 from app.brokers.upstox_oauth import UpstoxOAuthError, UpstoxOAuthService
 from app.calibration_api import router as calibration_router
@@ -53,6 +53,10 @@ def _allow_browser_error(user_id: UUID) -> bool:
     if len(_browser_error_windows) > 10000:
         _browser_error_windows.popitem(last=False)
     return count < 5
+
+
+def _research_owner_id(user: AuthenticatedUser) -> UUID | None:
+    return None if user.id == PUBLIC_USER_ID else user.id
 
 
 @asynccontextmanager
@@ -308,7 +312,7 @@ async def research_jobs(
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
     repository = ResearchRepository(create_database_engine(settings.database_url))
-    jobs = await repository.list_user_jobs(user.id, limit=limit)
+    jobs = await repository.list_user_jobs(_research_owner_id(user), limit=limit)
     return {"count": len(jobs), "jobs": jobs}
 
 
@@ -320,7 +324,7 @@ async def research_job(
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
     repository = ResearchRepository(create_database_engine(settings.database_url))
-    job = await repository.get_user_job(user.id, job_id)
+    job = await repository.get_user_job(_research_owner_id(user), job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Research job not found")
     return job
@@ -335,10 +339,11 @@ async def research_job_evidence(
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
     repository = ResearchRepository(create_database_engine(settings.database_url))
-    job = await repository.get_user_job(user.id, job_id)
+    owner_id = _research_owner_id(user)
+    job = await repository.get_user_job(owner_id, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Research job not found")
-    claims = await repository.get_user_job_evidence(user.id, job_id)
+    claims = await repository.get_user_job_evidence(owner_id, job_id)
     linked_evidence_count = 0
     for claim in claims:
         evidence = claim.get("evidence")
@@ -362,7 +367,7 @@ async def research_job_export(
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
     repository = ResearchRepository(create_database_engine(settings.database_url))
-    job = await repository.get_user_job(user.id, job_id)
+    job = await repository.get_user_job(_research_owner_id(user), job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Research job not found")
     if not isinstance(job.get("report_json"), dict):
@@ -437,7 +442,7 @@ async def enqueue_research(
             query=request.query,
             mode=request.mode,
             depth=request.depth,
-            requested_by=user.id,
+            requested_by=_research_owner_id(user),
         )
     finally:
         await engine.dispose()
@@ -469,7 +474,7 @@ async def run_research(
             query=request.query,
             mode=request.mode,
             depth=request.depth,
-            requested_by=user.id,
+            requested_by=_research_owner_id(user),
         )
     except ResearchUsageLimitError:
         raise

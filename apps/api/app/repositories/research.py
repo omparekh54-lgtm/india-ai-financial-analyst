@@ -48,7 +48,7 @@ class ResearchRepository:
             )
             return result.scalar_one()
 
-    async def list_user_jobs(self, user_id: UUID, *, limit: int = 25) -> list[dict[str, object]]:
+    async def list_user_jobs(self, user_id: UUID | None, *, limit: int = 25) -> list[dict[str, object]]:
         statement = text(
             """
             select
@@ -71,7 +71,7 @@ class ResearchRepository:
             from research_jobs job
             left join securities security on security.id = job.security_id
             left join research_reports report on report.job_id = job.id
-            where job.requested_by = :user_id
+            where job.requested_by is not distinct from :user_id
             order by job.created_at desc
             limit :limit
             """
@@ -85,7 +85,7 @@ class ResearchRepository:
             ).mappings().all()
         return [dict(row) for row in rows]
 
-    async def get_user_job(self, user_id: UUID, job_id: UUID) -> dict[str, object] | None:
+    async def get_user_job(self, user_id: UUID | None, job_id: UUID) -> dict[str, object] | None:
         statement = text(
             """
             select
@@ -110,7 +110,7 @@ class ResearchRepository:
             left join securities security on security.id = job.security_id
             left join research_reports report on report.job_id = job.id
             where job.id = :job_id
-              and job.requested_by = :user_id
+              and job.requested_by is not distinct from :user_id
             limit 1
             """
         )
@@ -125,7 +125,7 @@ class ResearchRepository:
 
     async def get_user_job_evidence(
         self,
-        user_id: UUID,
+        user_id: UUID | None,
         job_id: UUID,
     ) -> list[dict[str, object]]:
         """Return claim-level evidence, scoped through the owning research job."""
@@ -159,7 +159,7 @@ class ResearchRepository:
             left join evidence_chunks ec on ec.id = ce.evidence_chunk_id
             left join sources src on src.id = ec.source_id
             where c.job_id = :job_id
-              and job.requested_by = :user_id
+              and job.requested_by is not distinct from :user_id
             order by c.created_at, c.id, ec.page_number nulls last, ec.chunk_index
             """
         )

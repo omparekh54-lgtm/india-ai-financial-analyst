@@ -1,9 +1,6 @@
 "use client";
 
-import type { Session } from "@supabase/supabase-js";
-import { useEffect, useMemo, useState } from "react";
-
-import { getSupabaseBrowserClient } from "../lib/supabase";
+import { useEffect, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
@@ -31,32 +28,11 @@ type DataReadinessResponse = {
 };
 
 export function BrokerConnectionBar() {
-  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
-  const [session, setSession] = useState<Session | null>(null);
   const [dataReadiness, setDataReadiness] = useState<DataReadinessResponse | null>(null);
 
   useEffect(() => {
-    if (!supabase) return;
     let active = true;
-    void supabase.auth.getSession().then(({ data }) => {
-      if (active) setSession(data.session);
-    });
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      if (active) setSession(nextSession);
-    });
-    return () => {
-      active = false;
-      data.subscription.unsubscribe();
-    };
-  }, [supabase]);
-
-  useEffect(() => {
-    if (!session) {
-      setDataReadiness(null);
-      return;
-    }
-    let active = true;
-    void loadDataReadiness(session.access_token)
+    void loadDataReadiness()
       .then((payload) => {
         if (active) setDataReadiness(payload);
       })
@@ -66,9 +42,7 @@ export function BrokerConnectionBar() {
     return () => {
       active = false;
     };
-  }, [session]);
-
-  if (!session) return null;
+  }, []);
 
   const corpusComplete = Boolean(dataReadiness?.ready && dataReadiness.warnings.length === 0);
   const blockingAgents =
@@ -114,10 +88,8 @@ export function BrokerConnectionBar() {
   );
 }
 
-async function loadDataReadiness(accessToken: string): Promise<DataReadinessResponse> {
-  const response = await fetch(`${API_BASE}/v1/system/data-readiness`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+async function loadDataReadiness(): Promise<DataReadinessResponse> {
+  const response = await fetch(`${API_BASE}/v1/system/data-readiness`);
   const body = await response.json();
   if (!response.ok) {
     throw new Error(body?.detail ?? "Unable to load research data readiness");

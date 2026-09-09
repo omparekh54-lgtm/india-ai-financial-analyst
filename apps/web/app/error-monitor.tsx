@@ -1,33 +1,11 @@
 "use client";
 
-import type { Session } from "@supabase/supabase-js";
-import { useEffect, useMemo, useState } from "react";
-
-import { getSupabaseBrowserClient } from "../lib/supabase";
+import { useEffect } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 export function ErrorMonitor() {
-  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
-  const [session, setSession] = useState<Session | null>(null);
-
   useEffect(() => {
-    if (!supabase) return;
-    let active = true;
-    void supabase.auth.getSession().then(({ data }) => {
-      if (active) setSession(data.session);
-    });
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      if (active) setSession(nextSession);
-    });
-    return () => {
-      active = false;
-      data.subscription.unsubscribe();
-    };
-  }, [supabase]);
-
-  useEffect(() => {
-    if (!session) return;
     let sentCount = 0;
     const report = (kind: string, message: string, stack?: string) => {
       if (sentCount >= 5) return;
@@ -38,7 +16,6 @@ export function ErrorMonitor() {
         method: "POST",
         keepalive: true,
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -65,7 +42,7 @@ export function ErrorMonitor() {
       window.removeEventListener("error", onError);
       window.removeEventListener("unhandledrejection", onUnhandledRejection);
     };
-  }, [session]);
+  }, []);
 
   return null;
 }
