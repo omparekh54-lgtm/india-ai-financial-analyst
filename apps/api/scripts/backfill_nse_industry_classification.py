@@ -266,6 +266,34 @@ async def coverage_snapshot(database_url: str) -> dict[str, int]:
         await engine.dispose()
 
 
+async def _record_ingestion_run(database_url: str, summary: dict[str, object]) -> None:
+    """Persist the run to ingestion_runs so freshness monitoring can see this pipeline.
+
+    Every ingestion_runs row in production was written by ad-hoc code that is not in this
+    repository, and this committed script recorded nothing at all — which is how a
+    classification pass that satisfied no gate requirement went unnoticed.
+    """
+    engine = create_database_engine(database_url)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    """
+                    insert into ingestion_runs
+                      (pipeline, scope, status, started_at, completed_at, stats)
+                    values
+                      ('nse_industry_classification', 'nse_eq', :status, now(), now(), :stats)
+                    """
+                ),
+                {
+                    "status": str(summary.get("status", "unknown")),
+                    "stats": json.dumps(summary, default=str, sort_keys=True),
+                },
+            )
+    except Exception as exc:  # noqa: BLE001 - reporting must not mask the run's own outcome
+        print(json.dumps({"event": "ingestion_run_record_failed", "error": str(exc)}), flush=True)
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser(
         description="Backfill official NSE four-level industry classifications with provenance."
@@ -356,14 +384,46 @@ async def main() -> int:
 
     updated = await persist_classifications(settings.database_url, results)
     after = await coverage_snapshot(settings.database_url)
+
+    # Self-verification. The pipeline that actually populated production reported
+    # "securities_updated: 746" while leaving provenance_linked at 0, so the corpus looked
+    # classified while every row still failed the readiness gate. A run must prove its own
+    # writes satisfy the contract rather than trusting an update rowcount.
+    gained = after["provenance_linked"] - before["provenance_linked"]
+    verified = gained >= updated and after["classified"] >= before["classified"] + updated
     summary.update(
         {
             "updated": updated,
             "coverage_after": after,
             "writes_performed": True,
+            "provenance_linked_gained": gained,
+            "gate_verified": verified,
         }
     )
+    if not verified:
+        summary["blocked_reason"] = (
+            "Rows were written but did not satisfy the readiness contract: sector, industry "
+            "and classification provenance must all be present. Reporting failure rather "
+            "than a misleading partial success."
+        )
+        summary["status"] = "failed_verification"
+        print(json.dumps(summary, indent=2, sort_keys=True))
+        await _record_ingestion_run(settings.database_url, summary)
+        return 3
+
+    # The four-tier taxonomy source is the NIFTY Total Market constituent list, which covers
+    # roughly 750 of the ~2,300 listed NSE EQ securities. Full-universe classification is
+    # therefore not reachable from this source; record the ceiling instead of implying a gap
+    # that more retries could close.
+    summary["status"] = (
+        "completed" if after["provenance_linked"] >= after["total"] else "completed_partial_universe"
+    )
+    summary["universe_ceiling_note"] = (
+        "Source covers NIFTY Total Market constituents only; securities outside the index "
+        "cannot be classified from this feed."
+    )
     print(json.dumps(summary, indent=2, sort_keys=True))
+    await _record_ingestion_run(settings.database_url, summary)
     return 0
 
 
