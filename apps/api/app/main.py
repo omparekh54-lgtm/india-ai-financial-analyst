@@ -422,6 +422,14 @@ async def _resolve_security_or_404(engine, query: str) -> tuple[UUID, str]:
             },
         )
     security = result.candidate.security
+    if security.id is None:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "security_identifier_missing",
+                "message": "Resolved security is missing its database identifier.",
+            },
+        )
     return security.id, (security.nse_symbol or str(security.id))
 
 
