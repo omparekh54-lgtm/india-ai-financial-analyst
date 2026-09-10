@@ -106,7 +106,10 @@ async def load_market_history_coverage(
                     left join market_bars mb on mb.security_id = s.id
                     where s.primary_exchange = 'NSE'
                       and coalesce(s.metadata->>'nse_series', 'EQ') = 'EQ'
-                      and (:security_id is null or s.id = :security_id)
+                      and (
+                        cast(:security_id as uuid) is null
+                        or s.id = cast(:security_id as uuid)
+                      )
                     group by s.id, s.nse_symbol, s.metadata->>'date_of_listing'
                     order by s.nse_symbol
                     """
