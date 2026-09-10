@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from uuid import UUID
 from typing import Any
 
 from sqlalchemy import text
@@ -77,6 +78,7 @@ async def load_market_history_coverage(
     engine: AsyncEngine,
     *,
     as_of: date | None = None,
+    security_id: UUID | None = None,
 ) -> MarketHistoryCoverageReport:
     evaluation_date = as_of or datetime.now(UTC).date()
     async with engine.connect() as connection:
@@ -104,10 +106,12 @@ async def load_market_history_coverage(
                     left join market_bars mb on mb.security_id = s.id
                     where s.primary_exchange = 'NSE'
                       and coalesce(s.metadata->>'nse_series', 'EQ') = 'EQ'
+                      and (:security_id is null or s.id = :security_id)
                     group by s.id, s.nse_symbol, s.metadata->>'date_of_listing'
                     order by s.nse_symbol
                     """
-                )
+                ),
+                {"security_id": security_id},
             )
         ).mappings().all()
 

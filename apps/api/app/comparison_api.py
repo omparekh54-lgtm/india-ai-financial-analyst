@@ -48,14 +48,11 @@ def _engine_and_repository():  # type: ignore[no-untyped-def]
 async def compare_companies(request: CompareRequest, _user: CurrentUser) -> dict[str, object]:
     engine, repository = _engine_and_repository()
     try:
-        try:
-            return await repository.compare(request.security_ids, metric_names=request.metrics)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except LookupError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-    finally:
-        await engine.dispose()
+        return await repository.compare(request.security_ids, metric_names=request.metrics)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/screen")
@@ -70,16 +67,13 @@ async def screen_companies(request: ScreenRequest, _user: CurrentUser) -> dict[s
         for item in request.filters
     ]
     try:
-        try:
-            return await repository.screen(
-                filters=filters,
-                sector=request.sector,
-                industry=request.industry,
-                sort_metric=request.sort_metric,
-                descending=request.descending,
-                limit=request.limit,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-    finally:
-        await engine.dispose()
+        return await repository.screen(
+            filters=filters,
+            sector=request.sector,
+            industry=request.industry,
+            sort_metric=request.sort_metric,
+            descending=request.descending,
+            limit=request.limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
