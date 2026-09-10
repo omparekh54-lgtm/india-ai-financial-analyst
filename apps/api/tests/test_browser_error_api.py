@@ -6,12 +6,17 @@ from app.auth import AuthenticatedUser, require_authenticated_user
 from app.main import app
 
 
-def test_browser_error_requires_authentication() -> None:
-    response = TestClient(app).post(
-        "/v1/system/browser-errors",
-        json={"kind": "window_error", "message": "test", "page_path": "/"},
-    )
-    assert response.status_code == 401
+def test_browser_error_accepts_anonymous_principal() -> None:
+    anonymous = AuthenticatedUser(id=uuid4(), kind="anonymous")
+    app.dependency_overrides[require_authenticated_user] = lambda: anonymous
+    try:
+        response = TestClient(app).post(
+            "/v1/system/browser-errors",
+            json={"kind": "window_error", "message": "test", "page_path": "/"},
+        )
+        assert response.status_code == 202
+    finally:
+        app.dependency_overrides.pop(require_authenticated_user, None)
 
 
 def test_browser_errors_are_rate_limited_per_user() -> None:
