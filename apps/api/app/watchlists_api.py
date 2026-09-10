@@ -92,7 +92,7 @@ def _engine_and_repository() -> tuple[AsyncEngine, WatchlistRepository]:
 
 @router.get("")
 async def list_watchlists(user: CurrentUser) -> dict[str, object]:
-    engine, repository = _engine_and_repository()
+    repository = _engine_and_repository()[1]
     watchlists = await repository.list_for_user(user.id)
     return {"count": len(watchlists), "watchlists": watchlists}
 
@@ -102,7 +102,7 @@ async def create_watchlist(
     request: WatchlistCreateRequest,
     user: CurrentUser,
 ) -> dict[str, object]:
-    engine, repository = _engine_and_repository()
+    repository = _engine_and_repository()[1]
     try:
         watchlist = await repository.create(user.id, request.name)
     except IntegrityError as exc:
@@ -116,7 +116,7 @@ async def create_watchlist(
 
 @router.delete("/{watchlist_id}")
 async def delete_watchlist(watchlist_id: UUID, user: CurrentUser) -> dict[str, object]:
-    engine, repository = _engine_and_repository()
+    repository = _engine_and_repository()[1]
     removed = await repository.delete(user.id, watchlist_id)
     if not removed:
         raise HTTPException(status_code=404, detail="Watchlist not found")
@@ -129,7 +129,7 @@ async def add_watchlist_item(
     request: WatchlistItemRequest,
     user: CurrentUser,
 ) -> dict[str, object]:
-    engine, repository = _engine_and_repository()
+    repository = _engine_and_repository()[1]
     try:
         item = await repository.add_item(
             user.id,
@@ -210,7 +210,7 @@ async def remove_watchlist_item(
     security_id: UUID,
     user: CurrentUser,
 ) -> dict[str, object]:
-    engine, repository = _engine_and_repository()
+    repository = _engine_and_repository()[1]
     removed = await repository.remove_item(user.id, watchlist_id, security_id)
     if not removed:
         raise HTTPException(status_code=404, detail="Watchlist item not found")

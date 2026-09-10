@@ -39,14 +39,14 @@ def _repository() -> tuple[AsyncEngine, PortfolioRepository]:
 
 @router.get("")
 async def list_portfolios(user: CurrentUser) -> dict[str, object]:
-    engine, repository = _repository()
+    repository = _repository()[1]
     portfolios = await repository.list_for_user(user.id)
     return {"count": len(portfolios), "portfolios": portfolios}
 
 
 @router.post("", status_code=201)
 async def create_portfolio(request: PortfolioCreateRequest, user: CurrentUser) -> dict[str, object]:
-    engine, repository = _repository()
+    repository = _repository()[1]
     try:
         portfolio = await repository.create(user.id, request.name, request.base_currency)
     except IntegrityError as exc:
@@ -56,7 +56,7 @@ async def create_portfolio(request: PortfolioCreateRequest, user: CurrentUser) -
 
 @router.delete("/{portfolio_id}")
 async def delete_portfolio(portfolio_id: UUID, user: CurrentUser) -> dict[str, object]:
-    engine, repository = _repository()
+    repository = _repository()[1]
     deleted = await repository.delete(user.id, portfolio_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Portfolio not found")
@@ -69,7 +69,7 @@ async def upsert_portfolio_position(
     request: PortfolioPositionRequest,
     user: CurrentUser,
 ) -> dict[str, object]:
-    engine, repository = _repository()
+    repository = _repository()[1]
     try:
         position = await repository.upsert_position(
             user.id,
@@ -92,7 +92,7 @@ async def remove_portfolio_position(
     security_id: UUID,
     user: CurrentUser,
 ) -> dict[str, object]:
-    engine, repository = _repository()
+    repository = _repository()[1]
     deleted = await repository.remove_position(user.id, portfolio_id, security_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Portfolio position not found")
@@ -101,7 +101,7 @@ async def remove_portfolio_position(
 
 @router.get("/{portfolio_id}/analysis")
 async def portfolio_analysis(portfolio_id: UUID, user: CurrentUser) -> dict[str, object]:
-    engine, repository = _repository()
+    repository = _repository()[1]
     analysis = await repository.analyze(user.id, portfolio_id)
     if analysis is None:
         raise HTTPException(status_code=404, detail="Portfolio not found")

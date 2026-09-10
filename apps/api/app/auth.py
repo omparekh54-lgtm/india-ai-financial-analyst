@@ -41,7 +41,7 @@ class AuthenticatedUser:
         return self.kind == "anonymous"
 
     @classmethod
-    def from_principal(cls, principal: Principal) -> "AuthenticatedUser":
+    def from_principal(cls, principal: Principal) -> AuthenticatedUser:
         return cls(
             id=principal.id,
             email=principal.email,

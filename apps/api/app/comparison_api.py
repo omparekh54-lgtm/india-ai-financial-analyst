@@ -46,7 +46,7 @@ def _engine_and_repository():  # type: ignore[no-untyped-def]
 
 @router.post("/compare")
 async def compare_companies(request: CompareRequest, _user: CurrentUser) -> dict[str, object]:
-    engine, repository = _engine_and_repository()
+    repository = _engine_and_repository()[1]
     try:
         return await repository.compare(request.security_ids, metric_names=request.metrics)
     except ValueError as exc:
@@ -57,7 +57,7 @@ async def compare_companies(request: CompareRequest, _user: CurrentUser) -> dict
 
 @router.post("/screen")
 async def screen_companies(request: ScreenRequest, _user: CurrentUser) -> dict[str, object]:
-    engine, repository = _engine_and_repository()
+    repository = _engine_and_repository()[1]
     filters = [
         MetricFilter(
             metric_name=item.metric_name,

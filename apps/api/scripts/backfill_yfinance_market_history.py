@@ -23,6 +23,54 @@ from app.ingestion.reference_provenance import (
 from app.observability import configure_sentry
 
 _INDIA_TIMEZONE = ZoneInfo("Asia/Kolkata")
+
+# Railway drops log messages above ~500 lines/sec per replica. A run over the full NSE EQ
+# universe emits one line per symbol, which exceeded that and marked the job CRASHED.
+_PROGRESS_EVERY = 250
+
+
+def _classify_failures(failed: list[dict[str, object]]) -> dict[str, int]:
+    """Group failures by cause so operators can act instead of reading 2,300 log lines."""
+    counts: dict[str, int] = {}
+    for item in failed:
+        message = str(item.get("error", "")).lower()
+        if "delist" in message or "no data found" in message or "not found" in message:
+            reason = "delisted_or_unknown_symbol"
+        elif "rate" in message and "limit" in message:
+            reason = "provider_rate_limited"
+        elif "timeout" in message or "timed out" in message:
+            reason = "provider_timeout"
+        elif "empty" in message or "no price data" in message:
+            reason = "no_bars_returned"
+        else:
+            reason = "other"
+        counts[reason] = counts.get(reason, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+async def _record_ingestion_run(engine: AsyncEngine, summary: dict[str, object]) -> None:
+    """Persist the run summary so freshness monitoring can see this pipeline.
+
+    The Yahoo refresh previously wrote no ingestion_runs row at all, so the corpus looked
+    as though nothing had been ingested since the last official-feed run even while market
+    bars were being updated daily.
+    """
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    """
+                    insert into ingestion_runs
+                      (pipeline, scope, status, started_at, completed_at, stats)
+                    values
+                      ('yfinance_market_history', 'nse_eq', :status, now(), now(), :stats)
+                    """
+                ),
+                {"status": str(summary.get("status")), "stats": json.dumps(summary)},
+            )
+    except Exception as exc:  # noqa: BLE001 - reporting must never fail the ingestion run
+        sentry_sdk.capture_exception(exc)
+        print(json.dumps({"event": "ingestion_run_record_failed", "error": str(exc)}), flush=True)
 _NSE_FALLBACK_START = date(1990, 1, 1)
 
 
@@ -498,27 +546,52 @@ async def _run() -> int:
                             "retry_after": (datetime.now(UTC) + timedelta(hours=24)).isoformat(),
                         },
                     )
-            print(json.dumps({"event": "symbol_result", **results[-1]}), flush=True)
+            # One log line per symbol overwhelmed Railway's 500 lines/sec replica limit
+            # (12,454 messages dropped, job marked CRASHED). Emit a periodic heartbeat
+            # instead; per-symbol outcomes are persisted to ingestion_runs and checkpoints.
+            processed = position + 1
+            if processed % _PROGRESS_EVERY == 0 or processed == len(targets):
+                print(
+                    json.dumps(
+                        {
+                            "event": "progress",
+                            "processed": processed,
+                            "total": len(targets),
+                            "failures": failures,
+                        }
+                    ),
+                    flush=True,
+                )
             if position + 1 < len(targets) and args.request_delay_seconds:
                 await asyncio.sleep(args.request_delay_seconds)
 
-        print(
-            json.dumps(
-                {
-                    "status": "completed" if failures == 0 else "completed_with_failures",
-                    "provider": "yfinance",
-                    "allowed_use": "internal_research",
-                    "commercial_display_approved": False,
-                    "target_count": len(targets),
-                    "failure_count": failures,
-                    "next_after_symbol": targets[-1].symbol if args.all and targets else None,
-                    "results": results,
-                },
-                indent=2,
-                sort_keys=True,
-            )
-        )
-        return 0 if failures == 0 else 1
+        failed = [item for item in results if not item.get("ok")]
+        summary = {
+            "status": "completed" if failures == 0 else "completed_with_failures",
+            "provider": "yfinance",
+            "allowed_use": "internal_research",
+            "commercial_display_approved": False,
+            "target_count": len(targets),
+            "success_count": len(targets) - failures,
+            "failure_count": failures,
+            "failure_reasons": _classify_failures(failed),
+            # Bounded sample only. Dumping every result re-created the log storm this
+            # script was crashing on.
+            "failed_symbols_sample": [str(item.get("symbol")) for item in failed[:50]],
+            "failed_symbols_truncated": max(0, len(failed) - 50),
+            "next_after_symbol": targets[-1].symbol if args.all and targets else None,
+        }
+        print(json.dumps(summary, sort_keys=True), flush=True)
+        await _record_ingestion_run(engine, summary)
+
+        # Partial symbol failures are an expected outcome (delistings, suspensions, provider
+        # gaps) and must not present as a crashed job. PROJECT_INTENT.md: "Scheduled imports
+        # may finish as partial success when individual securities fail, but failures must be
+        # summarized, retried, and alerted rather than hidden". A non-zero exit here is what
+        # made Railway report CRASHED for an otherwise successful run.
+        if failures and failures == len(targets):
+            return 1  # nothing at all succeeded: a real failure
+        return 0
     finally:
         await engine.dispose()
 

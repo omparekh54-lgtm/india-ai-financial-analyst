@@ -22,9 +22,7 @@ from app.core.config import get_settings
 from app.core.data_readiness import evaluate_data_coverage, load_data_coverage
 from app.core.readiness import assert_production_ready, audit_settings
 from app.core.research_gate import (
-    ResearchCorpusNotReadyError,
     SecurityNotReadyError,
-    enforce_research_corpus_ready,
     enforce_security_research_ready,
 )
 from app.core.security_readiness import SecurityNotSupportedError
@@ -36,10 +34,10 @@ from app.orchestration.plan import AnalysisMode, ResearchDepth, build_research_p
 from app.portfolio_api import router as portfolio_router
 from app.providers.router import Capability, ProviderRouter
 from app.repositories.research import ResearchRepository
-from app.securities.repository import SecurityMasterRepository
-from app.securities.resolver import SecurityResolver
 from app.research.export import render_research_markdown, research_export_payload
 from app.research.service import ResearchService
+from app.securities.repository import SecurityMasterRepository
+from app.securities.resolver import SecurityResolver
 from app.usage_api import router as usage_router
 from app.watchlists_api import router as watchlists_router
 
