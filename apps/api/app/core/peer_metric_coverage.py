@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -36,7 +37,11 @@ class PeerMetricCoverageReport:
         }
 
 
-async def load_peer_metric_coverage(engine: AsyncEngine) -> PeerMetricCoverageReport:
+async def load_peer_metric_coverage(
+    engine: AsyncEngine,
+    *,
+    security_id: UUID | None = None,
+) -> PeerMetricCoverageReport:
     """Require recent, source-backed metrics that the Industry Agent can actually compare."""
     async with engine.connect() as connection:
         rows = (
@@ -48,6 +53,7 @@ async def load_peer_metric_coverage(engine: AsyncEngine) -> PeerMetricCoverageRe
                       from securities
                       where primary_exchange = 'NSE'
                         and coalesce(metadata->>'nse_series', 'EQ') = 'EQ'
+                        and (:security_id is null or id = :security_id)
                     ), counts as (
                       select
                         sm.security_id,
@@ -86,6 +92,7 @@ async def load_peer_metric_coverage(engine: AsyncEngine) -> PeerMetricCoverageRe
                 {
                     "max_age_days": PEER_METRIC_MAX_AGE_DAYS,
                     "metric_names": sorted(INDUSTRY_COMPARABLE_METRICS),
+                    "security_id": security_id,
                 },
             )
         ).mappings().all()

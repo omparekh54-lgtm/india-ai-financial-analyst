@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated
 from uuid import UUID
 
@@ -40,6 +41,48 @@ class WatchlistResolvedItemRequest(BaseModel):
     event_research_enabled: bool = True
 
 
+# Postgres SQLSTATE codes. A bare IntegrityError catch cannot tell these apart, which
+# previously reported foreign-key failures to users as "that name already exists".
+_UNIQUE_VIOLATION = "23505"
+_FOREIGN_KEY_VIOLATION = "23503"
+_CHECK_VIOLATION = "23514"
+_NOT_NULL_VIOLATION = "23502"
+
+logger = logging.getLogger(__name__)
+
+
+def _sqlstate(exc: IntegrityError) -> str | None:
+    return getattr(getattr(exc, "orig", None), "sqlstate", None) or getattr(
+        getattr(exc, "orig", None), "pgcode", None
+    )
+
+
+def _translate_integrity_error(
+    exc: IntegrityError,
+    *,
+    unique_detail: str,
+    foreign_key_detail: str,
+) -> HTTPException:
+    """Map an IntegrityError to an honest status code based on the actual constraint.
+
+    A unique violation is the user's fault and is safe to explain. A foreign-key or
+    not-null violation means the request referenced something that does not exist, or
+    that server-side ownership wiring is broken; never report either as a duplicate name.
+    """
+    code = _sqlstate(exc)
+    if code == _UNIQUE_VIOLATION:
+        return HTTPException(status_code=409, detail=unique_detail)
+    if code == _FOREIGN_KEY_VIOLATION:
+        return HTTPException(status_code=404, detail=foreign_key_detail)
+    if code == _CHECK_VIOLATION:
+        return HTTPException(status_code=422, detail="Request violates a database constraint")
+    if code == _NOT_NULL_VIOLATION:
+        logger.error("Not-null violation writing watchlist data", exc_info=exc)
+        return HTTPException(status_code=500, detail="Internal error")
+    logger.error("Unclassified integrity error (sqlstate=%s)", code, exc_info=exc)
+    return HTTPException(status_code=500, detail="Internal error")
+
+
 def _engine_and_repository() -> tuple[AsyncEngine, WatchlistRepository]:
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
@@ -49,11 +92,8 @@ def _engine_and_repository() -> tuple[AsyncEngine, WatchlistRepository]:
 
 @router.get("")
 async def list_watchlists(user: CurrentUser) -> dict[str, object]:
-    engine, repository = _engine_and_repository()
-    try:
-        watchlists = await repository.list_for_user(user.id)
-    finally:
-        await engine.dispose()
+    repository = _engine_and_repository()[1]
+    watchlists = await repository.list_for_user(user.id)
     return {"count": len(watchlists), "watchlists": watchlists}
 
 
@@ -62,27 +102,22 @@ async def create_watchlist(
     request: WatchlistCreateRequest,
     user: CurrentUser,
 ) -> dict[str, object]:
-    engine, repository = _engine_and_repository()
+    repository = _engine_and_repository()[1]
     try:
-        try:
-            watchlist = await repository.create(user.id, request.name)
-        except IntegrityError as exc:
-            raise HTTPException(
-                status_code=409,
-                detail="A watchlist with that name already exists",
-            ) from exc
-    finally:
-        await engine.dispose()
+        watchlist = await repository.create(user.id, request.name)
+    except IntegrityError as exc:
+        raise _translate_integrity_error(
+            exc,
+            unique_detail="A watchlist with that name already exists",
+            foreign_key_detail="Watchlist owner could not be resolved",
+        ) from exc
     return watchlist
 
 
 @router.delete("/{watchlist_id}")
 async def delete_watchlist(watchlist_id: UUID, user: CurrentUser) -> dict[str, object]:
-    engine, repository = _engine_and_repository()
-    try:
-        removed = await repository.delete(user.id, watchlist_id)
-    finally:
-        await engine.dispose()
+    repository = _engine_and_repository()[1]
+    removed = await repository.delete(user.id, watchlist_id)
     if not removed:
         raise HTTPException(status_code=404, detail="Watchlist not found")
     return {"watchlist_id": str(watchlist_id), "deleted": True}
@@ -94,23 +129,21 @@ async def add_watchlist_item(
     request: WatchlistItemRequest,
     user: CurrentUser,
 ) -> dict[str, object]:
-    engine, repository = _engine_and_repository()
+    repository = _engine_and_repository()[1]
     try:
-        try:
-            item = await repository.add_item(
-                user.id,
-                watchlist_id,
-                request.security_id,
-                notes=request.notes,
-                event_research_enabled=request.event_research_enabled,
-            )
-        except IntegrityError as exc:
-            raise HTTPException(
-                status_code=404,
-                detail="Security not found",
-            ) from exc
-    finally:
-        await engine.dispose()
+        item = await repository.add_item(
+            user.id,
+            watchlist_id,
+            request.security_id,
+            notes=request.notes,
+            event_research_enabled=request.event_research_enabled,
+        )
+    except IntegrityError as exc:
+        raise _translate_integrity_error(
+            exc,
+            unique_detail="That security is already on this watchlist",
+            foreign_key_detail="Security not found",
+        ) from exc
     if item is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
     return item
@@ -123,41 +156,42 @@ async def add_watchlist_item_by_query(
     user: CurrentUser,
 ) -> dict[str, object]:
     engine, repository = _engine_and_repository()
+    securities = await SecurityMasterRepository(engine).list_all()
+    resolution = SecurityResolver(securities).resolve(request.query)
+    candidate = resolution.candidate
+    if not resolution.resolved or candidate is None or candidate.security.id is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Security query could not be resolved confidently",
+                "normalized_query": resolution.normalized_query,
+                "alternatives": [
+                    {
+                        "legal_name": item.security.legal_name,
+                        "nse_symbol": item.security.nse_symbol,
+                        "bse_code": item.security.bse_code,
+                        "isin": item.security.isin,
+                        "score": round(item.score, 4),
+                        "match_reason": item.match_reason,
+                    }
+                    for item in resolution.alternatives
+                ],
+            },
+        )
     try:
-        securities = await SecurityMasterRepository(engine).list_all()
-        resolution = SecurityResolver(securities).resolve(request.query)
-        candidate = resolution.candidate
-        if not resolution.resolved or candidate is None or candidate.security.id is None:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "message": "Security query could not be resolved confidently",
-                    "normalized_query": resolution.normalized_query,
-                    "alternatives": [
-                        {
-                            "legal_name": item.security.legal_name,
-                            "nse_symbol": item.security.nse_symbol,
-                            "bse_code": item.security.bse_code,
-                            "isin": item.security.isin,
-                            "score": round(item.score, 4),
-                            "match_reason": item.match_reason,
-                        }
-                        for item in resolution.alternatives
-                    ],
-                },
-            )
-        try:
-            item = await repository.add_item(
-                user.id,
-                watchlist_id,
-                candidate.security.id,
-                notes=request.notes,
-                event_research_enabled=request.event_research_enabled,
-            )
-        except IntegrityError as exc:
-            raise HTTPException(status_code=404, detail="Security not found") from exc
-    finally:
-        await engine.dispose()
+        item = await repository.add_item(
+            user.id,
+            watchlist_id,
+            candidate.security.id,
+            notes=request.notes,
+            event_research_enabled=request.event_research_enabled,
+        )
+    except IntegrityError as exc:
+        raise _translate_integrity_error(
+            exc,
+            unique_detail="That security is already on this watchlist",
+            foreign_key_detail="Security not found",
+        ) from exc
     if item is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
     return {
@@ -176,11 +210,8 @@ async def remove_watchlist_item(
     security_id: UUID,
     user: CurrentUser,
 ) -> dict[str, object]:
-    engine, repository = _engine_and_repository()
-    try:
-        removed = await repository.remove_item(user.id, watchlist_id, security_id)
-    finally:
-        await engine.dispose()
+    repository = _engine_and_repository()[1]
+    removed = await repository.remove_item(user.id, watchlist_id, security_id)
     if not removed:
         raise HTTPException(status_code=404, detail="Watchlist item not found")
     return {

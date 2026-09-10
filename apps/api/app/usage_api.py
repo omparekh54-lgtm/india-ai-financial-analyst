@@ -17,7 +17,4 @@ async def current_usage(user: CurrentUser) -> dict[str, object]:
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
     engine = create_database_engine(settings.database_url)
-    try:
-        return await ResearchUsageGate(engine, settings).status(user.id)
-    finally:
-        await engine.dispose()
+    return await ResearchUsageGate(engine, settings).status(user.id)

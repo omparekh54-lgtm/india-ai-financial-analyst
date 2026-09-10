@@ -17,7 +17,4 @@ async def calibration_summary(user: CurrentUser) -> dict[str, object]:
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
     engine = create_database_engine(settings.database_url)
-    try:
-        return await CalibrationRepository(engine).summary_for_user(user.id)
-    finally:
-        await engine.dispose()
+    return await CalibrationRepository(engine).summary_for_user(user.id)

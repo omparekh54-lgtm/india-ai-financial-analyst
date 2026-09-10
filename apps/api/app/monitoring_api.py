@@ -22,14 +22,11 @@ async def monitoring_alerts(
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
     engine = create_database_engine(settings.database_url)
-    try:
-        alerts = await MonitoringRepository(engine).list_alerts(
-            user.id,
-            unread_only=unread_only,
-            limit=limit,
-        )
-    finally:
-        await engine.dispose()
+    alerts = await MonitoringRepository(engine).list_alerts(
+        user.id,
+        unread_only=unread_only,
+        limit=limit,
+    )
     return {
         "count": len(alerts),
         "unread_only": unread_only,
@@ -42,10 +39,7 @@ async def mark_monitoring_alert_read(alert_id: UUID, user: CurrentUser) -> dict[
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
     engine = create_database_engine(settings.database_url)
-    try:
-        updated = await MonitoringRepository(engine).mark_read(user.id, alert_id)
-    finally:
-        await engine.dispose()
+    updated = await MonitoringRepository(engine).mark_read(user.id, alert_id)
     if not updated:
         raise HTTPException(status_code=404, detail="Monitoring alert not found")
     return {"alert_id": str(alert_id), "read": True}
@@ -59,10 +53,7 @@ async def security_monitoring_delta(
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
     engine = create_database_engine(settings.database_url)
-    try:
-        payload = await MonitoringRepository(engine).latest_delta_for_user(user.id, security_id)
-    finally:
-        await engine.dispose()
+    payload = await MonitoringRepository(engine).latest_delta_for_user(user.id, security_id)
     if payload.get("snapshot") is None:
         raise HTTPException(status_code=404, detail="No completed research snapshot found")
     return payload

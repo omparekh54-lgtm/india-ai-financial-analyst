@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.auth import PUBLIC_USER_ID, AuthenticatedUser, require_authenticated_user
+from app.auth import AuthenticatedUser, require_authenticated_user
 from app.brokers.repository import BrokerRepository
 from app.brokers.upstox_oauth import UpstoxOAuthError, UpstoxOAuthService
 from app.calibration_api import router as calibration_router
@@ -21,9 +21,13 @@ from app.core.agent_data_readiness import evaluate_agent_readiness, load_agent_d
 from app.core.config import get_settings
 from app.core.data_readiness import evaluate_data_coverage, load_data_coverage
 from app.core.readiness import assert_production_ready, audit_settings
-from app.core.research_gate import ResearchCorpusNotReadyError, enforce_research_corpus_ready
+from app.core.research_gate import (
+    SecurityNotReadyError,
+    enforce_security_research_ready,
+)
+from app.core.security_readiness import SecurityNotSupportedError
 from app.core.usage import ResearchUsageLimitError
-from app.db import create_database_engine, database_health
+from app.db import create_database_engine, database_health, dispose_engines
 from app.monitoring_api import router as monitoring_router
 from app.observability import capture_browser_error, configure_sentry
 from app.orchestration.plan import AnalysisMode, ResearchDepth, build_research_plan
@@ -32,6 +36,8 @@ from app.providers.router import Capability, ProviderRouter
 from app.repositories.research import ResearchRepository
 from app.research.export import render_research_markdown, research_export_payload
 from app.research.service import ResearchService
+from app.securities.repository import SecurityMasterRepository
+from app.securities.resolver import SecurityResolver
 from app.usage_api import router as usage_router
 from app.watchlists_api import router as watchlists_router
 
@@ -45,6 +51,8 @@ _browser_error_windows: OrderedDict[UUID, tuple[float, int]] = OrderedDict()
 
 
 def _allow_browser_error(user_id: UUID) -> bool:
+    # Keyed on the principal id. While all anonymous traffic shared one id this quota was
+    # effectively global and a single client could exhaust it for every other visitor.
     now = monotonic()
     started, count = _browser_error_windows.pop(user_id, (now, 0))
     if now - started >= 60:
@@ -55,16 +63,24 @@ def _allow_browser_error(user_id: UUID) -> bool:
     return count < 5
 
 
-def _research_owner_id(user: AuthenticatedUser) -> UUID | None:
-    return None if user.id == PUBLIC_USER_ID else user.id
+def _research_owner_id(user: AuthenticatedUser) -> UUID:
+    """Every request has a real owner.
+
+    Public traffic previously fell back to NULL ownership, which PROJECT_INTENT.md
+    prohibits as a substitute for session isolation. Anonymous visitors now own their
+    research through their own principal, so history stays private per session.
+    """
+    return user.id
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     assert_production_ready(settings)
-    yield
     if settings.database_url:
-        await create_database_engine(settings.database_url).dispose()
+        # Warm the shared pool at startup so the first request does not pay connection setup.
+        create_database_engine(settings.database_url)
+    yield
+    await dispose_engines()
 
 
 app = FastAPI(
@@ -204,11 +220,8 @@ async def data_readiness(_user: CurrentUser) -> dict[str, object]:
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
     engine = create_database_engine(settings.database_url)
-    try:
-        coverage = await load_data_coverage(engine)
-        agent_coverage = await load_agent_data_coverage(engine)
-    finally:
-        await engine.dispose()
+    coverage = await load_data_coverage(engine)
+    agent_coverage = await load_agent_data_coverage(engine)
 
     corpus_report = evaluate_data_coverage(coverage)
     agent_report = evaluate_agent_readiness(agent_coverage, coverage, settings)
@@ -396,31 +409,63 @@ async def research_job_export(
     )
 
 
-async def _enforce_research_ready_or_503() -> None:
+async def _resolve_security_or_404(engine, query: str) -> tuple[UUID, str]:
+    """Resolve a user query to exactly one supported security."""
+    securities = await SecurityMasterRepository(engine).list_all()
+    result = SecurityResolver(securities).resolve(query)
+    if not result.resolved or result.candidate is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "security_not_resolved",
+                "message": f"Could not resolve '{query}' to a supported listed security.",
+            },
+        )
+    security = result.candidate.security
+    return security.id, (security.nse_symbol or str(security.id))
+
+
+async def _enforce_research_ready_or_503(query: str) -> None:
+    """Block research only when the requested security is not ready.
+
+    Per PROJECT_INTENT.md an incomplete security must not block a complete one, so this
+    gates on the resolved security rather than on universe-wide coverage. Global provenance
+    rules still fail closed inside the per-security evaluation.
+    """
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
     engine = create_database_engine(settings.database_url)
+    security_id, symbol = await _resolve_security_or_404(engine, query)
     try:
-        await enforce_research_corpus_ready(
+        await enforce_security_research_ready(
             engine,
+            security_id,
             app_env=settings.app_env,
             settings=settings,
         )
-    except ResearchCorpusNotReadyError as exc:
+    except SecurityNotSupportedError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "security_not_supported",
+                "message": f"{symbol} is not part of the supported NSE EQ universe.",
+            },
+        ) from exc
+    except SecurityNotReadyError as exc:
         raise HTTPException(
             status_code=503,
             detail={
-                "code": "research_corpus_not_ready",
+                "code": "security_not_ready",
                 "message": (
-                    "Production research is blocked until the global corpus and all required "
-                    "agent data-readiness gates pass."
+                    f"{exc.symbol} is not research-ready. The required data for one or more "
+                    "agents is missing, stale, or unapproved."
                 ),
+                "symbol": exc.symbol,
+                "security_id": str(exc.security_id),
                 "blocking_agents": list(exc.blocking_agents),
                 "errors": list(exc.errors[:12]),
             },
         ) from exc
-    finally:
-        await engine.dispose()
 
 
 @app.post("/v1/research/enqueue", status_code=202)
@@ -429,7 +474,7 @@ async def enqueue_research(
     user: CurrentUser,
 ) -> dict[str, object]:
     """Create a durable job and return immediately; the research worker performs the analysis."""
-    await _enforce_research_ready_or_503()
+    await _enforce_research_ready_or_503(request.query)
     assert settings.database_url is not None
     engine = create_database_engine(settings.database_url)
     service = ResearchService(
@@ -437,15 +482,12 @@ async def enqueue_research(
         max_concurrency=settings.max_agent_concurrency,
         settings=settings,
     )
-    try:
-        job_id = await service.enqueue(
-            query=request.query,
-            mode=request.mode,
-            depth=request.depth,
-            requested_by=_research_owner_id(user),
-        )
-    finally:
-        await engine.dispose()
+    job_id = await service.enqueue(
+        query=request.query,
+        mode=request.mode,
+        depth=request.depth,
+        requested_by=_research_owner_id(user),
+    )
     return {
         "job_id": str(job_id),
         "status": "queued",
@@ -461,7 +503,7 @@ async def run_research(
     user: CurrentUser,
 ) -> dict[str, object]:
     """Compatibility path for immediate internal execution; product UI uses /enqueue."""
-    await _enforce_research_ready_or_503()
+    await _enforce_research_ready_or_503(request.query)
     assert settings.database_url is not None
     engine = create_database_engine(settings.database_url)
     service = ResearchService(
@@ -483,8 +525,6 @@ async def run_research(
             status_code=500,
             detail=f"Research execution failed: {type(exc).__name__}",
         ) from exc
-    finally:
-        await engine.dispose()
 
     return {
         "job_id": str(execution.job_id),
