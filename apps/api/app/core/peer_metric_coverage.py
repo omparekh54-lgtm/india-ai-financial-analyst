@@ -53,7 +53,10 @@ async def load_peer_metric_coverage(
                       from securities
                       where primary_exchange = 'NSE'
                         and coalesce(metadata->>'nse_series', 'EQ') = 'EQ'
-                        and (:security_id is null or id = :security_id)
+                        and (
+                          cast(:security_id as uuid) is null
+                          or id = cast(:security_id as uuid)
+                        )
                     ), counts as (
                       select
                         sm.security_id,
