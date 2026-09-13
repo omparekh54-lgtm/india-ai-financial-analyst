@@ -13,8 +13,10 @@ COPY pyproject.toml ./
 COPY app ./app
 COPY scripts ./scripts
 
+# The HTTP API uses only the core runtime. Market importers, document parsing and
+# embedding models run in scheduled jobs and must not inflate the always-on image.
 RUN python -m pip install --upgrade pip \
-    && python -m pip install ".[live_market,market_imports,embeddings,documents]"
+    && python -m pip install "."
 
 USER app
 
