@@ -18,6 +18,7 @@ from app.brokers.upstox_oauth import UpstoxOAuthError, UpstoxOAuthService
 from app.calibration_api import router as calibration_router
 from app.comparison_api import router as comparison_router
 from app.core.agent_data_readiness import evaluate_agent_readiness, load_agent_data_coverage
+from app.core.async_ttl_cache import AsyncTTLCache
 from app.core.config import get_settings
 from app.core.data_readiness import evaluate_data_coverage, load_data_coverage
 from app.core.readiness import assert_production_ready, audit_settings
@@ -48,6 +49,9 @@ configure_sentry(settings, service="api")
 
 # Per-process abuse guard for authenticated browser telemetry; bounded memory.
 _browser_error_windows: OrderedDict[UUID, tuple[float, int]] = OrderedDict()
+_data_readiness_cache: AsyncTTLCache[dict[str, object]] = AsyncTTLCache(
+    settings.data_readiness_cache_seconds
+)
 
 
 def _allow_browser_error(user_id: UUID) -> bool:
@@ -219,16 +223,22 @@ async def data_readiness(_user: CurrentUser) -> dict[str, object]:
     """Report global corpus coverage and every agent's real-data readiness contract."""
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
-    engine = create_database_engine(settings.database_url)
-    coverage = await load_data_coverage(engine)
-    agent_coverage = await load_agent_data_coverage(engine)
+    async def load_payload() -> dict[str, object]:
+        engine = create_database_engine(settings.database_url or "")
+        coverage = await load_data_coverage(engine)
+        agent_coverage = await load_agent_data_coverage(engine)
+        corpus_report = evaluate_data_coverage(coverage)
+        agent_report = evaluate_agent_readiness(agent_coverage, coverage, settings)
+        result = corpus_report.as_dict()
+        result["agent_readiness"] = agent_report.as_dict()
+        result["blocking_agents"] = list(agent_report.blocking_agents)
+        result["ready"] = corpus_report.ready and agent_report.ready
+        result["generated_at"] = datetime.now(UTC).isoformat()
+        return result
 
-    corpus_report = evaluate_data_coverage(coverage)
-    agent_report = evaluate_agent_readiness(agent_coverage, coverage, settings)
-    payload = corpus_report.as_dict()
-    payload["agent_readiness"] = agent_report.as_dict()
-    payload["blocking_agents"] = list(agent_report.blocking_agents)
-    payload["ready"] = corpus_report.ready and agent_report.ready
+    payload, cache_hit = await _data_readiness_cache.get_or_load(load_payload)
+    payload["cache_hit"] = cache_hit
+    payload["cache_ttl_seconds"] = settings.data_readiness_cache_seconds
     return payload
 
 
@@ -548,7 +558,3 @@ async def run_research(
                 "evidence_count": len(output.evidence),
                 "warnings": output.warnings,
                 "errors": output.errors,
-            }
-            for output in execution.outputs
-        ],
-    }
