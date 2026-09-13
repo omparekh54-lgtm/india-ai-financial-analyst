@@ -1,0 +1,146 @@
+name: Free-tier data jobs
+
+on:
+  schedule:
+    # 18:15 India time on weekdays. GitHub may start scheduled jobs a little late.
+    - cron: "45 12 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      job:
+        description: Data job to run
+        required: true
+        default: market-and-benchmarks
+        type: choice
+        options:
+          - market-and-benchmarks
+          - classification
+          - financials
+          - peer-metrics
+      financial_batches:
+        description: Financial batches of 25 securities (maximum 8 per run)
+        required: false
+        default: "4"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: free-tier-production-data
+  cancel-in-progress: false
+
+env:
+  APP_ENV: production
+  FREE_ONLY: "true"
+  ENABLE_EXTERNAL_DATA_CALLS: "true"
+  ENABLE_EXTERNAL_LLM_CALLS: "false"
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+jobs:
+  market:
+    if: github.event_name == 'schedule' || inputs.job == 'market-and-benchmarks'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: production
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - name: Require database secret
+        run: test -n "${DATABASE_URL:-}"
+      - name: Install market job runtime
+        run: pip install -e ".[market_imports]"
+      - name: Refresh supported NSE end-of-day history
+        run: >-
+          python scripts/backfill_yfinance_market_history.py
+          --all --from-listing --daily-refresh --supported-only
+          --recent-history-days 400 --interval 1d --limit 10000
+          --request-delay-seconds 0.5 --confirm-yahoo-research-use
+      - name: Refresh official NSE benchmarks
+        run: python scripts/backfill_nse_benchmarks.py --min-rows 2
+
+  classification:
+    if: github.event_name == 'workflow_dispatch' && inputs.job == 'classification'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - name: Require database secret
+        run: test -n "${DATABASE_URL:-}"
+      - name: Install classification runtime
+        run: pip install -e .
+      - name: Backfill official classifications
+        run: >-
+          python scripts/backfill_nse_industry_classification.py
+          --apply --delay-ms 500 --min-coverage-pct 25
+
+  financials:
+    if: github.event_name == 'workflow_dispatch' && inputs.job == 'financials'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: production
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - name: Validate bounded batch count
+        env:
+          BATCHES: ${{ inputs.financial_batches }}
+        run: |
+          [[ "$BATCHES" =~ ^[1-8]$ ]] || { echo "financial_batches must be 1-8"; exit 2; }
+          test -n "${DATABASE_URL:-}"
+      - name: Install financial job runtime
+        run: pip install -e .
+      - name: Backfill a resumable financial batch
+        env:
+          BATCHES: ${{ inputs.financial_batches }}
+        run: >-
+          python scripts/bootstrap_nse_financial_results_all.py
+          --batch-size 25 --max-batches "$BATCHES"
+          --max-periods 10 --request-delay-seconds 0.5
+          --document-delay-seconds 0.2
+
+  peer-metrics:
+    if: github.event_name == 'workflow_dispatch' && inputs.job == 'peer-metrics'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - name: Require database secret
+        run: test -n "${DATABASE_URL:-}"
+      - name: Install metric runtime
+        run: pip install -e .
+      - name: Derive auditable peer metrics
+        run: >-
+          python scripts/bootstrap_derived_security_metrics_all.py
+          --batch-size 100 --max-batches 8
