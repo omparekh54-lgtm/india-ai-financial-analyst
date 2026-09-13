@@ -558,3 +558,7 @@ async def run_research(
                 "evidence_count": len(output.evidence),
                 "warnings": output.warnings,
                 "errors": output.errors,
+            }
+            for output in execution.outputs
+        ],
+    }

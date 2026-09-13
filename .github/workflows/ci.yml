@@ -25,6 +25,8 @@ jobs:
           cache-dependency-path: apps/api/pyproject.toml
       - name: Install API + live market worker runtime
         run: pip install -e ".[dev,live_market]"
+      - name: Compile Python sources
+        run: python -m compileall -q app scripts tests
       - name: Ruff
         run: ruff check app tests scripts
       - name: Typecheck
