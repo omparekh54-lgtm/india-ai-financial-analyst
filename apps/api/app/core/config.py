@@ -151,6 +151,11 @@ class Settings(BaseSettings):
     official_feed_poll_seconds: int = Field(default=60, ge=30, le=3600)
     official_feed_batch_size: int = Field(default=4, ge=1, le=20)
 
+    # Global corpus readiness runs several aggregate coverage queries. Cache it briefly so the
+    # public dashboard does not repeat cross-region scans for every visitor. Per-security research
+    # readiness remains uncached and fail-closed at enqueue time.
+    data_readiness_cache_seconds: int = Field(default=60, ge=5, le=900)
+
     # User-authorized realtime market stream lifecycle. These defaults intentionally keep
     # subscriptions short-lived and the number of simultaneous broker sockets conservative.
     live_market_subscription_ttl_seconds: int = Field(default=1200, ge=300, le=86400)
