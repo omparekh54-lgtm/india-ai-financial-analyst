@@ -214,6 +214,36 @@ def test_live_market_worker_exits_cleanly_when_feature_is_disabled() -> None:
     assert "raise RuntimeError(\"ENABLE_LIVE_MARKET must be true" not in text
 
 
+def test_free_tier_data_jobs_are_bounded_and_do_not_enable_paid_services() -> None:
+    workflow = _workflow("free-tier-data-jobs.yml")
+    triggers = workflow["on"]
+    assert isinstance(triggers, dict)
+    assert set(triggers) == {"schedule", "workflow_dispatch"}
+    assert workflow["permissions"] == {"contents": "read"}
+
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    assert set(jobs) == {"market", "classification", "financials", "peer-metrics"}
+    assert all(job["environment"] == "production" for job in jobs.values())
+
+    text = (WORKFLOWS / "free-tier-data-jobs.yml").read_text(encoding="utf-8")
+    assert 'FREE_ONLY: "true"' in text
+    assert 'ENABLE_EXTERNAL_LLM_CALLS: "false"' in text
+    assert "secrets.DATABASE_URL" in text
+    assert "financial_batches must be 1-8" in text
+    assert "--supported-only" in text
+    assert "--min-coverage-pct 25" in text
+
+
+def test_api_dockerfile_excludes_optional_worker_dependencies() -> None:
+    dockerfile = (REPO_ROOT / "apps/api/Dockerfile").read_text(encoding="utf-8")
+    install_line = next(line for line in dockerfile.splitlines() if 'pip install "."' in line)
+    assert "live_market" not in install_line
+    assert "market_imports" not in install_line
+    assert "embeddings" not in install_line
+    assert "documents" not in install_line
+
+
 def test_manual_workflows_have_non_cancelling_production_concurrency_locks() -> None:
     for filename, group in (
         ("production-corpus.yml", "production-research-corpus"),
