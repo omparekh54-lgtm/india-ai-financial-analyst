@@ -72,7 +72,12 @@ class NseIndustryClassificationFetcher:
             },
         )
         try:
-            response = await self._client.get(NSE_HOME)
+            # NSE's bot/WAF protection scores requests to the bare site root ("/") far more
+            # aggressively than requests to a specific report page, especially from
+            # datacenter/cloud IPs such as GitHub Actions runners. Warm the cookie session
+            # against the equity quote landing page instead (mirrors nse_flows.py /
+            # nse_financial_results.py, which do not hit NSE_HOME and do not 403 in CI).
+            response = await self._client.get(NSE_EQUITY_PAGE)
             response.raise_for_status()
         except httpx.HTTPError as exc:
             await self.close()
