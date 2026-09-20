@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Self
 from urllib.parse import quote
@@ -11,6 +12,27 @@ from app.connectors.http_fetcher import SourceFetchError
 NSE_HOME = "https://www.nseindia.com/"
 NSE_EQUITY_PAGE = "https://www.nseindia.com/get-quotes/equity"
 NSE_QUOTE_API = "https://www.nseindia.com/api/quote-equity"
+
+# A single network blip (timeout, connection reset) on any one request must not abort an
+# hour-long CI job that makes thousands of requests. Retries here are for transport-level
+# failures only -- HTTP-level rejections (403, 429, etc.) are handled separately by the
+# existing session-refresh-and-retry-once logic below, since retrying those immediately
+# without refreshing the session rarely helps.
+_MAX_TRANSPORT_RETRIES = 3
+_RETRY_BACKOFF_SECONDS = (2.0, 5.0)
+
+
+async def _get_with_retries(client: httpx.AsyncClient, url: str, **kwargs: object) -> httpx.Response:
+    last_exc: httpx.TransportError | None = None
+    for attempt in range(_MAX_TRANSPORT_RETRIES):
+        try:
+            return await client.get(url, **kwargs)
+        except httpx.TransportError as exc:
+            last_exc = exc
+            if attempt < _MAX_TRANSPORT_RETRIES - 1:
+                await asyncio.sleep(_RETRY_BACKOFF_SECONDS[attempt])
+    assert last_exc is not None
+    raise last_exc
 
 
 @dataclass(frozen=True)
@@ -77,7 +99,7 @@ class NseIndustryClassificationFetcher:
             # datacenter/cloud IPs such as GitHub Actions runners. Warm the cookie session
             # against the equity quote landing page instead (mirrors nse_flows.py /
             # nse_financial_results.py, which do not hit NSE_HOME and do not 403 in CI).
-            response = await self._client.get(NSE_EQUITY_PAGE)
+            response = await _get_with_retries(self._client, NSE_EQUITY_PAGE)
             response.raise_for_status()
         except httpx.HTTPError as exc:
             await self.close()
@@ -106,7 +128,7 @@ class NseIndustryClassificationFetcher:
         response = await self._request_quote(cleaned_symbol, referer=landing_url)
         if response.status_code in {401, 403}:
             try:
-                landing = await self._client.get(landing_url)
+                landing = await _get_with_retries(self._client, landing_url)
                 landing.raise_for_status()
             except httpx.HTTPError as exc:
                 raise SourceFetchError(
@@ -135,7 +157,8 @@ class NseIndustryClassificationFetcher:
     async def _request_quote(self, symbol: str, *, referer: str) -> httpx.Response:
         assert self._client is not None
         try:
-            return await self._client.get(
+            return await _get_with_retries(
+                self._client,
                 NSE_QUOTE_API,
                 params={"symbol": symbol},
                 headers={"Referer": referer},
