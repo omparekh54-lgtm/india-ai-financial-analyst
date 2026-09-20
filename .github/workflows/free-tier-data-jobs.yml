@@ -84,10 +84,10 @@ jobs:
         run: test -n "${DATABASE_URL:-}"
       - name: Install classification runtime
         run: pip install -e .
-      - name: Backfill official classifications
+      - name: Backfill sectoral classifications (Total Market Index bulk file)
         run: >-
-          python scripts/backfill_nse_industry_classification.py
-          --apply --delay-ms 500 --min-coverage-pct 25
+          python scripts/backfill_nse_sectoral_classification.py
+          --apply --min-match-pct 20
 
   financials:
     if: github.event_name == 'workflow_dispatch' && inputs.job == 'financials'
