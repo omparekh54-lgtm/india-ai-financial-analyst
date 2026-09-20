@@ -71,8 +71,17 @@ async def _target_ids(
         where primary_exchange = 'NSE'
           and coalesce(metadata->>'nse_series', 'EQ') = 'EQ'
           and nse_symbol is not null
-          and (:after_symbol is null or nse_symbol > :after_symbol)
-          and (:symbols is null or nse_symbol = any(:symbols))
+          -- Both parameters are explicitly cast. On the very first batch (after_symbol is None,
+          -- and refresh_all runs leave symbols as None too), PostgreSQL cannot always resolve
+          -- an untyped parameter's type from "IS NULL" alone across an OR -- it produced a hard
+          -- "could not determine data type of parameter $1" (42P18) on every cold-start run,
+          -- before any metric derivation logic ever executed. The casts fix both parameters'
+          -- types unconditionally, whether they are None or real values.
+          and (cast(:after_symbol as text) is null or nse_symbol > cast(:after_symbol as text))
+          and (
+            cast(:symbols as text[]) is null
+            or nse_symbol = any(cast(:symbols as text[]))
+          )
         order by nse_symbol
         limit :limit
         """
