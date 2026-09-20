@@ -40,7 +40,7 @@ jobs:
   market:
     if: github.event_name == 'schedule' || inputs.job == 'market-and-benchmarks'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 170
     environment: production
     defaults:
       run:
