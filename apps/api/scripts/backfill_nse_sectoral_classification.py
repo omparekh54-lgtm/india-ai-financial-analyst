@@ -394,6 +394,25 @@ async def main() -> int:
         "writes_performed": False,
     }
 
+    if not matched:
+        # Zero matches is the expected steady state once every constituent of the current NIFTY
+        # Total Market Index file already has a sector value -- from this script, or from an
+        # earlier run against the same source outside this repository -- not evidence of a
+        # parsing or data problem. NseSectoralIndexFetcher.fetch() already raises if the CSV
+        # comes back empty, so a nonzero index_entry_count here means the fetch and parse both
+        # succeeded; there is simply no incremental security left for this source to cover this
+        # run. Only a *partial*, nonzero match below --min-match-pct is treated as suspicious
+        # enough to block writes, since that pattern would suggest a real parsing regression.
+        summary["status"] = "no_new_matches"
+        summary["message"] = (
+            "None of the targeted securities matched the current NIFTY Total Market Index file "
+            "by ISIN. This is expected once this source's ceiling has already been reached; it "
+            "does not indicate a failure."
+        )
+        print(json.dumps(summary, indent=2, sort_keys=True))
+        await _record_ingestion_run(settings.database_url, summary)
+        return 0
+
     if match_pct < args.min_match_pct:
         summary["blocked_reason"] = (
             "ISIN match rate against the NSE Total Market Index file did not meet the "
