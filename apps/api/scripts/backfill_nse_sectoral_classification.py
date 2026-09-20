@@ -177,13 +177,13 @@ async def persist_sectoral_classifications(
         update securities
         set sector = :sector,
             metadata = metadata || jsonb_build_object(
-              'classification_taxonomy', :taxonomy,
+              'classification_taxonomy', cast(:taxonomy as text),
               'classification_provenance_class', 'official_source',
               'classification_source_type', 'nse_industry_classification',
-              'classification_source_uri', :source_uri,
+              'classification_source_uri', cast(:source_uri as text),
               'classification_source_id', cast(:source_id as text),
-              'classification_sha256', :checksum,
-              'classification_retrieved_at', :retrieved_at
+              'classification_sha256', cast(:checksum as text),
+              'classification_retrieved_at', cast(:retrieved_at as text)
             ),
             updated_at = now()
         where id = :security_id
@@ -269,9 +269,9 @@ async def _verify_writes(database_url: str, security_ids: list[UUID]) -> int:
                     """
                     select count(*)
                     from securities
-                    where id = any(:ids)
+                    where id = any(cast(:ids as uuid[]))
                       and nullif(btrim(coalesce(sector, '')), '') is not null
-                      and metadata->>'classification_taxonomy' = :tag
+                      and metadata->>'classification_taxonomy' = cast(:tag as text)
                       and nullif(btrim(coalesce(metadata->>'classification_source_id', '')), '')
                         is not null
                     """
