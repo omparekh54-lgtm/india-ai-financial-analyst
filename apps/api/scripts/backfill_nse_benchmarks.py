@@ -10,20 +10,26 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from app.connectors.nse_benchmarks import (
-    NSE_INDEX_HISTORY_PAGE,
-    NSE_VIX_HISTORY_PAGE,
-    NseHistoricalBenchmarkFetcher,
-    normalize_benchmark_code,
+from app.connectors.nse_benchmarks import normalize_benchmark_code
+from app.connectors.yahoo_benchmarks import (
+    YahooFinanceBenchmarkHistoryClient,
+    benchmark_history_source_url,
 )
 from app.core.config import get_settings
 from app.core.data_readiness import evaluate_data_coverage, load_data_coverage
 from app.db import create_database_engine
 from app.ingestion.market import MarketBarIngestor, MarketBarInput
 
+# NSE's own historical-index API is geo-fenced to Indian IPs and cannot be reached from
+# GitHub Actions runners (or any non-Indian datacenter IP) regardless of session/cookie
+# handling -- it returns NSE's "This site is not accessible in your region at the moment"
+# page instead of JSON. Benchmarks are fetched from Yahoo Finance instead, which is not
+# geo-fenced and already backs this project's per-security price history. Per that same
+# provenance policy, Yahoo-sourced data is marked as a restricted, internal-research-only
+# source rather than an NSE official/production-approved one.
 _SOURCE_PAGES = {
-    "NIFTY50": NSE_INDEX_HISTORY_PAGE,
-    "INDIAVIX": NSE_VIX_HISTORY_PAGE,
+    "NIFTY50": benchmark_history_source_url("NIFTY50"),
+    "INDIAVIX": benchmark_history_source_url("INDIAVIX"),
 }
 
 
@@ -37,7 +43,7 @@ def _parse_iso_date(value: str) -> date:
 def _canonical_checksum(code: str, bars: list[MarketBarInput]) -> str:
     payload = {
         "benchmark_code": code,
-        "provider": "nse",
+        "provider": "yfinance",
         "bars": [
             {
                 "ts": bar.ts.astimezone(UTC).isoformat(),
@@ -68,9 +74,12 @@ async def _upsert_source(
     source_uri = f"{source_page}#api-response-sha256={checksum}"
     metadata = json.dumps(
         {
-            "provider": "nse",
-            "provenance_class": "official_source",
-            "production_approved": True,
+            "provider": "yfinance",
+            "provenance_class": "restricted_external_source",
+            "production_approved": False,
+            "commercial_display_approved": False,
+            "allowed_use": "internal_research",
+            "licensing_status": "not_approved_for_commercial_display",
             "benchmark_code": benchmark_code,
             "source_page": source_page,
             "api_response_sha256": checksum,
@@ -82,7 +91,7 @@ async def _upsert_source(
     )
     params = {
         "source_uri": source_uri,
-        "title": f"{benchmark_code} official NSE historical API response",
+        "title": f"{benchmark_code} delayed Yahoo Finance historical response",
         "retrieved_at": datetime.now(UTC),
         "checksum": checksum,
         "metadata": metadata,
@@ -142,8 +151,11 @@ async def main() -> int:
     today = datetime.now(UTC).date()
     parser = argparse.ArgumentParser(
         description=(
-            "Backfill official NIFTY 50 and India VIX daily history from NSE public endpoints. "
-            "All requested benchmarks are fetched and validated before any database write occurs."
+            "Backfill NIFTY 50 and India VIX daily history from Yahoo Finance. NSE's own "
+            "historical-index API is geo-fenced to Indian IPs and unreachable from GitHub "
+            "Actions, so this uses the same delayed/restricted Yahoo Finance source already "
+            "used for per-security price history. All requested benchmarks are fetched and "
+            "validated before any database write occurs."
         )
     )
     parser.add_argument(
@@ -172,18 +184,19 @@ async def main() -> int:
         parser.error(str(exc))
 
     fetched: dict[str, list[MarketBarInput]] = {}
-    async with NseHistoricalBenchmarkFetcher() as fetcher:
-        for code in codes:
-            bars = await fetcher.fetch(code, from_date=args.from_date, to_date=args.to_date)
-            if len(bars) < args.min_rows:
-                raise SystemExit(
-                    f"{code} returned only {len(bars)} daily rows; minimum expected is {args.min_rows}"
-                )
-            fetched[code] = bars
+    client = YahooFinanceBenchmarkHistoryClient()
+    for code in codes:
+        result = await client.fetch_history(code, from_date=args.from_date, to_date=args.to_date)
+        bars = list(result.bars)
+        if len(bars) < args.min_rows:
+            raise SystemExit(
+                f"{code} returned only {len(bars)} daily rows; minimum expected is {args.min_rows}"
+            )
+        fetched[code] = bars
 
     summary: dict[str, object] = {
-        "provider": "nse",
-        "provenance_class": "official_source",
+        "provider": "yfinance",
+        "provenance_class": "restricted_external_source",
         "from_date": args.from_date.isoformat(),
         "to_date": args.to_date.isoformat(),
         "minimum_rows": args.min_rows,
