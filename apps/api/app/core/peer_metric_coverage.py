@@ -65,7 +65,7 @@ async def load_peer_metric_coverage(
                       join nse_eq n on n.id = sm.security_id
                       join sources src on src.id = sm.source_id
                       where sm.as_of_date >= current_date - :max_age_days
-                        and sm.metric_name = any(:metric_names)
+                        and sm.metric_name = any(cast(:metric_names as text[]))
                         and nullif(btrim(coalesce(src.checksum, '')), '') is not null
                         and (
                           (
