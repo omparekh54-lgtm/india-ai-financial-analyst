@@ -140,9 +140,9 @@ class XbrlEvidenceIngestor:
                     set checksum = :checksum,
                         metadata = metadata || jsonb_build_object(
                           'xbrl_parse_status', 'parsed',
-                          'xbrl_fact_count', :fact_count,
-                          'xbrl_evidence_chunk_count', :chunk_count,
-                          'xbrl_document_sha256', :checksum,
+                          'xbrl_fact_count', cast(:fact_count as integer),
+                          'xbrl_evidence_chunk_count', cast(:chunk_count as integer),
+                          'xbrl_document_sha256', cast(:checksum as text),
                           'ai_assisted', false
                         )
                     where id = :source_id
