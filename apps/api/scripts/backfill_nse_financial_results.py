@@ -124,7 +124,15 @@ async def _all_targets(
         left join financial_ready f on f.security_id = n.id
         left join filing_ready fi on fi.security_id = n.id
         left join earnings_ready e on e.security_id = n.id
-        where (:after_symbol is null or n.nse_symbol > :after_symbol)
+        -- Both sides of this parameter are explicitly cast to text. Left as a bare
+        -- ":after_symbol is null or n.nse_symbol > :after_symbol", PostgreSQL cannot always
+        -- determine the parameter's type on the very first (cursor = None) call -- the "IS
+        -- NULL" branch alone doesn't constrain it, and Postgres does not reliably infer it from
+        -- the other OR branch across the extended query protocol. That produced a hard
+        -- "could not determine data type of parameter $1" (42P18) on every batch-1 run,
+        -- regardless of NSE reachability. The cast fixes the type unconditionally, so it works
+        -- whether after_symbol is None or a real symbol.
+        where (cast(:after_symbol as text) is null or n.nse_symbol > cast(:after_symbol as text))
           and (
             :refresh_all
             or f.security_id is null
