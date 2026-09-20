@@ -174,6 +174,7 @@ async def health() -> dict[str, object]:
         "usage_limits_enabled": settings.enable_usage_limits,
         "commercial_launch_enabled": settings.commercial_launch_enabled,
         "research_queue": "postgres_worker",
+        "commit_sha": __import__("os").environ.get("RAILWAY_GIT_COMMIT_SHA", "unknown"),
     }
 
 
