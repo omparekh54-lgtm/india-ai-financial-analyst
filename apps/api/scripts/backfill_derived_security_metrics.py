@@ -11,6 +11,10 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.connectors.nse_sectoral_indices import (
+    NSE_NIFTY50_INDEX_CSV,
+    NseSectoralIndexFetcher,
+)
 from app.core.config import get_settings
 from app.core.peer_metric_coverage import (
     INDUSTRY_COMPARABLE_METRICS,
@@ -36,6 +40,7 @@ async def _target_ids(
     limit: int,
     after_symbol: str | None,
     refresh_all: bool,
+    universe_symbols: tuple[str, ...] | None = None,
 ) -> list[tuple[UUID, str, str]]:
     if identifiers:
         targets: list[tuple[UUID, str, str]] = []
@@ -53,10 +58,13 @@ async def _target_ids(
         return targets
 
     if refresh_all:
-        symbols: list[str] | None = None
+        symbols = list(universe_symbols) if universe_symbols is not None else None
     else:
         coverage = await load_peer_metric_coverage(engine)
         symbols = list(coverage.incomplete_symbols)
+        if universe_symbols is not None:
+            allowed = set(universe_symbols)
+            symbols = [symbol for symbol in symbols if symbol in allowed]
         if after_symbol:
             cursor = after_symbol.upper()
             symbols = [symbol for symbol in symbols if symbol > cursor]
@@ -187,6 +195,11 @@ async def _run() -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--security", action="append")
     group.add_argument("--all", action="store_true")
+    group.add_argument(
+        "--nifty50",
+        action="store_true",
+        help="Derive metrics for a bounded incomplete batch from the official NIFTY 50 list.",
+    )
     parser.add_argument("--limit", type=int, default=50)
     parser.add_argument("--after-symbol")
     parser.add_argument("--min-metrics", type=int, default=MIN_COMPARABLE_METRICS)
@@ -198,20 +211,28 @@ async def _run() -> int:
         parser.error("--limit must be between 1 and 250")
     if not 1 <= args.min_metrics <= len(INDUSTRY_COMPARABLE_METRICS):
         parser.error("--min-metrics is outside the Industry Agent comparable-metric range")
-    if args.after_symbol and not args.all:
-        parser.error("--after-symbol can only be used with --all")
+    if args.after_symbol and not (args.all or args.nifty50):
+        parser.error("--after-symbol can only be used with --all or --nifty50")
 
     settings = get_settings()
     if not settings.database_url:
         parser.error("DATABASE_URL must be configured")
     engine = create_database_engine(settings.database_url)
     try:
+        universe_symbols: tuple[str, ...] | None = None
+        if args.nifty50:
+            universe = await NseSectoralIndexFetcher(
+                source_url=NSE_NIFTY50_INDEX_CSV,
+                index_name="NIFTY 50",
+            ).fetch()
+            universe_symbols = tuple(entry.symbol for entry in universe.entries)
         targets = await _target_ids(
             engine,
             identifiers=args.security,
             limit=args.limit,
             after_symbol=args.after_symbol,
             refresh_all=args.refresh_all,
+            universe_symbols=universe_symbols,
         )
         before_ready, before_total = await _ready_count(engine)
         ingestor = DerivedSecurityMetricIngestor(engine)

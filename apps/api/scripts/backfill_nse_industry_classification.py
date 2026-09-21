@@ -16,6 +16,10 @@ from app.connectors.nse_classification import (
     NseIndustryClassification,
     NseIndustryClassificationFetcher,
 )
+from app.connectors.nse_sectoral_indices import (
+    NSE_NIFTY50_INDEX_CSV,
+    NseSectoralIndexFetcher,
+)
 from app.core.config import get_settings
 from app.db import create_database_engine
 
@@ -32,6 +36,7 @@ async def load_targets(
     *,
     limit: int | None,
     refresh_all: bool,
+    symbols: tuple[str, ...] | None = None,
 ) -> list[ClassificationTarget]:
     engine = create_database_engine(database_url)
     try:
@@ -46,6 +51,10 @@ async def load_targets(
                       and nse_symbol is not null
                       and isin is not null
                       and (
+                        cast(:symbols as text[]) is null
+                        or nse_symbol = any(cast(:symbols as text[]))
+                      )
+                      and (
                         :refresh_all
                         or sector is null
                         or industry is null
@@ -57,7 +66,11 @@ async def load_targets(
                     limit :limit
                     """
                 ),
-                {"refresh_all": refresh_all, "limit": limit},
+                {
+                    "refresh_all": refresh_all,
+                    "limit": limit,
+                    "symbols": list(symbols) if symbols is not None else None,
+                },
             )
             return [
                 ClassificationTarget(
@@ -308,6 +321,17 @@ async def main() -> int:
         action="store_true",
         help="Refresh already provenance-linked NSE EQ securities too.",
     )
+    target_group = parser.add_mutually_exclusive_group()
+    target_group.add_argument(
+        "--security",
+        action="append",
+        help="Restrict the run to one or more NSE symbols.",
+    )
+    target_group.add_argument(
+        "--nifty50",
+        action="store_true",
+        help="Restrict the run to current constituents from NSE's official NIFTY 50 CSV.",
+    )
     parser.add_argument("--limit", type=int, default=0, help="0 means all eligible NSE EQ rows.")
     parser.add_argument(
         "--delay-ms",
@@ -334,10 +358,21 @@ async def main() -> int:
     if not settings.database_url:
         raise SystemExit("DATABASE_URL must be configured")
 
+    symbols: tuple[str, ...] | None = None
+    if args.security:
+        symbols = tuple(dict.fromkeys(str(item).strip().upper() for item in args.security))
+    elif args.nifty50:
+        universe = await NseSectoralIndexFetcher(
+            source_url=NSE_NIFTY50_INDEX_CSV,
+            index_name="NIFTY 50",
+        ).fetch()
+        symbols = tuple(entry.symbol for entry in universe.entries)
+
     targets = await load_targets(
         settings.database_url,
         limit=args.limit or None,
         refresh_all=args.refresh_all,
+        symbols=symbols,
     )
     before = await coverage_snapshot(settings.database_url)
     if not targets:
