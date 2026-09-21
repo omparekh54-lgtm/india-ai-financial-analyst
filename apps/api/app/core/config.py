@@ -146,7 +146,14 @@ class Settings(BaseSettings):
     )
 
     max_agent_concurrency: int = Field(default=6, ge=1, le=16)
-    max_research_job_seconds: int = Field(default=240, ge=30, le=1800)
+    # Used as the basis for stale-running-job recovery (ResearchJobWorker requeues a job
+    # after max(300, this * 2) seconds with no completion, assuming its worker crashed). A
+    # research request for a security with no cached financial history yet triggers a live
+    # on-demand NSE fetch (app.ingestion.nse_financial_on_demand), which can legitimately
+    # take several minutes on its own (bounded at 8 minutes) before the rest of the agent
+    # pipeline even starts. 240s left almost no headroom above that worst case and risked a
+    # slow-but-healthy job being requeued and executed a second time by another worker.
+    max_research_job_seconds: int = Field(default=900, ge=30, le=1800)
     research_worker_poll_seconds: float = Field(default=1.0, ge=0.25, le=30.0)
     official_feed_poll_seconds: int = Field(default=60, ge=30, le=3600)
     official_feed_batch_size: int = Field(default=4, ge=1, le=20)
