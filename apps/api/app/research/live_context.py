@@ -9,6 +9,7 @@ from app.agents.contracts import EvidenceRef
 from app.core.config import Settings
 from app.evidence.embeddings import EmbeddingError, build_embedding_provider
 from app.evidence.semantic import SemanticEvidenceRetriever, build_research_queries
+from app.ingestion.nse_financial_on_demand import ensure_financial_history
 from app.market.live_overlay import LiveMarketOverlayService
 from app.research.acquisition import FreshResearchAcquisitionService
 from app.research.context import DatabaseResearchContextLoader
@@ -43,8 +44,11 @@ class UserAwareResearchContextLoader:
         depth: str,
         user_id: UUID | None = None,
     ) -> tuple[dict[str, object], list[EvidenceRef]]:
+        financial_fetch = await self._ensure_financial_history(security_id)
+
         context, evidence = await self.base.load(security_id, mode=mode)
         context["analysis_depth"] = depth
+        context["financial_data_fetch"] = financial_fetch
         recent_filing_evidence = await load_exchange_filing_evidence(self.engine, security_id)
         semantic_filing_evidence: list[EvidenceRef] = []
         semantic_per_query, semantic_max_results = _semantic_budget(self.settings, depth)
@@ -120,6 +124,24 @@ class UserAwareResearchContextLoader:
             context=context,
             evidence=evidence,
         )
+
+    async def _ensure_financial_history(self, security_id: UUID) -> dict[str, object]:
+        """Serve cached financials for this security, or fetch them live on a cache miss.
+
+        This is what makes financial data behave like the rest of the research context:
+        fetched once per security, cached in the database, and reused by every research
+        request after that -- instead of only ever appearing through the separate
+        background backfill sweep. ensure_financial_history() is written to never raise,
+        but this wraps it in one more safety net (matching the pattern already used for
+        semantic evidence above) so a database hiccup here degrades the research context
+        instead of failing the whole request.
+        """
+        if not self.settings.enable_external_data_calls:
+            return {"status": "disabled"}
+        try:
+            return await ensure_financial_history(self.engine, security_id)
+        except SQLAlchemyError:
+            return {"status": "degraded"}
 
 
 def _semantic_budget(settings: Settings, depth: str) -> tuple[int, int]:
