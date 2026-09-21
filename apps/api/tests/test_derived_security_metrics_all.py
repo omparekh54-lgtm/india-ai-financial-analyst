@@ -2,7 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from scripts.bootstrap_derived_security_metrics_all import _parse_output, build_batch_command
+from scripts.bootstrap_derived_security_metrics_all import (
+    _coverage_satisfies,
+    _parse_output,
+    build_batch_command,
+)
 
 
 def _command(**overrides: object) -> tuple[str, ...]:
@@ -54,3 +58,9 @@ def test_peer_metric_parse_output_accepts_final_json_line() -> None:
     assert _parse_output('progress\n{"target_count": 100}') == {"target_count": 100}
     assert _parse_output("") is None
     assert _parse_output("diagnostic") == {"stdout_tail": "diagnostic"}
+
+
+def test_peer_metric_coverage_floor_is_fail_closed() -> None:
+    assert _coverage_satisfies({"complete_coverage_pct": 25.0}, 25.0) is True
+    assert _coverage_satisfies({"complete_coverage_pct": 24.99}, 25.0) is False
+    assert _coverage_satisfies({}, 25.0) is False

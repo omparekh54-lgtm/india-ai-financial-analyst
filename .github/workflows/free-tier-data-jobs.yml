@@ -154,4 +154,4 @@ jobs:
       - name: Derive auditable peer metrics
         run: >-
           python scripts/bootstrap_derived_security_metrics_all.py
-          --batch-size 100 --max-batches 8
+          --batch-size 100 --max-batches 8 --min-coverage-pct 25

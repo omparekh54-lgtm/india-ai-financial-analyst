@@ -83,6 +83,11 @@ def _run_batch(command: tuple[str, ...]) -> dict[str, Any]:
     return result
 
 
+def _coverage_satisfies(postflight: dict[str, object], min_coverage_pct: float) -> bool:
+    coverage_pct = postflight.get("complete_coverage_pct")
+    return isinstance(coverage_pct, int | float) and coverage_pct >= min_coverage_pct
+
+
 async def _postflight(database_url: str) -> dict[str, object]:
     engine = create_database_engine(database_url)
     try:
@@ -101,6 +106,7 @@ def main() -> int:
     )
     parser.add_argument("--batch-size", type=int, default=100)
     parser.add_argument("--max-batches", type=int, default=100)
+    parser.add_argument("--min-coverage-pct", type=float, default=100.0)
     parser.add_argument("--start-after-symbol")
     parser.add_argument("--min-metrics", type=int, default=MIN_COMPARABLE_METRICS)
     parser.add_argument("--refresh-all", action="store_true")
@@ -109,6 +115,8 @@ def main() -> int:
 
     if not 1 <= args.max_batches <= 200:
         parser.error("--max-batches must be between 1 and 200")
+    if not 0 < args.min_coverage_pct <= 100:
+        parser.error("--min-coverage-pct must be > 0 and <= 100")
     try:
         build_batch_command(
             python_executable=sys.executable,
@@ -202,12 +210,15 @@ def main() -> int:
         cursor = next_cursor
 
     postflight = asyncio.run(_postflight(settings.database_url))
+    coverage_satisfied = _coverage_satisfies(postflight, args.min_coverage_pct)
     output = {
         "status": status,
         "data_policy": "deterministic_source_linked_inputs_no_estimated_or_synthetic_fallback",
         "dry_run": args.dry_run,
         "batch_count": len(batches),
         "next_after_symbol": cursor,
+        "required_coverage_pct": args.min_coverage_pct,
+        "coverage_satisfied": coverage_satisfied,
         "batches": batches,
         "postflight": postflight,
     }
@@ -215,7 +226,7 @@ def main() -> int:
 
     if args.dry_run:
         return 0 if status == "completed" else 1
-    if status != "completed" or postflight.get("complete") is not True:
+    if not coverage_satisfied:
         return 1
     return 0
 

@@ -10,6 +10,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings, get_settings
+from app.core.research_gate import SecurityNotReadyError, enforce_security_research_ready
+from app.ingestion.nse_financial_on_demand import ensure_financial_history
 from app.orchestration.plan import (
     AnalysisMode,
     EventTrigger,
@@ -57,6 +59,29 @@ class ResearchJobWorker:
             if event_trigger is not None:
                 context["event_trigger"] = event_trigger.value
 
+            security_id = _uuid(row.get("security_id"))
+            preparation = metadata.get("preparation_required")
+            preparation_steps = {
+                str(item) for item in preparation
+            } if isinstance(preparation, list) else set()
+            if (
+                security_id is not None
+                and "financial_history" in preparation_steps
+                and self.settings.enable_external_data_calls
+            ):
+                await self.service.progress.set_stage(job_id, "preparing_financials", 5)
+                context["financial_data_fetch"] = await ensure_financial_history(
+                    self.engine,
+                    security_id,
+                )
+            if security_id is not None:
+                await enforce_security_research_ready(
+                    self.engine,
+                    security_id,
+                    app_env=self.settings.app_env,
+                    settings=self.settings,
+                )
+
             await self.service.execute_existing(
                 job_id=job_id,
                 query=str(row.get("query") or ""),
@@ -65,6 +90,14 @@ class ResearchJobWorker:
                 context=context,
                 requested_by=requested_by,
                 plan=plan,
+            )
+        except SecurityNotReadyError as exc:
+            await self.queue.mark_failed(
+                job_id,
+                error_type=type(exc).__name__,
+                failure_code="security_not_ready",
+                blocking_agents=exc.blocking_agents,
+                blocker_details=exc.errors,
             )
         except Exception as exc:  # noqa: BLE001 - isolate one durable job from the worker loop
             await self.queue.mark_failed(job_id, error_type=type(exc).__name__)

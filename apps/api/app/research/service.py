@@ -58,6 +58,7 @@ class ResearchService:
         mode: AnalysisMode,
         depth: ResearchDepth = ResearchDepth.STANDARD,
         requested_by: UUID | None = None,
+        security_id: UUID | None = None,
         metadata: dict[str, object] | None = None,
     ) -> UUID:
         job_metadata: dict[str, object] = {
@@ -79,6 +80,7 @@ class ResearchService:
             job_id = await self.repository.create_job(
                 query=query,
                 mode=mode.value,
+                security_id=security_id,
                 requested_by=requested_by,
                 metadata=job_metadata,
             )

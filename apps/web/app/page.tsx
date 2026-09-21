@@ -851,8 +851,13 @@ async function waitForResearchJob(
     if (job.status === "completed") return job;
     if (job.status === "failed") {
       const errorType = metadata.worker_error_type;
+      const blockerDetails = Array.isArray(metadata.blocker_details)
+        ? metadata.blocker_details.filter((item): item is string => typeof item === "string")
+        : [];
       throw new Error(
-        typeof errorType === "string"
+        blockerDetails.length
+          ? blockerDetails.slice(0, 3).join(" · ")
+          : typeof errorType === "string"
           ? `Research worker failed (${errorType}).`
           : "Research worker failed before completing the report.",
       );

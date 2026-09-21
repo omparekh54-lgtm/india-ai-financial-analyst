@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Self
 from urllib.parse import quote
@@ -22,11 +23,17 @@ _MAX_TRANSPORT_RETRIES = 3
 _RETRY_BACKOFF_SECONDS = (2.0, 5.0)
 
 
-async def _get_with_retries(client: httpx.AsyncClient, url: str, **kwargs: object) -> httpx.Response:
+async def _get_with_retries(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    params: Mapping[str, str] | None = None,
+    headers: Mapping[str, str] | None = None,
+) -> httpx.Response:
     last_exc: httpx.TransportError | None = None
     for attempt in range(_MAX_TRANSPORT_RETRIES):
         try:
-            return await client.get(url, **kwargs)
+            return await client.get(url, params=params, headers=headers)
         except httpx.TransportError as exc:
             last_exc = exc
             if attempt < _MAX_TRANSPORT_RETRIES - 1:
