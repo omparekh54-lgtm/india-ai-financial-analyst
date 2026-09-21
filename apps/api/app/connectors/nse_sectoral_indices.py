@@ -28,6 +28,9 @@ from app.connectors.http_fetcher import SourceFetchError
 NSE_TOTAL_MARKET_INDEX_CSV = (
     "https://nsearchives.nseindia.com/content/indices/ind_niftytotalmarket_list.csv"
 )
+NSE_NIFTY50_INDEX_CSV = (
+    "https://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv"
+)
 
 
 @dataclass(frozen=True)
@@ -46,12 +49,24 @@ class NseSectoralIndexResult:
 
 
 class NseSectoralIndexFetcher:
-    """Fetch NSE's official NIFTY Total Market Index constituent list (sector label only)."""
+    """Fetch an official NSE index constituent list (including its reported industry label)."""
 
-    def __init__(self, *, timeout_seconds: float = 30.0) -> None:
+    def __init__(
+        self,
+        *,
+        timeout_seconds: float = 30.0,
+        source_url: str = NSE_TOTAL_MARKET_INDEX_CSV,
+        index_name: str = "NIFTY Total Market",
+    ) -> None:
         if timeout_seconds <= 0 or timeout_seconds > 120:
             raise ValueError("timeout_seconds must be between 0 and 120")
+        if not source_url.startswith("https://nsearchives.nseindia.com/content/indices/"):
+            raise ValueError("source_url must be an official NSE indices archive URL")
+        if not index_name.strip():
+            raise ValueError("index_name is required")
         self.timeout_seconds = timeout_seconds
+        self.source_url = source_url
+        self.index_name = index_name.strip()
 
     async def fetch(self) -> NseSectoralIndexResult:
         headers = {
@@ -71,7 +86,7 @@ class NseSectoralIndexFetcher:
                 last_exc: httpx.HTTPError | None = None
                 for attempt in range(3):
                     try:
-                        response = await client.get(NSE_TOTAL_MARKET_INDEX_CSV)
+                        response = await client.get(self.source_url)
                         response.raise_for_status()
                         break
                     except httpx.HTTPError as exc:
@@ -84,15 +99,15 @@ class NseSectoralIndexFetcher:
                     raise last_exc
         except httpx.HTTPError as exc:
             raise SourceFetchError(
-                "Unable to fetch NSE Total Market Index constituent list"
+                f"Unable to fetch {self.index_name} constituent list"
             ) from exc
 
         checksum = hashlib.sha256(response.content).hexdigest()
         entries = parse_sectoral_index_csv(response.text)
         if not entries:
-            raise SourceFetchError("NSE Total Market Index constituent list contained no rows")
+            raise SourceFetchError(f"{self.index_name} constituent list contained no rows")
         return NseSectoralIndexResult(
-            source_url=NSE_TOTAL_MARKET_INDEX_CSV,
+            source_url=self.source_url,
             response_sha256=checksum,
             entries=tuple(entries),
         )

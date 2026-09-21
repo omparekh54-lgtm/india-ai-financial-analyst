@@ -233,6 +233,11 @@ def test_free_tier_data_jobs_are_bounded_and_do_not_enable_paid_services() -> No
     assert "financial_batches must be 1-8" in text
     assert "--supported-only" in text
     assert "--min-coverage-pct 25" in text
+    assert "nifty50-classification" in text
+    assert "nifty50-financials" in text
+    assert "nifty50-peer-metrics" in text
+    assert "backfill_nse_industry_classification.py" in text
+    assert text.count("--nifty50") == 3
 
 
 def test_api_dockerfile_excludes_optional_worker_dependencies() -> None:

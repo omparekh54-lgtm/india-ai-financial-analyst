@@ -16,6 +16,9 @@ on:
           - classification
           - financials
           - peer-metrics
+          - nifty50-classification
+          - nifty50-financials
+          - nifty50-peer-metrics
       financial_batches:
         description: Financial batches of 25 securities (maximum 8 per run)
         required: false
@@ -74,7 +77,9 @@ jobs:
         run: python scripts/backfill_nse_benchmarks.py --min-rows 2
 
   classification:
-    if: github.event_name == 'workflow_dispatch' && inputs.job == 'classification'
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.job == 'classification' || inputs.job == 'nifty50-classification')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: production
@@ -93,12 +98,20 @@ jobs:
       - name: Install classification runtime
         run: pip install -e .
       - name: Backfill sectoral classifications (Total Market Index bulk file)
+        if: inputs.job == 'classification'
         run: >-
           python scripts/backfill_nse_sectoral_classification.py
           --apply --min-match-pct 20
+      - name: Backfill official four-tier classifications (NIFTY 50 first)
+        if: inputs.job == 'nifty50-classification'
+        run: >-
+          python scripts/backfill_nse_industry_classification.py
+          --nifty50 --apply --limit 50 --delay-ms 500 --min-coverage-pct 90
 
   financials:
-    if: github.event_name == 'workflow_dispatch' && inputs.job == 'financials'
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.job == 'financials' || inputs.job == 'nifty50-financials')
     runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: production
@@ -113,6 +126,7 @@ jobs:
           cache: pip
           cache-dependency-path: apps/api/pyproject.toml
       - name: Validate bounded batch count
+        if: inputs.job == 'financials'
         env:
           BATCHES: ${{ inputs.financial_batches }}
         run: |
@@ -121,6 +135,7 @@ jobs:
       - name: Install financial job runtime
         run: pip install -e .
       - name: Backfill a resumable financial batch
+        if: inputs.job == 'financials'
         env:
           BATCHES: ${{ inputs.financial_batches }}
           START_AFTER: ${{ inputs.financial_start_after }}
@@ -131,9 +146,17 @@ jobs:
             ARGS+=(--start-after-symbol "$START_AFTER")
           fi
           python scripts/bootstrap_nse_financial_results_all.py "${ARGS[@]}"
+      - name: Backfill incomplete NIFTY 50 financial evidence
+        if: inputs.job == 'nifty50-financials'
+        run: >-
+          python scripts/backfill_nse_financial_results.py
+          --nifty50 --limit 50 --max-periods 10
+          --request-delay-seconds 0.5 --document-delay-seconds 0.2
 
   peer-metrics:
-    if: github.event_name == 'workflow_dispatch' && inputs.job == 'peer-metrics'
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.job == 'peer-metrics' || inputs.job == 'nifty50-peer-metrics')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: production
@@ -152,6 +175,12 @@ jobs:
       - name: Install metric runtime
         run: pip install -e .
       - name: Derive auditable peer metrics
+        if: inputs.job == 'peer-metrics'
         run: >-
           python scripts/bootstrap_derived_security_metrics_all.py
           --batch-size 100 --max-batches 8 --min-coverage-pct 25
+      - name: Derive auditable NIFTY 50 peer metrics
+        if: inputs.job == 'nifty50-peer-metrics'
+        run: >-
+          python scripts/backfill_derived_security_metrics.py
+          --nifty50 --limit 50 --min-metrics 3

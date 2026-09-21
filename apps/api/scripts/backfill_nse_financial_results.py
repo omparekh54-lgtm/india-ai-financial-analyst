@@ -15,6 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.connectors.http_fetcher import SourceFetchError
 from app.connectors.nse_financial_results import NseFinancialResultsFetcher
+from app.connectors.nse_sectoral_indices import (
+    NSE_NIFTY50_INDEX_CSV,
+    NseSectoralIndexFetcher,
+)
 from app.connectors.nse_xbrl import NseFinancialXbrlFetcher
 from app.core.agent_data_readiness import load_agent_data_coverage
 from app.core.config import get_settings
@@ -75,6 +79,7 @@ async def _all_targets(
     limit: int,
     after_symbol: str | None,
     refresh_all: bool,
+    symbols: tuple[str, ...] | None = None,
 ) -> list[FinancialTarget]:
     statement = text(
         """
@@ -84,6 +89,10 @@ async def _all_targets(
           where primary_exchange = 'NSE'
             and coalesce(metadata->>'nse_series', 'EQ') = 'EQ'
             and nse_symbol is not null
+            and (
+              cast(:symbols as text[]) is null
+              or nse_symbol = any(cast(:symbols as text[]))
+            )
         ), financial_ready as (
           select ff.security_id
           from financial_facts ff
@@ -151,6 +160,7 @@ async def _all_targets(
                     "after_symbol": after_symbol.upper() if after_symbol else None,
                     "refresh_all": refresh_all,
                     "limit": limit,
+                    "symbols": list(symbols) if symbols is not None else None,
                 },
             )
         ).mappings().all()
@@ -310,6 +320,11 @@ async def _run() -> int:
     target_group = parser.add_mutually_exclusive_group(required=True)
     target_group.add_argument("--security", action="append", help="NSE symbol/BSE code/ISIN")
     target_group.add_argument("--all", action="store_true", help="Process a bounded NSE batch")
+    target_group.add_argument(
+        "--nifty50",
+        action="store_true",
+        help="Process a bounded incomplete batch from the current official NIFTY 50 list.",
+    )
     parser.add_argument("--limit", type=int, default=25)
     parser.add_argument("--after-symbol")
     parser.add_argument("--max-periods", type=int, default=10)
@@ -335,8 +350,8 @@ async def _run() -> int:
         parser.error("--request-delay-seconds must be between 0 and 10")
     if args.document_delay_seconds < 0 or args.document_delay_seconds > 10:
         parser.error("--document-delay-seconds must be between 0 and 10")
-    if args.after_symbol and not args.all:
-        parser.error("--after-symbol can only be used with --all")
+    if args.after_symbol and not (args.all or args.nifty50):
+        parser.error("--after-symbol can only be used with --all or --nifty50")
 
     settings = get_settings()
     if not settings.database_url:
@@ -344,12 +359,20 @@ async def _run() -> int:
     engine = create_database_engine(settings.database_url)
 
     try:
-        if args.all:
+        if args.all or args.nifty50:
+            symbols: tuple[str, ...] | None = None
+            if args.nifty50:
+                universe = await NseSectoralIndexFetcher(
+                    source_url=NSE_NIFTY50_INDEX_CSV,
+                    index_name="NIFTY 50",
+                ).fetch()
+                symbols = tuple(entry.symbol for entry in universe.entries)
             targets = await _all_targets(
                 engine,
                 limit=args.limit,
                 after_symbol=args.after_symbol,
                 refresh_all=args.refresh_all,
+                symbols=symbols,
             )
         else:
             targets = [
