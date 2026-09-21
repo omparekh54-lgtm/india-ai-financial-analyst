@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -57,14 +58,27 @@ class ResearchQueueRepository:
             )
         return int(result.rowcount or 0)
 
-    async def mark_failed(self, job_id: UUID, *, error_type: str) -> None:
+    async def mark_failed(
+        self,
+        job_id: UUID,
+        *,
+        error_type: str,
+        failure_code: str | None = None,
+        blocking_agents: tuple[str, ...] = (),
+        blocker_details: tuple[str, ...] = (),
+    ) -> None:
         statement = text(
             """
             update research_jobs
             set status = 'failed',
                 completed_at = :now,
                 metadata = coalesce(metadata, '{}'::jsonb)
-                  || jsonb_build_object('worker_error_type', :error_type)
+                  || jsonb_build_object(
+                       'worker_error_type', :error_type,
+                       'failure_code', :failure_code,
+                       'blocking_agents', cast(:blocking_agents as jsonb),
+                       'blocker_details', cast(:blocker_details as jsonb)
+                     )
             where id = :job_id
             """
         )
@@ -75,5 +89,8 @@ class ResearchQueueRepository:
                     "job_id": job_id,
                     "now": datetime.now(UTC),
                     "error_type": error_type,
+                    "failure_code": failure_code,
+                    "blocking_agents": json.dumps(list(blocking_agents)),
+                    "blocker_details": json.dumps(list(blocker_details[:12])),
                 },
             )

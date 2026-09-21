@@ -14,7 +14,10 @@ from app.agents.contracts import AgentName
 from app.core.agent_data_readiness import AgentDataCoverage
 from app.core.config import Settings
 from app.core.data_readiness import DataCoverage
-from app.core.security_readiness import evaluate_security_readiness
+from app.core.security_readiness import (
+    evaluate_security_readiness,
+    financial_preparation_required,
+)
 
 NOW = datetime(2026, 9, 9, tzinfo=UTC)
 
@@ -213,3 +216,38 @@ def test_as_dict_is_serialisable_for_the_api() -> None:
     assert payload["ready"] is True
     assert payload["symbol"] == "TCS"
     assert len(payload["agents"]) == len(AgentName)
+
+
+def test_financial_preparation_is_allowed_when_it_is_the_only_root_blocker() -> None:
+    security_id = uuid4()
+    coverage = _complete_coverage(
+        financial_history_securities=0,
+        recent_filing_evidence_securities=0,
+        recent_earnings_evidence_securities=0,
+    )
+    assert financial_preparation_required(
+        security_id,
+        "HDFCBANK",
+        coverage,
+        _corpus(),
+        _settings(),
+        as_of=NOW,
+    )
+
+
+def test_financial_preparation_does_not_bypass_other_readiness_blockers() -> None:
+    security_id = uuid4()
+    coverage = _complete_coverage(
+        financial_history_securities=0,
+        recent_filing_evidence_securities=0,
+        recent_earnings_evidence_securities=0,
+        classified_securities=0,
+    )
+    assert not financial_preparation_required(
+        security_id,
+        "HDFCBANK",
+        coverage,
+        _corpus(),
+        _settings(),
+        as_of=NOW,
+    )

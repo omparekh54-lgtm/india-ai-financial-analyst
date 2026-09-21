@@ -46,3 +46,48 @@ async def test_worker_database_retries_are_bounded_and_sanitized():
         assert worker.queue.requeue_stale_running_jobs.await_count == 5
         assert [call.args[0] for call in sleep.await_args_list] == [5, 10, 20, 40]
         capture.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_worker_prepares_financials_before_rechecking_readiness():
+    events: list[str] = []
+    job_id = uuid4()
+    security_id = uuid4()
+    worker = object.__new__(ResearchJobWorker)
+    worker.engine = object()
+    worker.queue = AsyncMock()
+    worker.queue.claim_next.return_value = {
+        "id": job_id,
+        "query": "HDFCBANK",
+        "mode": "full_analysis",
+        "requested_by": uuid4(),
+        "security_id": security_id,
+        "metadata": {
+            "analysis_depth": "standard",
+            "preparation_required": ["financial_history"],
+        },
+    }
+    worker.settings = type(
+        "Settings",
+        (),
+        {"app_env": "production", "enable_external_data_calls": True},
+    )()
+    worker.service = AsyncMock()
+    worker.service.progress.set_stage.side_effect = lambda *args: events.append("progress")
+    worker.service.execute_existing.side_effect = lambda **kwargs: events.append("execute")
+
+    async def prepare(*args, **kwargs):
+        events.append("prepare")
+        return {"status": "fetched"}
+
+    async def gate(*args, **kwargs):
+        events.append("gate")
+
+    with (
+        patch("app.workers.research_jobs.ensure_financial_history", side_effect=prepare),
+        patch("app.workers.research_jobs.enforce_security_research_ready", side_effect=gate),
+    ):
+        assert await worker.poll_once() is True
+
+    assert events == ["progress", "prepare", "gate", "execute"]
+    worker.queue.mark_failed.assert_not_awaited()

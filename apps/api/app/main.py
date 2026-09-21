@@ -24,7 +24,7 @@ from app.core.data_readiness import evaluate_data_coverage, load_data_coverage
 from app.core.readiness import assert_production_ready, audit_settings
 from app.core.research_gate import (
     SecurityNotReadyError,
-    enforce_security_research_ready,
+    assess_security_research_readiness,
 )
 from app.core.security_readiness import SecurityNotSupportedError
 from app.core.usage import ResearchUsageLimitError
@@ -444,7 +444,11 @@ async def _resolve_security_or_404(engine, query: str) -> tuple[UUID, str]:
     return security.id, (security.nse_symbol or str(security.id))
 
 
-async def _enforce_research_ready_or_503(query: str) -> None:
+async def _enforce_research_ready_or_503(
+    query: str,
+    *,
+    allow_durable_preparation: bool = False,
+) -> tuple[UUID, str, tuple[str, ...]]:
     """Block research only when the requested security is not ready.
 
     Per PROJECT_INTENT.md an incomplete security must not block a complete one, so this
@@ -456,12 +460,18 @@ async def _enforce_research_ready_or_503(query: str) -> None:
     engine = create_database_engine(settings.database_url)
     security_id, symbol = await _resolve_security_or_404(engine, query)
     try:
-        await enforce_security_research_ready(
+        if settings.app_env.strip().lower() != "production":
+            return security_id, symbol, ()
+        assessment = await assess_security_research_readiness(
             engine,
             security_id,
-            app_env=settings.app_env,
             settings=settings,
         )
+        if assessment.readiness.ready:
+            return security_id, symbol, ()
+        if allow_durable_preparation and assessment.preparation_required:
+            return security_id, symbol, assessment.preparation_required
+        raise SecurityNotReadyError(assessment.readiness)
     except SecurityNotSupportedError as exc:
         raise HTTPException(
             status_code=404,
@@ -485,6 +495,7 @@ async def _enforce_research_ready_or_503(query: str) -> None:
                 "errors": list(exc.errors[:12]),
             },
         ) from exc
+    raise AssertionError("unreachable")
 
 
 @app.post("/v1/research/enqueue", status_code=202)
@@ -493,7 +504,10 @@ async def enqueue_research(
     user: CurrentUser,
 ) -> dict[str, object]:
     """Create a durable job and return immediately; the research worker performs the analysis."""
-    await _enforce_research_ready_or_503(request.query)
+    security_id, _, preparation_required = await _enforce_research_ready_or_503(
+        request.query,
+        allow_durable_preparation=True,
+    )
     assert settings.database_url is not None
     engine = create_database_engine(settings.database_url)
     service = ResearchService(
@@ -506,6 +520,8 @@ async def enqueue_research(
         mode=request.mode,
         depth=request.depth,
         requested_by=_research_owner_id(user),
+        security_id=security_id,
+        metadata={"preparation_required": list(preparation_required)},
     )
     return {
         "job_id": str(job_id),

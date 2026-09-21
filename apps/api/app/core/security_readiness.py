@@ -18,7 +18,7 @@ and fail closed. Those are correctness rules about the corpus, not coverage rule
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -81,6 +81,40 @@ class SecurityReadiness:
             "blockers": list(self.blockers()),
             "agents": [item.as_dict() for item in self.report.agents],
         }
+
+
+def financial_preparation_required(
+    security_id: UUID,
+    symbol: str,
+    security_coverage: AgentDataCoverage,
+    corpus_coverage: DataCoverage,
+    settings: Settings,
+    *,
+    as_of: datetime | None = None,
+) -> bool:
+    """Return whether fetching financial history is the only missing root input.
+
+    The API may enqueue a durable preparation step only when making financial coverage
+    complete would make the security fully ready. This keeps non-financial blockers
+    fail-closed and prevents long provider calls from running inside the HTTP request.
+    """
+    if security_coverage.financial_history_securities > 0:
+        return False
+    prospective_coverage = replace(
+        security_coverage,
+        financial_history_securities=security_coverage.nse_eq_securities,
+        recent_filing_evidence_securities=security_coverage.nse_eq_securities,
+        recent_earnings_evidence_securities=security_coverage.nse_eq_securities,
+    )
+    prospective = evaluate_security_readiness(
+        security_id,
+        symbol,
+        prospective_coverage,
+        corpus_coverage,
+        settings,
+        as_of=as_of or datetime.now(UTC),
+    )
+    return prospective.ready
 
 
 async def load_security_agent_coverage(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -18,6 +19,7 @@ from app.core.data_readiness import (
 from app.core.security_readiness import (
     SecurityReadiness,
     evaluate_security_readiness,
+    financial_preparation_required,
     load_security_agent_coverage,
 )
 
@@ -77,6 +79,51 @@ class SecurityNotReadyError(RuntimeError):
         super().__init__(f"Security {readiness.symbol} is not research-ready")
 
 
+@dataclass(frozen=True)
+class SecurityResearchAssessment:
+    readiness: SecurityReadiness
+    preparation_required: tuple[str, ...] = ()
+
+
+async def assess_security_research_readiness(
+    engine: AsyncEngine,
+    security_id: UUID,
+    *,
+    settings: Settings | None = None,
+) -> SecurityResearchAssessment:
+    """Evaluate readiness and identify safe durable preparation work.
+
+    Provider-backed preparation is intentionally not executed here because this function is
+    called from the request path. It only determines whether financial preparation is the
+    sole missing root input; the durable worker performs the actual fetch and re-checks the
+    complete readiness contract before any research agents run.
+    """
+    runtime_settings = settings or get_settings()
+    corpus_coverage = await load_data_coverage(engine)
+    security_coverage, symbol = await load_security_agent_coverage(engine, security_id)
+    readiness = evaluate_security_readiness(
+        security_id,
+        symbol,
+        security_coverage,
+        corpus_coverage,
+        runtime_settings,
+    )
+    preparation: tuple[str, ...] = ()
+    if (
+        not readiness.ready
+        and runtime_settings.enable_external_data_calls
+        and financial_preparation_required(
+            security_id,
+            symbol,
+            security_coverage,
+            corpus_coverage,
+            runtime_settings,
+        )
+    ):
+        preparation = ("financial_history",)
+    return SecurityResearchAssessment(readiness=readiness, preparation_required=preparation)
+
+
 async def enforce_security_research_ready(
     engine: AsyncEngine,
     security_id: UUID,
@@ -93,16 +140,12 @@ async def enforce_security_research_ready(
     if app_env.strip().lower() != "production":
         return None
 
-    runtime_settings = settings or get_settings()
-    corpus_coverage = await load_data_coverage(engine)
-    security_coverage, symbol = await load_security_agent_coverage(engine, security_id)
-    readiness = evaluate_security_readiness(
+    assessment = await assess_security_research_readiness(
+        engine,
         security_id,
-        symbol,
-        security_coverage,
-        corpus_coverage,
-        runtime_settings,
+        settings=settings,
     )
+    readiness = assessment.readiness
     if not readiness.ready:
         raise SecurityNotReadyError(readiness)
     return readiness
