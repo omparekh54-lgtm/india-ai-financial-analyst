@@ -1,2 +1,3 @@
-run: 2026-09-22
-purpose: populate incomplete NIFTY 50 official financial evidence
+run: 2026-09-22-integrated-2
+purpose: populate current NIFTY 50 official integrated financial evidence
+minimum-code-commit: a582289a5dbfcfb15c7ba1f644f4d68a266047c3
