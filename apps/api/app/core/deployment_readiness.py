@@ -13,7 +13,7 @@ DEPLOYMENT_READINESS_PHASE_ORDER = (
     "phase_42_final_deployment_runbook",
 )
 
-LATEST_REQUIRED_MIGRATION = "0026_backend_only_rls_deny_policies.sql"
+LATEST_REQUIRED_MIGRATION = "0028_security_agent_readiness_status.sql"
 
 
 @dataclass(frozen=True)
