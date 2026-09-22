@@ -1,6 +1,10 @@
 name: Free-tier data jobs
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - .github/run-markers/nifty50-financials
   schedule:
     # 18:15 India time on weekdays. GitHub may start scheduled jobs a little late.
     - cron: "45 12 * * 1-5"
@@ -110,8 +114,9 @@ jobs:
 
   financials:
     if: >-
-      github.event_name == 'workflow_dispatch' &&
-      (inputs.job == 'financials' || inputs.job == 'nifty50-financials')
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.job == 'financials' || inputs.job == 'nifty50-financials'))
     runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: production
@@ -147,7 +152,7 @@ jobs:
           fi
           python scripts/bootstrap_nse_financial_results_all.py "${ARGS[@]}"
       - name: Backfill incomplete NIFTY 50 financial evidence
-        if: inputs.job == 'nifty50-financials'
+        if: github.event_name == 'push' || inputs.job == 'nifty50-financials'
         run: >-
           python scripts/backfill_nse_financial_results.py
           --nifty50 --limit 50 --max-periods 10
