@@ -58,7 +58,7 @@ def test_prepared_rows_persist_every_agent_and_exact_blockers() -> None:
         symbol="RELIANCE",
         report=AgentReadinessReport(coverage=_coverage(), agents=agents),
     )
-    evaluated_at = datetime(2026, 9, 22, 4, 30)
+    evaluated_at = datetime(2026, 9, 22, 4, 30, tzinfo=UTC)
     rows = build_prepared_agent_rows(
         readiness,
         SecurityReadinessFreshness(
