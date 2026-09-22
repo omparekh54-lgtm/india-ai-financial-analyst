@@ -218,7 +218,11 @@ def test_free_tier_data_jobs_are_bounded_and_do_not_enable_paid_services() -> No
     workflow = _workflow("free-tier-data-jobs.yml")
     triggers = workflow["on"]
     assert isinstance(triggers, dict)
-    assert set(triggers) == {"schedule", "workflow_dispatch"}
+    assert set(triggers) == {"push", "schedule", "workflow_dispatch"}
+    assert triggers["push"] == {
+        "branches": ["main"],
+        "paths": [".github/run-markers/nifty50-financials"],
+    }
     assert workflow["permissions"] == {"contents": "read"}
 
     jobs = workflow["jobs"]
