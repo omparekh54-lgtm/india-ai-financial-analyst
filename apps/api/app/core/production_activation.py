@@ -13,7 +13,7 @@ PRODUCTION_ACTIVATION_PHASE_ORDER = (
 
 MIN_REAL_SECURITIES = 1000
 MIN_REPRESENTATIVE_RESEARCH_JOBS = 5
-LATEST_REQUIRED_MIGRATION = "0026_backend_only_rls_deny_policies.sql"
+LATEST_REQUIRED_MIGRATION = "0028_security_agent_readiness_status.sql"
 EXPECTED_REPOSITORY = "omparekh54-lgtm/india-ai-financial-analyst"
 
 
