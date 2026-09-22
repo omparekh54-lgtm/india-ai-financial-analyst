@@ -13,6 +13,12 @@ NSE_FINANCIAL_RESULTS_PAGE = (
     "https://www.nseindia.com/companies-listing/corporate-filings-financial-results"
 )
 NSE_FINANCIAL_RESULTS_API = "https://www.nseindia.com/api/corporates-financial-results"
+NSE_INTEGRATED_RESULTS_PAGE = (
+    "https://www.nseindia.com/companies-listing/corporate-integrated-filing"
+)
+NSE_INTEGRATED_RESULTS_API = "https://www.nseindia.com/api/integrated-filing-results"
+NSE_INTEGRATED_FINANCIAL_TYPE = "Integrated Filing- Financials"
+_MAX_INTEGRATED_RECORDS = 100
 _ALLOWED_XBRL_HOSTS = {
     "nsearchives.nseindia.com",
     "www.nseindia.com",
@@ -115,7 +121,53 @@ class NseFinancialResultsFetcher:
         records: list[NseFinancialResultRecord] = []
         for period in ("Quarterly", "Annual"):
             records.extend(await self.fetch(symbol, period=period))
+        records.extend(await self.fetch_integrated_history(symbol))
         return dedupe_financial_result_records(records)
+
+    async def fetch_integrated_history(
+        self,
+        symbol: str,
+    ) -> list[NseFinancialResultRecord]:
+        normalized_symbol = _symbol(symbol)
+        if self._client is None:
+            await self.start()
+        assert self._client is not None
+
+        response = await self._integrated_request(normalized_symbol)
+        if response.status_code in {401, 403}:
+            await self._refresh_session()
+            response = await self._integrated_request(normalized_symbol)
+        if response.status_code in {401, 403}:
+            raise SourceFetchError("NSE integrated-financial-results session was rejected")
+        if response.status_code == 429:
+            raise SourceFetchError("NSE integrated-financial-results rate limit exceeded")
+        try:
+            response.raise_for_status()
+            return parse_nse_integrated_financial_results(
+                response.json(),
+                expected_symbol=normalized_symbol,
+            )
+        except (httpx.HTTPError, TypeError, ValueError) as exc:
+            raise SourceFetchError("Invalid NSE integrated-financial-results response") from exc
+
+    async def _integrated_request(self, symbol: str) -> httpx.Response:
+        assert self._client is not None
+        try:
+            return await self._client.get(
+                NSE_INTEGRATED_RESULTS_API,
+                params={
+                    "index": "equities",
+                    "symbol": symbol,
+                    "type": NSE_INTEGRATED_FINANCIAL_TYPE,
+                    "page": 1,
+                    "size": _MAX_INTEGRATED_RECORDS,
+                },
+                headers={"Referer": NSE_INTEGRATED_RESULTS_PAGE},
+            )
+        except httpx.HTTPError as exc:
+            raise SourceFetchError(
+                "Unable to fetch NSE integrated-financial-results history"
+            ) from exc
 
     async def _request(self, symbol: str, period: str) -> httpx.Response:
         assert self._client is not None
@@ -198,6 +250,69 @@ def parse_nse_financial_results(
                     _first(row, "consolidated", "consolidation", "natureOfReport")
                 ),
                 bank_flag=_optional_text(_first(row, "bank", "bankFlag", "bank_flag")),
+                xbrl_url=xbrl_url,
+                raw_index=index,
+            )
+        )
+    return dedupe_financial_result_records(records)
+
+
+def parse_nse_integrated_financial_results(
+    payload: object,
+    *,
+    expected_symbol: str,
+) -> list[NseFinancialResultRecord]:
+    """Normalize NSE's post-March-2025 Integrated Filing financial response."""
+
+    symbol = _symbol(expected_symbol)
+    if not isinstance(payload, dict):
+        raise TypeError("NSE integrated-financial-results response must be an object")
+    rows = payload.get("data")
+    if not isinstance(rows, list):
+        raise TypeError("NSE integrated-financial-results response did not contain data")
+    total_count = payload.get("totalCount")
+    if isinstance(total_count, int) and total_count > _MAX_INTEGRATED_RECORDS:
+        raise ValueError(
+            "NSE integrated-financial-results response exceeded the bounded page size"
+        )
+
+    records: list[NseFinancialResultRecord] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        row_symbol = _text(_first(row, "symbol")).upper()
+        if row_symbol and row_symbol != symbol:
+            raise ValueError(
+                "NSE integrated-financial-results symbol mismatch: "
+                f"expected {symbol}, received {row_symbol}"
+            )
+        filing_type = _optional_text(_first(row, "type"))
+        if filing_type and filing_type != NSE_INTEGRATED_FINANCIAL_TYPE:
+            continue
+
+        period_end = _date(_first(row, "qe_Date", "qeDate", "periodEnd"))
+        if period_end is None:
+            continue
+        xbrl_url = normalize_xbrl_url(_first(row, "xbrl", "ixbrl"))
+        if xbrl_url is None:
+            continue
+        audited = (_optional_text(_first(row, "audited")) or "").lower()
+        period = "Annual" if period_end.month == 3 and audited == "audited" else "Quarterly"
+        broadcast_at = _datetime(
+            _first(row, "broadcast_Date", "broadcastDate", "creation_Date")
+        )
+        records.append(
+            NseFinancialResultRecord(
+                symbol=symbol,
+                period=period,
+                relating_to=period_end.isoformat(),
+                financial_year=None,
+                period_start=None,
+                period_end=period_end,
+                filing_at=broadcast_at,
+                broadcast_at=broadcast_at,
+                consolidation=_optional_text(_first(row, "consolidated")),
+                bank_flag=None,
                 xbrl_url=xbrl_url,
                 raw_index=index,
             )
