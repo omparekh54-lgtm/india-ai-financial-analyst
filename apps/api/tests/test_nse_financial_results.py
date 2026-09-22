@@ -5,6 +5,7 @@ from app.connectors.nse_financial_results import (
     normalize_period,
     normalize_xbrl_url,
     parse_nse_financial_results,
+    parse_nse_integrated_financial_results,
 )
 
 
@@ -41,6 +42,95 @@ def test_parse_nse_financial_results_normalizes_current_fields() -> None:
     assert record.filing_at is not None
     assert record.consolidation == "Consolidated"
     assert record.xbrl_url.startswith("https://nsearchives.nseindia.com/")
+
+
+
+
+def test_parse_integrated_financial_results_normalizes_current_nse_fields() -> None:
+    records = parse_nse_integrated_financial_results(
+        {
+            "data": [
+                {
+                    "audited": "Un-Audited",
+                    "broadcast_Date": "17-Jul-2026 19:50:03",
+                    "consolidated": "Consolidated",
+                    "qe_Date": "30-JUN-2026",
+                    "symbol": "RELIANCE",
+                    "type": "Integrated Filing- Financials",
+                    "xbrl": (
+                        "https://nsearchives.nseindia.com/corporate/xbrl/"
+                        "INTEGRATED_FILING_INDAS_1695741_17072026075004_WEB.xml"
+                    ),
+                }
+            ],
+            "totalCount": 1,
+        },
+        expected_symbol="reliance",
+    )
+
+    assert len(records) == 1
+    record = records[0]
+    assert record.symbol == "RELIANCE"
+    assert record.period == "Quarterly"
+    assert record.period_end is not None
+    assert record.period_end.isoformat() == "2026-06-30"
+    assert record.filing_at is not None
+    assert record.filing_at.isoformat() == "2026-07-17T19:50:03+00:00"
+    assert record.consolidation == "Consolidated"
+    assert "INTEGRATED_FILING_INDAS" in record.xbrl_url
+
+
+def test_parse_integrated_financial_results_marks_audited_march_period_annual() -> None:
+    records = parse_nse_integrated_financial_results(
+        {
+            "data": [
+                {
+                    "audited": "Audited",
+                    "broadcast_Date": "24-Apr-2026 22:57:12",
+                    "consolidated": "Consolidated",
+                    "qe_Date": "31-MAR-2026",
+                    "symbol": "RELIANCE",
+                    "type": "Integrated Filing- Financials",
+                    "xbrl": (
+                        "https://nsearchives.nseindia.com/corporate/xbrl/"
+                        "INTEGRATED_FILING_INDAS_1658776_24042026105714_WEB.xml"
+                    ),
+                }
+            ],
+            "totalCount": 1,
+        },
+        expected_symbol="RELIANCE",
+    )
+
+    assert records[0].period == "Annual"
+    assert records[0].period_end is not None
+    assert records[0].period_end.isoformat() == "2026-03-31"
+
+
+def test_parse_integrated_financial_results_rejects_symbol_mismatch() -> None:
+    with pytest.raises(ValueError, match="symbol mismatch"):
+        parse_nse_integrated_financial_results(
+            {
+                "data": [
+                    {
+                        "qe_Date": "30-JUN-2026",
+                        "symbol": "TCS",
+                        "type": "Integrated Filing- Financials",
+                        "xbrl": "https://nsearchives.nseindia.com/corporate/xbrl/tcs.xml",
+                    }
+                ],
+                "totalCount": 1,
+            },
+            expected_symbol="INFY",
+        )
+
+
+def test_parse_integrated_financial_results_fails_closed_when_page_is_truncated() -> None:
+    with pytest.raises(ValueError, match="exceeded the bounded page size"):
+        parse_nse_integrated_financial_results(
+            {"data": [], "totalCount": 101},
+            expected_symbol="RELIANCE",
+        )
 
 
 def test_parse_nse_financial_results_accepts_schema_aliases_and_data_wrapper() -> None:
