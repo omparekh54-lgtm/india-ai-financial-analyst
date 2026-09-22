@@ -1,6 +1,9 @@
 from datetime import UTC, date, datetime
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
+
+import pytest
 
 from app.agents.contracts import AgentName
 from app.core.agent_data_readiness import (
@@ -12,6 +15,7 @@ from app.core.prepared_security_readiness import (
     SECURITY_READINESS_RULE_VERSION,
     SecurityReadinessFreshness,
     build_prepared_agent_rows,
+    persist_prepared_security_readiness,
 )
 from app.core.security_readiness import SecurityReadiness
 
@@ -97,3 +101,44 @@ def test_readiness_migration_is_backend_only_and_fail_closed() -> None:
     assert "using (false) with check (false)" in migration
     assert "rule_version text not null" in migration
     assert "evaluated_at timestamptz not null" in migration
+
+
+@pytest.mark.asyncio
+async def test_persist_writes_all_agent_rows_in_one_transaction() -> None:
+    security_id = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+    readiness = SecurityReadiness(
+        security_id=security_id,
+        symbol="RELIANCE",
+        report=AgentReadinessReport(
+            coverage=_coverage(),
+            agents=tuple(AgentReadiness(agent=agent, ready=True) for agent in AgentName),
+        ),
+    )
+    connection = AsyncMock()
+    transaction = AsyncMock()
+    transaction.__aenter__.return_value = connection
+    engine = MagicMock()
+    engine.begin.return_value = transaction
+    freshness = SecurityReadinessFreshness(
+        latest_market_session=date(2026, 9, 21),
+        latest_financial_period=date(2026, 6, 30),
+        latest_filing_at=datetime(2026, 7, 17, tzinfo=UTC),
+        latest_earnings_at=datetime(2026, 7, 17, tzinfo=UTC),
+    )
+
+    with patch(
+        "app.core.prepared_security_readiness._load_freshness",
+        new=AsyncMock(return_value=freshness),
+    ):
+        await persist_prepared_security_readiness(
+            engine,
+            readiness,
+            evaluated_at=datetime(2026, 9, 22, tzinfo=UTC),
+        )
+
+    assert connection.execute.await_count == 2
+    upsert_rows = connection.execute.await_args_list[0].args[1]
+    assert len(upsert_rows) == 16
+    assert {row["agent_name"] for row in upsert_rows} == {
+        agent.value for agent in AgentName
+    }
