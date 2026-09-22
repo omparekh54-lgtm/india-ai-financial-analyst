@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -16,6 +17,7 @@ from app.core.data_readiness import (
     evaluate_data_coverage,
     load_data_coverage,
 )
+from app.core.prepared_security_readiness import persist_prepared_security_readiness
 from app.core.security_readiness import (
     SecurityReadiness,
     evaluate_security_readiness,
@@ -99,6 +101,7 @@ async def assess_security_research_readiness(
     complete readiness contract before any research agents run.
     """
     runtime_settings = settings or get_settings()
+    evaluated_at = datetime.now(UTC)
     corpus_coverage = await load_data_coverage(engine)
     security_coverage, symbol = await load_security_agent_coverage(engine, security_id)
     readiness = evaluate_security_readiness(
@@ -107,6 +110,12 @@ async def assess_security_research_readiness(
         security_coverage,
         corpus_coverage,
         runtime_settings,
+        as_of=evaluated_at,
+    )
+    await persist_prepared_security_readiness(
+        engine,
+        readiness,
+        evaluated_at=evaluated_at,
     )
     preparation: tuple[str, ...] = ()
     if (
