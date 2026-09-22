@@ -81,7 +81,24 @@ async def refresh_prepared_security_readiness(
         as_of=evaluated,
     )
 
-    freshness = await _load_freshness(engine, security_id)
+    await persist_prepared_security_readiness(
+        engine,
+        readiness,
+        evaluated_at=evaluated,
+    )
+    return readiness
+
+
+async def persist_prepared_security_readiness(
+    engine: AsyncEngine,
+    readiness: SecurityReadiness,
+    *,
+    evaluated_at: datetime | None = None,
+) -> None:
+    """Persist a readiness result already evaluated from live source tables."""
+
+    evaluated = _utc(evaluated_at or datetime.now(UTC))
+    freshness = await _load_freshness(engine, readiness.security_id)
     rows = build_prepared_agent_rows(readiness, freshness, evaluated_at=evaluated)
     expected_agents = {agent.value for agent in AgentName}
     actual_agents = {str(row["agent_name"]) for row in rows}
@@ -141,7 +158,6 @@ async def refresh_prepared_security_readiness(
                 "agent_names": sorted(expected_agents),
             },
         )
-    return readiness
 
 
 async def _load_freshness(
