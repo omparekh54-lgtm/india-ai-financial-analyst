@@ -250,6 +250,9 @@ def test_free_tier_data_jobs_are_bounded_and_do_not_enable_paid_services() -> No
     assert "nifty50-peer-metrics" in text
     assert "backfill_nse_industry_classification.py" in text
     assert text.count("--nifty50") == 3
+    assert "NIFTY 50 push marker requires an after-symbol checkpoint" in text
+    assert "ARGS=(--nifty50 --limit 8 --max-periods 10" in text
+    assert 'ARGS+=(--after-symbol "$START_AFTER")' in text
 
 
 def test_api_dockerfile_excludes_optional_worker_dependencies() -> None:
