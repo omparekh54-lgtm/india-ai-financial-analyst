@@ -236,6 +236,14 @@ def test_free_tier_data_jobs_are_bounded_and_do_not_enable_paid_services() -> No
     assert "secrets.DATABASE_URL" in text
     assert "financial_batches must be 1-8" in text
     assert "--supported-only" in text
+    market_steps = jobs["market"]["steps"]
+    benchmark_index = next(
+        index for index, step in enumerate(market_steps)
+        if step.get("name") == "Refresh official NSE benchmarks"
+    )
+    assert market_steps[benchmark_index + 1]["run"] == (
+        "python scripts/sync_india_vix_macro.py --max-age-days 7"
+    )
     assert "--min-coverage-pct 25" in text
     assert "nifty50-classification" in text
     assert "nifty50-financials" in text
