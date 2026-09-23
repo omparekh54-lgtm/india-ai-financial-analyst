@@ -329,3 +329,12 @@ def test_initial_nifty50_market_history_is_bounded_and_research_only() -> None:
     assert text.count("--security ") == 16
     assert "--lookback-days 365 --interval 1d" in text
     assert "--confirm-yahoo-research-use" in text
+
+
+def test_nifty50_market_batch_derives_metrics_after_bars_in_same_run() -> None:
+    workflow = _workflow("nifty50-market-history.yml")
+    steps = workflow["jobs"]["first-financial-batch"]["steps"]
+    assert steps[-2]["name"] == "Extend sourced daily history for the first 16 NIFTY 50 equities"
+    assert steps[-1]["name"] == "Derive sourced peer metrics after historical bars"
+    assert "--confirm-yahoo-research-use" in steps[-2]["run"]
+    assert "--nifty50 --refresh-all --limit 16 --min-metrics 3" in steps[-1]["run"]
