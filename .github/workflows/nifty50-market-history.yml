@@ -61,3 +61,7 @@ jobs:
           --security GRASIM
           --lookback-days 365 --interval 1d
           --request-delay-seconds 0.5 --confirm-yahoo-research-use
+      - name: Derive sourced peer metrics after historical bars
+        run: >-
+          python scripts/backfill_derived_security_metrics.py
+          --nifty50 --refresh-all --limit 16 --min-metrics 3
