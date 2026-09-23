@@ -1,4 +1,4 @@
-run: 2026-09-23-first16-365day-history
+run: 2026-09-23-first16-365day-history-and-metrics
 batch: first-16-nifty50
 purpose: extend existing sourced Yahoo research-only daily history to 200 or more bars
 source-usage: internal_research_only; commercial_display_approved=false
