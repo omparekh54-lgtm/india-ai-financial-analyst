@@ -444,7 +444,7 @@ async def _run() -> int:
             "data_policy": "real_primary_xbrl_no_synthetic_fallback",
             "target_count": len(targets),
             "failure_count": failure_count,
-            "next_after_symbol": targets[-1].symbol if args.all else None,
+            "next_after_symbol": targets[-1].symbol if args.all or args.nifty50 else None,
             "coverage_before": before,
             "coverage_after": after,
             "results": results,
