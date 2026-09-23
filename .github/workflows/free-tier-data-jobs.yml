@@ -30,7 +30,7 @@ on:
         type: string
       financial_start_after:
         description: >-
-          Financials only: resume after this NSE symbol instead of restarting from the
+          Financials/NIFTY 50: resume after this NSE symbol instead of restarting from the
           beginning of the alphabet (optional). Use the "next_after_symbol" value printed in
           the previous failed/partial run's JSON output, e.g. ABCOTS.
         required: false
@@ -155,10 +155,28 @@ jobs:
           python scripts/bootstrap_nse_financial_results_all.py "${ARGS[@]}"
       - name: Backfill incomplete NIFTY 50 financial evidence
         if: github.event_name == 'push' || inputs.job == 'nifty50-financials'
-        run: >-
-          python scripts/backfill_nse_financial_results.py
-          --nifty50 --limit 50 --max-periods 10
-          --request-delay-seconds 0.5 --document-delay-seconds 0.2
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          START_AFTER: ${{ inputs.financial_start_after }}
+        run: |
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            START_AFTER=$(sed -n 's/^after-symbol: //p' ../../.github/run-markers/nifty50-financials)
+            if [[ -z "$START_AFTER" ]]; then
+              echo "NIFTY 50 push marker requires an after-symbol checkpoint"
+              exit 2
+            fi
+          fi
+          SYMBOL_PATTERN='^[A-Z0-9&-]{1,30}$'
+          if [[ -n "$START_AFTER" && ! "$START_AFTER" =~ $SYMBOL_PATTERN ]]; then
+            echo "financial_start_after must be an uppercase NSE symbol"
+            exit 2
+          fi
+          ARGS=(--nifty50 --limit 8 --max-periods 10
+                --request-delay-seconds 0.5 --document-delay-seconds 0.2)
+          if [[ -n "$START_AFTER" ]]; then
+            ARGS+=(--after-symbol "$START_AFTER")
+          fi
+          python scripts/backfill_nse_financial_results.py "${ARGS[@]}"
 
   peer-metrics:
     if: >-
