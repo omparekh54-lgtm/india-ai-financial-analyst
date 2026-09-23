@@ -279,3 +279,27 @@ def test_manual_workflows_have_non_cancelling_production_concurrency_locks() -> 
         assert isinstance(concurrency, dict)
         assert concurrency["group"] == group
         assert concurrency["cancel-in-progress"] == "false"
+
+
+def test_nifty50_peer_metrics_batch_is_marker_triggered_and_source_linked() -> None:
+    workflow = _workflow("nifty50-peer-metrics.yml")
+    assert workflow["on"] == {
+        "push": {
+            "branches": ["main"],
+            "paths": [".github/run-markers/nifty50-peer-metrics"],
+        }
+    }
+    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["concurrency"] == {
+        "group": "free-tier-production-data",
+        "cancel-in-progress": "false",
+    }
+    job = workflow["jobs"]["first-financial-batch"]
+    assert job["environment"] == "production"
+    assert job["timeout-minutes"] == "45"
+    text = (WORKFLOWS / "nifty50-peer-metrics.yml").read_text(encoding="utf-8")
+    assert "secrets.DATABASE_URL" in text
+    assert 'FREE_ONLY: "true"' in text
+    assert 'ENABLE_EXTERNAL_LLM_CALLS: "false"' in text
+    assert "batch: first-16-nifty50" in text
+    assert "--nifty50 --refresh-all --limit 16 --min-metrics 3" in text
