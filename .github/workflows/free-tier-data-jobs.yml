@@ -79,6 +79,8 @@ jobs:
           --request-delay-seconds 0.5 --confirm-yahoo-research-use
       - name: Refresh official NSE benchmarks
         run: python scripts/backfill_nse_benchmarks.py --min-rows 2
+      - name: Sync sourced India VIX benchmark into macro context
+        run: python scripts/sync_india_vix_macro.py --max-age-days 7
 
   classification:
     if: >-
