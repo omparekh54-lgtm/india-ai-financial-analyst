@@ -303,3 +303,29 @@ def test_nifty50_peer_metrics_batch_is_marker_triggered_and_source_linked() -> N
     assert 'ENABLE_EXTERNAL_LLM_CALLS: "false"' in text
     assert "batch: first-16-nifty50" in text
     assert "--nifty50 --refresh-all --limit 16 --min-metrics 3" in text
+
+
+def test_initial_nifty50_market_history_is_bounded_and_research_only() -> None:
+    workflow = _workflow("nifty50-market-history.yml")
+    assert workflow["on"] == {
+        "push": {
+            "branches": ["main"],
+            "paths": [".github/run-markers/nifty50-market-history"],
+        }
+    }
+    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["concurrency"] == {
+        "group": "free-tier-production-data",
+        "cancel-in-progress": "false",
+    }
+    job = workflow["jobs"]["first-financial-batch"]
+    assert job["environment"] == "production"
+    assert job["timeout-minutes"] == "45"
+    text = (WORKFLOWS / "nifty50-market-history.yml").read_text(encoding="utf-8")
+    assert "secrets.DATABASE_URL" in text
+    assert 'FREE_ONLY: "true"' in text
+    assert 'ENABLE_EXTERNAL_LLM_CALLS: "false"' in text
+    assert "batch: first-16-nifty50" in text
+    assert text.count("--security ") == 16
+    assert "--lookback-days 365 --interval 1d" in text
+    assert "--confirm-yahoo-research-use" in text

@@ -1,0 +1,63 @@
+name: NIFTY 50 historical market batch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/run-markers/nifty50-market-history
+
+permissions:
+  contents: read
+
+concurrency:
+  group: free-tier-production-data
+  cancel-in-progress: false
+
+jobs:
+  first-financial-batch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    env:
+      APP_ENV: production
+      FREE_ONLY: "true"
+      ENABLE_EXTERNAL_DATA_CALLS: "true"
+      ENABLE_EXTERNAL_LLM_CALLS: "false"
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - name: Require database secret and reviewed batch marker
+        run: |
+          test -n "${DATABASE_URL:-}"
+          grep -Fxq 'batch: first-16-nifty50' ../../.github/run-markers/nifty50-market-history
+      - name: Install market runtime
+        run: pip install -e ".[market_imports]"
+      - name: Extend sourced daily history for the first 16 NIFTY 50 equities
+        run: >-
+          python scripts/backfill_yfinance_market_history.py
+          --security ADANIENT
+          --security ADANIPORTS
+          --security APOLLOHOSP
+          --security ASIANPAINT
+          --security AXISBANK
+          --security BAJAJ-AUTO
+          --security BAJAJFINSV
+          --security BAJFINANCE
+          --security BEL
+          --security BHARTIARTL
+          --security CIPLA
+          --security COALINDIA
+          --security DRREDDY
+          --security EICHERMOT
+          --security ETERNAL
+          --security GRASIM
+          --lookback-days 365 --interval 1d
+          --request-delay-seconds 0.5 --confirm-yahoo-research-use
