@@ -338,6 +338,7 @@ async def _run() -> int:
     parser.add_argument("--document-delay-seconds", type=float, default=0.10)
     parser.add_argument("--refresh-all", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--skip-coverage-snapshot", action="store_true")
     args = parser.parse_args()
 
     if args.limit < 1 or args.limit > 100:
@@ -380,7 +381,7 @@ async def _run() -> int:
                 for identifier in args.security or []
             ]
 
-        before = await _coverage(engine)
+        before = {} if args.skip_coverage_snapshot else await _coverage(engine)
         if not targets:
             print(
                 json.dumps(
@@ -432,7 +433,7 @@ async def _run() -> int:
                 if position + 1 < len(targets) and args.request_delay_seconds:
                     await asyncio.sleep(args.request_delay_seconds)
 
-        after = before if args.dry_run else await _coverage(engine)
+        after = before if args.dry_run or args.skip_coverage_snapshot else await _coverage(engine)
         output: dict[str, Any] = {
             "status": (
                 "dry_run"

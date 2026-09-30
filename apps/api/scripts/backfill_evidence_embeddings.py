@@ -48,6 +48,19 @@ async def _run(*, batch_size: int, limit: int | None) -> int:
 
             vectors = await embedder.embed([str(row["content"]) for row in rows])
             async with engine.begin() as connection:
+                database_bytes = await connection.scalar(
+                    text("select pg_database_size(current_database())")
+                )
+                if database_bytes is None or int(database_bytes) >= 450_000_000:
+                    raise RuntimeError("Embedding backfill stopped at the free-tier storage guard")
+                # pgvector may be installed in public or a dedicated extension schema.
+                # Scope the actual extension schema to this transaction only.
+                await connection.execute(text(
+                    "select set_config('search_path', current_setting('search_path') || "
+                    "',' || quote_ident(n.nspname), true) "
+                    "from pg_extension e join pg_namespace n on n.oid = e.extnamespace "
+                    "where e.extname = 'vector'"
+                ))
                 for row, vector in zip(rows, vectors, strict=True):
                     await connection.execute(
                         text(
