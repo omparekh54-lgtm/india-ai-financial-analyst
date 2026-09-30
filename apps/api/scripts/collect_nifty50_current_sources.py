@@ -87,7 +87,8 @@ async def collect(mode: str, *, limit: int, after_symbol: str | None) -> int:
                 or any(item.get("error_type") == "SourceFetchError"
                        for item in payload.get("results", []))
                 or any("free-tier storage guard" in str(item.get("error", ""))
-                       for item in (result.get("import") or {}).get("result", {}).get("results", []))
+                       for item in (result.get("import") or {}).get(
+                           "result", {}).get("results", []))
             )
             consecutive_source_failures = consecutive_source_failures + 1 if source_failed else 0
             if consecutive_source_failures >= 3:

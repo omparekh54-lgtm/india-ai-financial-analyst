@@ -94,7 +94,8 @@ def test_bulk_upsert_keeps_source_and_period_keys() -> None:
     ))
     connection.execute.assert_awaited_once()
     statement, parameters = connection.execute.call_args.args
-    assert "on conflict (security_id, fact_name, period_end, period_type, source_id)" in str(statement)
+    conflict_key = "on conflict (security_id, fact_name, period_end, period_type, source_id)"
+    assert conflict_key in str(statement)
     assert [row["value"] for row in parameters] == [Decimal(10), Decimal(2)]
     assert [row["period_type"] for row in parameters] == ["quarterly", "annual"]
     assert all(row["source_id"] == source_id for row in parameters)
