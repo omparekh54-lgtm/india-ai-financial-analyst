@@ -34,6 +34,10 @@ class NormalizedFinancialFact:
 
 
 _FACT_ALIASES = {
+    "profit loss for period": "pat",
+    "basic earnings loss per share from continuing and discontinued operations": "eps_basic",
+    "diluted earnings loss per share from continuing and discontinued operations": "eps_diluted",
+    "depreciation depletion and amortisation expense": "depreciation_amortization",
     "revenue": "revenue",
     "revenue from operations": "revenue",
     "total revenue": "revenue",
