@@ -374,8 +374,13 @@ def _pb_metric(
         formula = "market_price_divided_by_book_value_per_share"
     else:
         equity = _latest(by_name, "total_equity") or _latest(by_name, "net_worth")
-        shares = _latest(by_name, "shares_outstanding")
+        shares = (
+            _at_or_before(by_name.get("shares_outstanding", []), equity.period_end)
+            if equity is not None else None
+        )
         if equity is None or shares is None or equity.value <= 0 or shares.value <= 0:
+            return None
+        if shares.period_end != equity.period_end:
             return None
         if not _units_compatible_for_per_share(equity.unit, shares.unit):
             return None

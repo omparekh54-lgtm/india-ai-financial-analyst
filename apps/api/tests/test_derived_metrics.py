@@ -158,6 +158,18 @@ def test_market_multiple_fallbacks_use_pat_equity_and_shares() -> None:
     assert Decimal(str(metrics["pb"].value)) == Decimal(2)  # type: ignore[attr-defined]
 
 
+def test_book_multiple_uses_shares_at_equity_date_not_later_capital_change() -> None:
+    facts = [
+        _fact("total_equity", date(2026, 3, 31), "500"),
+        _fact("shares_outstanding", date(2026, 3, 31), "10", unit="crore shares"),
+        _fact("shares_outstanding", date(2026, 6, 30), "20", unit="crore shares"),
+    ]
+    metrics = _metrics(derive_peer_metrics(
+        facts, market=MetricMarketClose(date(2026, 8, 28), Decimal(100), S3),
+    ))
+    assert Decimal(str(metrics["pb"].value)) == Decimal(2)  # type: ignore[attr-defined]
+
+
 def test_incompatible_units_do_not_create_false_ratio_metrics() -> None:
     facts = [
         _fact("revenue", date(2026, 3, 31), "100", unit="INR crore", source_id=S1),

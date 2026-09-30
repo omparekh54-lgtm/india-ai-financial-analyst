@@ -36,7 +36,7 @@ class DerivedSecurityMetricIngestor:
         evidence_content = render_derived_metric_evidence(symbol, normalized)
         source_metadata = {
             "provenance_class": "derived_from_source_linked_inputs",
-            "production_approved": True,
+            "production_approved": False,
             "calculation_version": 1,
             "upstream_source_ids": [str(value) for value in bundle.upstream_source_ids],
             "metric_names": [item.metric_name for item in normalized],
@@ -44,6 +44,15 @@ class DerivedSecurityMetricIngestor:
         }
 
         async with self.engine.begin() as connection:
+            approved_count = await connection.scalar(
+                text("""select count(*) from sources
+                        where id = any(cast(:source_ids as uuid[]))
+                          and metadata->>'production_approved' = 'true'"""),
+                {"source_ids": list(bundle.upstream_source_ids)},
+            )
+            source_metadata["production_approved"] = (
+                approved_count == len(bundle.upstream_source_ids)
+            )
             source_id = await connection.scalar(
                 text(
                     """
@@ -83,6 +92,14 @@ class DerivedSecurityMetricIngestor:
                 )
             if source_id is None:  # pragma: no cover - database invariant
                 raise RuntimeError("failed to persist derived metric source")
+
+            await connection.execute(
+                text("""update sources set metadata = cast(:metadata as jsonb)
+                        where id = :source_id
+                          and metadata is distinct from cast(:metadata as jsonb)"""),
+                {"source_id": source_id,
+                 "metadata": json.dumps(source_metadata, sort_keys=True)},
+            )
 
             await connection.execute(
                 text(
