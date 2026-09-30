@@ -4,6 +4,8 @@ from decimal import Decimal
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import pytest
+
 from app.ingestion.financials import (
     NormalizedFinancialFact,
     RawFinancialFact,
@@ -114,3 +116,30 @@ def test_official_xbrl_total_result_aliases() -> None:
         "depreciation_depletion_and_amortisation_expense"
     ) == "depreciation_amortization"
     assert canonical_fact_name("profit_loss_from_discontinued_operations_after_tax") != "pat"
+
+
+@pytest.mark.parametrize("capital,face,unit,context,expected", [
+    ("1301600000", "1", "INR", "OneD", Decimal(1301600000)),
+    ("1000", "10", "INR", "OneD", Decimal(100)),
+    ("1001", "10", "INR", "OneD", None),
+    ("1000", "0", "INR", "OneD", None),
+    ("1000", "10", "INR crore", "OneD", None),
+    ("1000", "10", "INR", "TwoD", None),
+])
+def test_paid_up_shares_require_exact_units_context_and_integral_count(
+    capital, face, unit, context, expected,
+) -> None:
+    facts = normalize_financial_facts([
+        RawFinancialFact(
+            name="paid_up_value_of_equity_share_capital", period_end=date(2026, 6, 30),
+            period_type="quarterly", value=capital, unit=unit,
+            metadata={"xbrl_context_id": "OneD"},
+        ),
+        RawFinancialFact(
+            name="face_value_of_equity_share_capital", period_end=date(2026, 6, 30),
+            period_type="quarterly", value=face, unit="INR",
+            metadata={"xbrl_context_id": context, "xbrl_unit_ref": "INRPerShare"},
+        ),
+    ])
+    shares = next((f for f in facts if f.fact_name == "shares_outstanding"), None)
+    assert (shares.value if shares else None) == expected

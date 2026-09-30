@@ -1,4 +1,4 @@
 scope: current-apis-nifty50-real-data
 requested: 2026-09-30
-retry: 2026-10-01-resume-incomplete-after-index-reclamation
+retry: 2026-10-01-sourced-share-counts-and-upstream-approval
 purpose: Validate and collect existing official APIs; preserve restricted Yahoo provenance; report gaps honestly.

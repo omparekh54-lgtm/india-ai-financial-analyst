@@ -96,6 +96,8 @@ _FACT_ALIASES = {
     "interest expended": "interest_expense",
     "shares outstanding": "shares_outstanding",
     "number of shares": "shares_outstanding",
+    "paid up value of equity share capital": "paid_up_equity_share_capital",
+    "face value of equity share capital": "equity_share_face_value",
     "book value per share": "book_value_per_share",
     "sales per share": "sales_per_share",
     "basic earnings per share": "eps_basic",
@@ -232,6 +234,38 @@ def normalize_financial_facts(facts: list[RawFinancialFact]) -> list[NormalizedF
         grouped.setdefault((item.period_end, item.period_type), {})[item.fact_name] = item
 
     for (period_end, period_type), period in grouped.items():
+        if ("shares_outstanding" not in period
+                and "paid_up_equity_share_capital" in period
+                and "equity_share_face_value" in period):
+            capital = period["paid_up_equity_share_capital"]
+            face = period["equity_share_face_value"]
+            face_unit_valid = (
+                face.unit in {"INR/share", "INR per share"}
+                or face.metadata.get("xbrl_unit_ref") == "INRPerShare"
+            )
+            if (capital.unit == "INR" and face_unit_valid
+                    and capital.value > 0 and face.value > 0
+                    and capital.period_start == face.period_start
+                    and capital.metadata.get("xbrl_context_id")
+                    == face.metadata.get("xbrl_context_id")):
+                shares = capital.value / face.value
+                if shares == shares.to_integral_value():
+                    normalized[("shares_outstanding", period_end, period_type)] = (
+                        NormalizedFinancialFact(
+                            fact_name="shares_outstanding", period_start=capital.period_start,
+                            period_end=period_end, period_type=period_type,
+                            value=shares, unit="shares",
+                            metadata={
+                                "derived": True,
+                                "formula": "paid_up_equity_share_capital / equity_share_face_value",
+                                "components": ["paid_up_equity_share_capital",
+                                               "equity_share_face_value"],
+                                "calculation_version": 1,
+                                "share_count_basis": "paid_up_equity_capital",
+                                "xbrl_context_id": capital.metadata.get("xbrl_context_id"),
+                            },
+                        )
+                    )
         if "free_cash_flow" not in period and "cfo" in period and "capex" in period:
             cfo = period["cfo"]
             capex = period["capex"]
