@@ -69,6 +69,8 @@ async def collect(mode: str, *, limit: int, after_symbol: str | None) -> int:
     if len(symbols) != 50:
         raise RuntimeError("Official NIFTY 50 universe must contain exactly 50 distinct symbols")
     selected = [symbol for symbol in symbols if not after_symbol or symbol > after_symbol][:limit]
+    if mode == "financials":
+        selected = await incomplete_financial_symbols(selected)
     failures = 0
     processed: list[str] = []
     consecutive_source_failures = 0
@@ -137,6 +139,30 @@ async def collect(mode: str, *, limit: int, after_symbol: str | None) -> int:
         "status": "completed" if not failures else "completed_with_gaps",
     }, sort_keys=True), flush=True)
     return int(failures > 0)
+
+
+async def incomplete_financial_symbols(symbols: list[str]) -> list[str]:
+    """Resume from live financial, filing and earnings contracts, rather than a cursor alone."""
+    settings = get_settings()
+    if not settings.database_url:
+        raise RuntimeError("DATABASE_URL must be configured")
+    engine = create_database_engine(settings.database_url)
+    incomplete = []
+    try:
+        for symbol in symbols:
+            security_id, _ = await resolve_security(engine, symbol)
+            coverage, _ = await load_security_agent_coverage(engine, security_id)
+            if not (
+                coverage.financial_history_securities
+                and coverage.recent_filing_evidence_securities
+                and coverage.recent_earnings_evidence_securities
+            ):
+                incomplete.append(symbol)
+            else:
+                print(json.dumps({"symbol": symbol, "status": "already_complete"}), flush=True)
+    finally:
+        await engine.dispose()
+    return incomplete
 
 
 def main() -> int:

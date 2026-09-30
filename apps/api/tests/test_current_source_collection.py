@@ -65,6 +65,8 @@ def test_repeated_source_failures_stop_with_resume_cursor(capsys) -> None:
         patch("scripts.collect_nifty50_current_sources.NseSectoralIndexFetcher") as fetcher,
         patch("scripts.collect_nifty50_current_sources.collect_financial_symbol") as importer,
         patch("scripts.collect_nifty50_current_sources.asyncio.sleep", new=AsyncMock()),
+        patch("scripts.collect_nifty50_current_sources.incomplete_financial_symbols",
+              new=AsyncMock(side_effect=lambda symbols: symbols)),
     ):
         fetcher.return_value.fetch = AsyncMock(return_value=universe)
         importer.side_effect = lambda symbol, **kwargs: {"symbol": symbol, **failure}
@@ -75,3 +77,36 @@ def test_repeated_source_failures_stop_with_resume_cursor(capsys) -> None:
     assert summary["processed_count"] == 3
     assert summary["unprocessed_count"] == 47
     assert summary["next_after_symbol"] == "S02"
+
+
+def test_resume_retries_missing_earnings_or_filings_even_with_complete_financials() -> None:
+    from scripts.collect_nifty50_current_sources import incomplete_financial_symbols
+
+    coverage = [
+        SimpleNamespace(financial_history_securities=1,
+                        recent_filing_evidence_securities=1,
+                        recent_earnings_evidence_securities=1),
+        SimpleNamespace(financial_history_securities=0,
+                        recent_filing_evidence_securities=1,
+                        recent_earnings_evidence_securities=1),
+        SimpleNamespace(financial_history_securities=1,
+                        recent_filing_evidence_securities=0,
+                        recent_earnings_evidence_securities=1),
+        SimpleNamespace(financial_history_securities=1,
+                        recent_filing_evidence_securities=1,
+                        recent_earnings_evidence_securities=0),
+    ]
+    engine = SimpleNamespace(dispose=AsyncMock())
+    with (
+        patch("scripts.collect_nifty50_current_sources.get_settings",
+              return_value=SimpleNamespace(database_url="configured")),
+        patch("scripts.collect_nifty50_current_sources.create_database_engine",
+              return_value=engine),
+        patch("scripts.collect_nifty50_current_sources.resolve_security",
+              new=AsyncMock(return_value=("id", "name"))),
+        patch("scripts.collect_nifty50_current_sources.load_security_agent_coverage",
+              new=AsyncMock(side_effect=[(item, "symbol") for item in coverage])),
+    ):
+        selected = asyncio.run(incomplete_financial_symbols(["DONE", "FIN", "FILE", "EARN"]))
+    assert selected == ["FIN", "FILE", "EARN"]
+    engine.dispose.assert_awaited_once()

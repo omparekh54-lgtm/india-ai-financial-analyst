@@ -345,6 +345,10 @@ async def _upsert_financial_facts(
                 value = excluded.value,
                 unit = excluded.unit,
                 data = excluded.data
+            where (financial_facts.period_start, financial_facts.value,
+                   financial_facts.unit, financial_facts.data)
+              is distinct from
+                  (excluded.period_start, excluded.value, excluded.unit, excluded.data)
             """
         ),
         parameters,

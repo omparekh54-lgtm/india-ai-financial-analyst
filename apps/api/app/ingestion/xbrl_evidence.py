@@ -156,8 +156,9 @@ class XbrlEvidenceIngestor:
                 },
             )
             await connection.execute(
-                text("delete from evidence_chunks where source_id = :source_id"),
-                {"source_id": source_id},
+                text("""delete from evidence_chunks
+                        where source_id = :source_id and chunk_index >= :chunk_count"""),
+                {"source_id": source_id, "chunk_count": len(chunks)},
             )
             for chunk in chunks:
                 await connection.execute(
@@ -169,6 +170,19 @@ class XbrlEvidenceIngestor:
                           :source_id, :chunk_index, null, 'financial_results_xbrl',
                           :content, null, cast(:metadata as jsonb)
                         )
+                        on conflict (source_id, chunk_index) do update set
+                          section = excluded.section,
+                          content = excluded.content,
+                          embedding = case
+                            when evidence_chunks.content = excluded.content
+                              then evidence_chunks.embedding
+                            else null
+                          end,
+                          metadata = excluded.metadata
+                        where (evidence_chunks.section, evidence_chunks.content,
+                               evidence_chunks.metadata)
+                          is distinct from
+                              (excluded.section, excluded.content, excluded.metadata)
                         """
                     ),
                     {
