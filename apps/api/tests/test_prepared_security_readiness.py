@@ -111,7 +111,7 @@ async def test_persist_writes_all_agent_rows_in_one_transaction() -> None:
         symbol="RELIANCE",
         report=AgentReadinessReport(
             coverage=_coverage(),
-            agents=tuple(AgentReadiness(agent=agent, ready=True) for agent in AgentName),
+            agents=tuple(AgentReadiness(agent=agent, ready=True, errors=()) for agent in AgentName),
         ),
     )
     connection = AsyncMock()
@@ -142,3 +142,5 @@ async def test_persist_writes_all_agent_rows_in_one_transaction() -> None:
     assert {row["agent_name"] for row in upsert_rows} == {
         agent.value for agent in AgentName
     }
+    delete_parameters = connection.execute.await_args_list[1].args[1]
+    assert delete_parameters["security_id"] == security_id
