@@ -237,6 +237,12 @@ async def _process_target(
     documents: list[dict[str, object]] = []
 
     for position, item in enumerate(selected):
+        async with engine.connect() as connection:
+            database_bytes = await connection.scalar(
+                text("select pg_database_size(current_database())")
+            )
+        if database_bytes is None or int(database_bytes) >= 450_000_000:
+            raise RuntimeError("Financial backfill stopped at the free-tier storage guard")
         fetched = await xbrl_fetcher.fetch(item.record.xbrl_url)
         facts = parse_financial_xbrl(fetched.content, fetched.media_type)
         if not facts:

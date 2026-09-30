@@ -42,6 +42,19 @@ jobs:
           mkdir -p collection-results
       - name: Install existing collection runtime
         run: pip install -e ".[market_imports]"
+      - name: Fill existing evidence embeddings before expanding financial storage
+        id: embeddings
+        continue-on-error: true
+        env:
+          ENABLE_SEMANTIC_RETRIEVAL: "true"
+          OMP_NUM_THREADS: "2"
+          TOKENIZERS_PARALLELISM: "false"
+        run: |
+          set -euo pipefail
+          pip install 'torch>=2.6,<3' --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[embeddings]"
+          python scripts/backfill_evidence_embeddings.py --batch-size 64 --limit 10000 \
+            | tee collection-results/embeddings.jsonl
       - name: Collect validated official classifications
         id: classification
         continue-on-error: true

@@ -37,7 +37,9 @@ def run_import(command: list[str], *, timeout: int) -> dict[str, Any]:
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError:
-        error_types = re.findall(r"^([A-Za-z_][A-Za-z_0-9]*(?:Error|Exception)):", result.stderr, re.M)
+        error_types = re.findall(
+            r"^([A-Za-z_][A-Za-z_0-9]*(?:Error|Exception)):", result.stderr, re.M,
+        )
         payload = {"reason": "importer_did_not_return_json",
                    "error_type": error_types[-1] if error_types else None}
     return {"ok": result.returncode == 0, "exit_code": result.returncode, "result": payload}
@@ -80,9 +82,12 @@ async def collect(mode: str, *, limit: int, after_symbol: str | None) -> int:
             payload = validation.get("result", {})
             source_failed = (
                 validation.get("reason") == "import_timeout"
+                or (result.get("import") or {}).get("reason") == "import_timeout"
                 or payload.get("error_type") == "SourceFetchError"
                 or any(item.get("error_type") == "SourceFetchError"
                        for item in payload.get("results", []))
+                or any("free-tier storage guard" in str(item.get("error", ""))
+                       for item in (result.get("import") or {}).get("result", {}).get("results", []))
             )
             consecutive_source_failures = consecutive_source_failures + 1 if source_failed else 0
             if consecutive_source_failures >= 3:

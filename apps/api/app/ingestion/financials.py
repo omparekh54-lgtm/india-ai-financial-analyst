@@ -203,12 +203,12 @@ class FinancialFactIngestor:
     ) -> dict[str, int]:
         normalized = normalize_financial_facts(facts)
         async with self.engine.begin() as connection:
-            for fact in normalized:
-                await _upsert_financial_fact(
+            for offset in range(0, len(normalized), 100):
+                await _upsert_financial_facts(
                     connection,
                     security_id=security_id,
                     source_id=source_id,
-                    fact=fact,
+                    facts=normalized[offset:offset + 100],
                 )
         return {
             "input_count": len(facts),
@@ -302,25 +302,30 @@ def canonical_period_type(value: str) -> str:
     return _PERIOD_TYPES.get(normalized, normalized.replace(" ", "_"))
 
 
-async def _upsert_financial_fact(
+async def _upsert_financial_facts(
     connection: AsyncConnection,
     *,
     security_id: UUID,
     source_id: UUID,
-    fact: NormalizedFinancialFact,
+    facts: list[NormalizedFinancialFact],
 ) -> None:
-    parameters = {
-        "security_id": security_id,
-        "source_id": source_id,
-        "fact_name": fact.fact_name,
-        "period_start": fact.period_start,
-        "period_end": fact.period_end,
-        "period_type": fact.period_type,
-        "value": fact.value,
-        "unit": fact.unit,
-        "data": json.dumps(fact.metadata),
-    }
-    result = await connection.execute(
+    parameters = [
+        {
+            "security_id": security_id,
+            "source_id": source_id,
+            "fact_name": fact.fact_name,
+            "period_start": fact.period_start,
+            "period_end": fact.period_end,
+            "period_type": fact.period_type,
+            "value": fact.value,
+            "unit": fact.unit,
+            "data": json.dumps(fact.metadata),
+        }
+        for fact in facts
+    ]
+    if not parameters:
+        return
+    await connection.execute(
         text(
             """
             insert into financial_facts (
@@ -330,29 +335,12 @@ async def _upsert_financial_fact(
                 :security_id, :fact_name, :period_start, :period_end, :period_type,
                 :value, :unit, :source_id, cast(:data as jsonb)
             )
-            on conflict do nothing
-            returning id
-            """
-        ),
-        parameters,
-    )
-    inserted_id = result.scalar_one_or_none()
-    if inserted_id is not None:
-        return
-
-    await connection.execute(
-        text(
-            """
-            update financial_facts
-            set period_start = :period_start,
-                value = :value,
-                unit = :unit,
-                data = cast(:data as jsonb)
-            where security_id = :security_id
-              and fact_name = :fact_name
-              and period_end = :period_end
-              and period_type = :period_type
-              and source_id is not distinct from :source_id
+            on conflict (security_id, fact_name, period_end, period_type, source_id)
+            do update set
+                period_start = excluded.period_start,
+                value = excluded.value,
+                unit = excluded.unit,
+                data = excluded.data
             """
         ),
         parameters,

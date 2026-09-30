@@ -1,10 +1,8 @@
 import asyncio
 import json
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
-
 import subprocess
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from scripts.collect_nifty50_current_sources import collect_financial_symbol, run_import
 
