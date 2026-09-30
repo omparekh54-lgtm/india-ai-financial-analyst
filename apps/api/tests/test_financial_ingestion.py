@@ -100,3 +100,17 @@ def test_bulk_upsert_keeps_source_and_period_keys() -> None:
     assert [row["period_type"] for row in parameters] == ["quarterly", "annual"]
     assert all(row["source_id"] == source_id for row in parameters)
     assert all(row["security_id"] == security_id for row in parameters)
+
+
+def test_official_xbrl_total_result_aliases() -> None:
+    assert canonical_fact_name("profit_loss_for_period") == "pat"
+    assert canonical_fact_name(
+        "basic_earnings_loss_per_share_from_continuing_and_discontinued_operations"
+    ) == "eps_basic"
+    assert canonical_fact_name(
+        "diluted_earnings_loss_per_share_from_continuing_and_discontinued_operations"
+    ) == "eps_diluted"
+    assert canonical_fact_name(
+        "depreciation_depletion_and_amortisation_expense"
+    ) == "depreciation_amortization"
+    assert canonical_fact_name("profit_loss_from_discontinued_operations_after_tax") != "pat"
