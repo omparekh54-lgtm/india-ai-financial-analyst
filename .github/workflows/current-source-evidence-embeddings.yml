@@ -44,14 +44,16 @@ jobs:
         run: test -n "${DATABASE_URL:-}"
       - name: Install the existing market import runtime
         run: pip install -e ".[market_imports]"
-      - name: Retry the bounded NIFTY 50 market history window
+      - name: Recover remaining verified LT financial documents
         continue-on-error: true
         env:
           ENABLE_EXTERNAL_DATA_CALLS: "true"
         run: |
-          set -o pipefail
-          python scripts/collect_nifty50_current_sources.py market --limit 50 \
-            | tee market-retry-results.jsonl
+          set -euo pipefail
+          python scripts/recover_lt_financial_documents.py --dry-run \
+            | tee lt-validation-results.jsonl
+          python scripts/recover_lt_financial_documents.py \
+            | tee lt-recovery-results.jsonl
       - name: Install the existing local embedding runtime on CPU
         run: |
           pip install 'torch>=2.6,<3' --index-url https://download.pytorch.org/whl/cpu
@@ -61,6 +63,14 @@ jobs:
           set -o pipefail
           python scripts/backfill_evidence_embeddings.py --batch-size 64 --limit 10000 \
             | tee embedding-results.jsonl
+      - name: Verify and refresh LT financial readiness
+        if: always()
+        env:
+          ENABLE_EXTERNAL_DATA_CALLS: "true"
+        run: |
+          set -o pipefail
+          python scripts/recover_lt_financial_documents.py --refresh-readiness-only \
+            | tee lt-readiness-results.jsonl
       - name: Save compact embedding results
         if: always()
         uses: actions/upload-artifact@v4
@@ -68,6 +78,8 @@ jobs:
           name: evidence-embeddings-${{ github.run_id }}
           path: |
             apps/api/embedding-results.jsonl
-            apps/api/market-retry-results.jsonl
+            apps/api/lt-validation-results.jsonl
+            apps/api/lt-recovery-results.jsonl
+            apps/api/lt-readiness-results.jsonl
           if-no-files-found: warn
           retention-days: 1
