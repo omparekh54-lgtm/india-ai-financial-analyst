@@ -24,7 +24,10 @@ from app.core.config import get_settings
 from app.core.financial_history_coverage import load_financial_history_coverage
 from app.core.prepared_security_readiness import refresh_prepared_security_readiness
 from app.db import create_database_engine
-from scripts.backfill_nse_financial_results import _process_target, _target_for_identifier
+if __package__:
+    from scripts.backfill_nse_financial_results import _process_target, _target_for_identifier
+else:
+    from backfill_nse_financial_results import _process_target, _target_for_identifier
 
 LT_ISIN = "INE018A01030"
 
