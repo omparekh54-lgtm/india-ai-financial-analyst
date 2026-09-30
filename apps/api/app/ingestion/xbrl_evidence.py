@@ -178,11 +178,18 @@ class XbrlEvidenceIngestor:
                               then evidence_chunks.embedding
                             else null
                           end,
-                          metadata = excluded.metadata
+                          metadata = case
+                            when evidence_chunks.content = excluded.content
+                              then evidence_chunks.metadata || excluded.metadata
+                            else excluded.metadata
+                          end
                         where (evidence_chunks.section, evidence_chunks.content,
                                evidence_chunks.metadata)
                           is distinct from
-                              (excluded.section, excluded.content, excluded.metadata)
+                              (excluded.section, excluded.content,
+                               case when evidence_chunks.content = excluded.content
+                                 then evidence_chunks.metadata || excluded.metadata
+                                 else excluded.metadata end)
                         """
                     ),
                     {
