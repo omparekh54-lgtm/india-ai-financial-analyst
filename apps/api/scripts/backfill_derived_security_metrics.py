@@ -205,6 +205,7 @@ async def _run() -> int:
     parser.add_argument("--min-metrics", type=int, default=MIN_COMPARABLE_METRICS)
     parser.add_argument("--refresh-all", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--skip-coverage-snapshot", action="store_true")
     args = parser.parse_args()
 
     if not 1 <= args.limit <= 250:
@@ -234,7 +235,9 @@ async def _run() -> int:
             refresh_all=args.refresh_all,
             universe_symbols=universe_symbols,
         )
-        before_ready, before_total = await _ready_count(engine)
+        before_ready, before_total = (
+            (None, None) if args.skip_coverage_snapshot else await _ready_count(engine)
+        )
         ingestor = DerivedSecurityMetricIngestor(engine)
         results: list[dict[str, object]] = []
         failures = 0
@@ -280,7 +283,8 @@ async def _run() -> int:
                 )
 
         after_ready, after_total = (
-            (before_ready, before_total) if args.dry_run else await _ready_count(engine)
+            (before_ready, before_total)
+            if args.dry_run or args.skip_coverage_snapshot else await _ready_count(engine)
         )
         print(
             json.dumps(

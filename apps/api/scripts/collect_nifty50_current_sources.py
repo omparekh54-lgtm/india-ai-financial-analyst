@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -15,7 +16,9 @@ from app.connectors.nse_sectoral_indices import (
     NseSectoralIndexFetcher,
 )
 from app.core.config import get_settings
-from app.core.prepared_security_readiness import refresh_prepared_security_readiness
+from app.core.data_readiness import load_data_coverage
+from app.core.prepared_security_readiness import persist_prepared_security_readiness
+from app.core.security_readiness import evaluate_security_readiness, load_security_agent_coverage
 from app.db import create_database_engine
 from app.ingestion.reference_provenance import resolve_security
 
@@ -34,7 +37,11 @@ def run_import(command: list[str], *, timeout: int) -> dict[str, Any]:
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError:
-        payload = {"reason": "importer_did_not_return_json"}
+        error_types = re.findall(
+            r"^([A-Za-z_][A-Za-z_0-9]*(?:Error|Exception)):", result.stderr, re.MULTILINE,
+        )
+        payload = {"reason": "importer_did_not_return_json",
+                   "error_type": error_types[-1] if error_types else None}
     return {"ok": result.returncode == 0, "exit_code": result.returncode, "result": payload}
 
 
@@ -46,6 +53,7 @@ def collect_financial_symbol(symbol: str, *, metrics: bool = False) -> dict[str,
             "--max-periods", "10", "--document-delay-seconds", "0.2",
         ]
     )
+    command.append("--skip-coverage-snapshot")
     validation = run_import([*command, "--dry-run"], timeout=180)
     if not validation["ok"]:
         return {"symbol": symbol, "ok": False, "validation": validation, "import": None}
@@ -62,11 +70,32 @@ async def collect(mode: str, *, limit: int, after_symbol: str | None) -> int:
         raise RuntimeError("Official NIFTY 50 universe must contain exactly 50 distinct symbols")
     selected = [symbol for symbol in symbols if not after_symbol or symbol > after_symbol][:limit]
     failures = 0
+    processed: list[str] = []
+    consecutive_source_failures = 0
     if mode in {"financials", "metrics"}:
         for symbol in selected:
             result = collect_financial_symbol(symbol, metrics=mode == "metrics")
             failures += not result["ok"]
+            processed.append(symbol)
             print(json.dumps(result, sort_keys=True), flush=True)
+            validation = result["validation"]
+            payload = validation.get("result", {})
+            source_failed = (
+                validation.get("reason") == "import_timeout"
+                or (result.get("import") or {}).get("reason") == "import_timeout"
+                or payload.get("error_type") == "SourceFetchError"
+                or any(item.get("error_type") == "SourceFetchError"
+                       for item in payload.get("results", []))
+                or any("free-tier storage guard" in str(item.get("error", ""))
+                       for item in (result.get("import") or {}).get(
+                           "result", {}).get("results", []))
+            )
+            consecutive_source_failures = consecutive_source_failures + 1 if source_failed else 0
+            if consecutive_source_failures >= 3:
+                print(json.dumps({"status": "source_unavailable",
+                                  "unprocessed_count": len(selected) - len(processed),
+                                  "next_after_symbol": symbol}), flush=True)
+                break
             await asyncio.sleep(0.5)
     elif mode == "market":
         command = [
@@ -80,6 +109,7 @@ async def collect(mode: str, *, limit: int, after_symbol: str | None) -> int:
             validation = run_import([*command, "--dry-run"], timeout=180)
             imported = run_import(command, timeout=1200) if validation["ok"] else None
             failures = int(imported is None or not imported["ok"])
+            processed.extend(selected)
             print(json.dumps({"validation": validation, "import": imported}, sort_keys=True))
     else:
         settings = get_settings()
@@ -87,18 +117,23 @@ async def collect(mode: str, *, limit: int, after_symbol: str | None) -> int:
             raise RuntimeError("DATABASE_URL must be configured")
         engine = create_database_engine(settings.database_url)
         try:
+            corpus_coverage = await load_data_coverage(engine)
             for symbol in selected:
                 security_id, _ = await resolve_security(engine, symbol)
-                readiness = await refresh_prepared_security_readiness(
-                    engine, security_id, settings,
+                coverage, resolved_symbol = await load_security_agent_coverage(engine, security_id)
+                readiness = evaluate_security_readiness(
+                    security_id, resolved_symbol, coverage, corpus_coverage, settings,
                 )
+                await persist_prepared_security_readiness(engine, readiness)
+                processed.append(symbol)
                 failures += not readiness.ready
                 print(json.dumps(readiness.as_dict(), sort_keys=True), flush=True)
         finally:
             await engine.dispose()
     print(json.dumps({
         "mode": mode, "target_count": len(selected), "failure_count": failures,
-        "next_after_symbol": selected[-1] if selected else after_symbol,
+        "processed_count": len(processed), "unprocessed_count": len(selected) - len(processed),
+        "next_after_symbol": processed[-1] if processed else after_symbol,
         "status": "completed" if not failures else "completed_with_gaps",
     }, sort_keys=True), flush=True)
     return int(failures > 0)
