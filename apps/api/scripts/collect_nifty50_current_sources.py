@@ -38,7 +38,7 @@ def run_import(command: list[str], *, timeout: int) -> dict[str, Any]:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError:
         error_types = re.findall(
-            r"^([A-Za-z_][A-Za-z_0-9]*(?:Error|Exception)):", result.stderr, re.M,
+            r"^([A-Za-z_][A-Za-z_0-9]*(?:Error|Exception)):", result.stderr, re.MULTILINE,
         )
         payload = {"reason": "importer_did_not_return_json",
                    "error_type": error_types[-1] if error_types else None}
