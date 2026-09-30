@@ -70,7 +70,7 @@ async def collect(mode: str, *, limit: int, after_symbol: str | None) -> int:
             await asyncio.sleep(0.5)
     elif mode == "market":
         command = [
-            "scripts/backfill_yfinance_market_history.py", "--lookback-days", "400",
+            "scripts/backfill_yfinance_market_history.py", "--lookback-days", "365",
             "--interval", "1d", "--request-delay-seconds", "0.5",
             "--confirm-yahoo-research-use",
         ]

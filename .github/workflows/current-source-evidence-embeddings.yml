@@ -40,6 +40,16 @@ jobs:
           cache-dependency-path: apps/api/pyproject.toml
       - name: Require existing database secret
         run: test -n "${DATABASE_URL:-}"
+      - name: Install the existing market import runtime
+        run: pip install -e ".[market_imports]"
+      - name: Retry the bounded NIFTY 50 market history window
+        continue-on-error: true
+        env:
+          ENABLE_EXTERNAL_DATA_CALLS: "true"
+        run: |
+          set -o pipefail
+          python scripts/collect_nifty50_current_sources.py market --limit 50 \
+            | tee market-retry-results.jsonl
       - name: Install the existing local embedding runtime on CPU
         run: |
           pip install 'torch>=2.6,<3' --index-url https://download.pytorch.org/whl/cpu
@@ -54,6 +64,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: evidence-embeddings-${{ github.run_id }}
-          path: apps/api/embedding-results.jsonl
+          path: |
+            apps/api/embedding-results.jsonl
+            apps/api/market-retry-results.jsonl
           if-no-files-found: warn
           retention-days: 1
