@@ -15,6 +15,7 @@ from pathlib import Path
 import httpx
 from lxml import etree
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.connectors.http_fetcher import SourceFetchError
 from app.connectors.nse_financial_results import NseFinancialResultsFetcher, normalize_xbrl_url
@@ -130,7 +131,8 @@ def main() -> int:
         return asyncio.run(recover(
             dry_run=args.dry_run, refresh_readiness_only=args.refresh_readiness_only,
         ))
-    except Exception as exc:
+    except (RuntimeError, ValueError, OSError, subprocess.SubprocessError,
+            httpx.HTTPError, SQLAlchemyError, etree.XMLSyntaxError) as exc:
         # Diagnostics never print connection tracebacks, credential values or source text.
         print(json.dumps({"symbol": "LT", "status": "failed",
                           "error_type": type(exc).__name__}, sort_keys=True))
