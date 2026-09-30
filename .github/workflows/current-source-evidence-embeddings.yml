@@ -1,6 +1,9 @@
 name: Current-source evidence embeddings
 
 on:
+  push:
+    branches: [main]
+    paths: [.github/data-collection/lt-recovery.request]
   workflow_run:
     workflows: [Current-source NIFTY 50 data collection]
     types: [completed]
@@ -13,7 +16,7 @@ permissions:
 jobs:
   embeddings:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'workflow_dispatch' || github.event_name == 'push' ||
       (github.event.workflow_run.head_branch == 'main' &&
        contains(fromJSON('["success", "failure"]'), github.event.workflow_run.conclusion))
     concurrency:
@@ -54,6 +57,14 @@ jobs:
             | tee lt-validation-results.jsonl
           python scripts/recover_lt_financial_documents.py \
             | tee lt-recovery-results.jsonl
+      - name: Refresh LT metrics from existing stored source inputs
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          python scripts/backfill_derived_security_metrics.py --security LT --dry-run \\
+            --skip-coverage-snapshot | tee lt-metric-validation-results.json
+          python scripts/backfill_derived_security_metrics.py --security LT \\
+            --skip-coverage-snapshot | tee lt-metric-results.json
       - name: Install the existing local embedding runtime on CPU
         run: |
           pip install 'torch>=2.6,<3' --index-url https://download.pytorch.org/whl/cpu
@@ -81,5 +92,7 @@ jobs:
             apps/api/lt-validation-results.jsonl
             apps/api/lt-recovery-results.jsonl
             apps/api/lt-readiness-results.jsonl
+            apps/api/lt-metric-validation-results.json
+            apps/api/lt-metric-results.json
           if-no-files-found: warn
           retention-days: 1
