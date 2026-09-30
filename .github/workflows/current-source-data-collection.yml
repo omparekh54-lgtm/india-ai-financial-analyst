@@ -57,7 +57,7 @@ jobs:
           set -o pipefail
           python scripts/collect_nifty50_current_sources.py market --limit 50 \
             | tee collection-results/market.jsonl
-      - name: Refresh official benchmark history and India VIX
+      - name: Refresh restricted benchmark history and sync approved India VIX
         id: benchmarks
         continue-on-error: true
         run: |
