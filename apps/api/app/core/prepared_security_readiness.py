@@ -154,7 +154,7 @@ async def persist_prepared_security_readiness(
                 """
             ),
             {
-                "security_id": security_id,
+                "security_id": readiness.security_id,
                 "agent_names": sorted(expected_agents),
             },
         )

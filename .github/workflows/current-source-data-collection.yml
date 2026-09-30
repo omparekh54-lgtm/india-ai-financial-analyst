@@ -1,0 +1,150 @@
+name: Current-source NIFTY 50 data collection
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/run-markers/current-source-data-collection]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: free-tier-production-data
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: production
+    env:
+      APP_ENV: production
+      FREE_ONLY: "true"
+      ENABLE_EXTERNAL_DATA_CALLS: "true"
+      ENABLE_EXTERNAL_LLM_CALLS: "false"
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - name: Validate authorization marker and database configuration
+        run: |
+          test -n "${DATABASE_URL:-}"
+          grep -Fxq 'scope: current-apis-nifty50-real-data' ../../.github/run-markers/current-source-data-collection
+          mkdir -p collection-results
+      - name: Install existing collection runtime
+        run: pip install -e ".[market_imports]"
+      - name: Collect validated official classifications
+        id: classification
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          timeout 900 python scripts/backfill_nse_industry_classification.py \
+            --nifty50 --apply --limit 50 --delay-ms 500 --min-coverage-pct 90 \
+            | tee collection-results/classification.json
+      - name: Extend NIFTY 50 market history (restricted internal research)
+        id: market
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python scripts/collect_nifty50_current_sources.py market --limit 50 \
+            | tee collection-results/market.jsonl
+      - name: Refresh official benchmark history and India VIX
+        id: benchmarks
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          timeout 600 python scripts/backfill_nse_benchmarks.py --min-rows 30 --dry-run \
+            | tee collection-results/benchmarks-validation.json
+          timeout 600 python scripts/backfill_nse_benchmarks.py --min-rows 30 \
+            | tee collection-results/benchmarks.json
+          python scripts/sync_india_vix_macro.py --max-age-days 7 \
+            | tee collection-results/india-vix.json
+      - name: Refresh official RBI ten-year yield
+        id: rbi
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          timeout 300 python scripts/backfill_rbi_10y.py --max-age-days 45 --dry-run \
+            | tee collection-results/rbi-validation.json
+          timeout 300 python scripts/backfill_rbi_10y.py --max-age-days 45 \
+            | tee collection-results/rbi.json
+      - name: Refresh official institutional flows
+        id: flows
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          timeout 300 python scripts/backfill_nse_fii_dii.py --max-age-days 7 --dry-run \
+            | tee collection-results/flows-validation.json
+          timeout 300 python scripts/backfill_nse_fii_dii.py --max-age-days 7 \
+            | tee collection-results/flows.json
+      - name: Refresh FRED macro data using the existing key if configured
+        id: fred
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          if [[ -z "${FRED_API_KEY:-}" ]]; then
+            echo '{"status":"blocked","reason":"FRED_API_KEY is not configured"}' \
+              | tee collection-results/fred.json
+            exit 1
+          fi
+          python scripts/backfill_fred_macro.py --series all --min-rows 30 --dry-run \
+            | tee collection-results/fred-validation.json
+          timeout 600 python scripts/backfill_fred_macro.py --series all --min-rows 30 \
+            | tee collection-results/fred.json
+      - name: Collect official financial facts and evidence per validated company
+        id: financials
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python scripts/collect_nifty50_current_sources.py financials --limit 50 \
+            | tee collection-results/financials.jsonl
+      - name: Derive peer metrics per validated company
+        id: metrics
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python scripts/collect_nifty50_current_sources.py metrics --limit 50 \
+            | tee collection-results/metrics.jsonl
+      - name: Persist authoritative per-security readiness
+        id: readiness
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python scripts/collect_nifty50_current_sources.py readiness --limit 50 \
+            | tee collection-results/readiness.jsonl
+      - name: Record remaining full-universe corpus gaps
+        id: corpus
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python scripts/run_production_corpus_manifest.py --min-nse-eq-securities 1000 \
+            | tee collection-results/corpus-manifest.json
+      - name: Publish structured collection results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: current-source-collection-${{ github.run_id }}
+          path: apps/api/collection-results/
+          if-no-files-found: warn
+          retention-days: 1
+      - name: Fail visibly when any collection or readiness stage is incomplete
+        if: always()
+        env:
+          OUTCOMES: ${{ toJSON(steps) }}
+        run: |
+          python - <<'PY'
+          import json, os
+          stages = json.loads(os.environ['OUTCOMES'])
+          outcomes = {name: stage['outcome'] for name, stage in stages.items() if 'outcome' in stage}
+          print(json.dumps(outcomes, sort_keys=True))
+          raise SystemExit(any(outcome != 'success' for outcome in outcomes.values()))
+          PY
