@@ -195,6 +195,7 @@ async def _process_target(
     min_selected_periods: int,
     document_delay_seconds: float,
     dry_run: bool,
+    collect_available_history: bool = False,
 ) -> dict[str, object]:
     records = await results_fetcher.fetch_history(target.symbol)
     selected = select_financial_result_records(records, max_periods=max_periods)
@@ -203,7 +204,8 @@ async def _process_target(
         as_of=datetime.now(UTC).date(),
     )
     required_selected = max(policy_required, min_selected_periods)
-    if len(selected) < required_selected:
+    if (not selected or len(selected) < min_selected_periods
+            or (len(selected) < required_selected and not collect_available_history)):
         raise ValueError(
             f"{target.symbol} exposes only {len(selected)} distinct NSE XBRL result periods; "
             f"minimum required is {required_selected} "
@@ -217,6 +219,8 @@ async def _process_target(
             "listing_date": target.listing_date.isoformat() if target.listing_date else None,
             "status": "dry_run",
             "required_periods": required_selected,
+            "available_document_count": len(selected),
+            "document_history_gap": max(0, required_selected - len(selected)),
             "listing_age_policy_periods": policy_required,
             "selected_periods": [
                 {
@@ -311,6 +315,7 @@ async def _process_target(
         "required_periods": required_selected,
         "listing_age_policy_periods": policy_required,
         "selected_period_count": len(selected),
+        "document_history_gap": max(0, required_selected - len(selected)),
         "documents": documents,
     }
 
@@ -345,6 +350,12 @@ async def _run() -> int:
     parser.add_argument("--refresh-all", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-coverage-snapshot", action="store_true")
+    parser.add_argument(
+        "--collect-available-history", action="store_true",
+        help=("Collect validated available filings even when document count is below the "
+              "listing-age target. Actual parsed-history readiness remains unchanged; "
+              "an explicit --min-selected-periods is still enforced."),
+    )
     args = parser.parse_args()
 
     if args.limit < 1 or args.limit > 100:
@@ -417,6 +428,7 @@ async def _run() -> int:
                         min_selected_periods=args.min_selected_periods,
                         document_delay_seconds=args.document_delay_seconds,
                         dry_run=args.dry_run,
+                        collect_available_history=args.collect_available_history,
                     )
                     results.append(result)
                 except (

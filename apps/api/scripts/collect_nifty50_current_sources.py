@@ -51,6 +51,7 @@ def collect_financial_symbol(symbol: str, *, metrics: bool = False) -> dict[str,
         if metrics else [
             "scripts/backfill_nse_financial_results.py", "--security", symbol,
             "--max-periods", "10", "--document-delay-seconds", "0.2",
+            "--collect-available-history",
         ]
     )
     command.append("--skip-coverage-snapshot")
