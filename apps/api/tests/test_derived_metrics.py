@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from uuid import UUID
@@ -6,6 +7,7 @@ from app.ingestion.derived_metrics import (
     MetricFinancialFact,
     MetricMarketClose,
     derive_peer_metrics,
+    partition_metric_bundle,
 )
 
 S1 = UUID("11111111-1111-1111-1111-111111111111")
@@ -73,6 +75,60 @@ def test_general_company_derives_growth_margin_roce_and_market_metrics() -> None
     assert bundle.industry_comparable_count >= 3
     assert bundle.checksum
     assert set(bundle.upstream_source_ids) == {S1, S2, S3}
+
+
+def test_official_annual_components_derive_explicit_pbt_based_ratios():
+    annual = date(2026, 3, 31)
+    facts = [_fact(name, annual, value) for name, value in (
+        ("pbt", "100"), ("interest_expense", "20"),
+        ("depreciation_amortization", "30"), ("revenue", "600"),
+        ("assets", "800"), ("current_liabilities", "200"),
+    )]
+    metrics = _metrics(derive_peer_metrics(facts))
+    assert metrics["ebitda_margin"].value == Decimal("0.25")
+    assert metrics["roce"].value == Decimal("0.2")
+    assert "annual_pbt_plus_finance_costs" in metrics["roce"].metadata["formula"]
+
+
+def test_ratios_reject_mixed_contexts_periods_and_quarterly_roce():
+    annual = date(2026, 3, 31)
+    facts = [_fact("pbt", annual, "100"),
+             _fact("interest_expense", annual, "20", source_id=S2),
+             _fact("depreciation_amortization", annual, "30"),
+             _fact("revenue", annual, "600")]
+    assert "ebitda_margin" not in _metrics(derive_peer_metrics(facts))
+    quarterly = [_fact(name, annual, value, period_type="quarterly") for name, value in (
+        ("ebit", "100"), ("total_assets", "800"), ("current_liabilities", "200"),
+    )]
+    assert "roce" not in _metrics(derive_peer_metrics(quarterly))
+
+
+def test_annual_margin_requires_exact_xbrl_context_and_start_date():
+    annual = date(2026, 3, 31)
+    facts = [replace(_fact(name, annual, value), period_start=date(2025, 4, 1),
+                     data={"xbrl_context_id": "AnnualConsolidated"})
+             for name, value in (("pbt", "100"), ("interest_expense", "20"),
+                                 ("depreciation_amortization", "30"), ("revenue", "600"))]
+    assert "ebitda_margin" in _metrics(derive_peer_metrics(facts))
+    for changed in (replace(facts[1], data={"xbrl_context_id": "AnnualStandalone"}),
+                    replace(facts[1], period_start=date(2025, 7, 1))):
+        assert "ebitda_margin" not in _metrics(derive_peer_metrics([facts[0], changed, *facts[2:]]))
+
+
+def test_metric_partitions_keep_market_restrictions_out_of_official_growth():
+    facts = [_fact("revenue", date(2026, 3, 31), "120", source_id=S1),
+             _fact("revenue", date(2025, 3, 31), "100", source_id=S2),
+             _fact("eps_basic", date(2026, 3, 31), "10", unit="INR/share")]
+    bundle = derive_peer_metrics(facts, market=MetricMarketClose(
+        date(2026, 9, 30), Decimal(100), S3,
+    ))
+    partitions = partition_metric_bundle(bundle)
+    growth = next(p for p in partitions if p.metrics[0].metric_name == "revenue_growth")
+    pe = next(p for p in partitions if p.metrics[0].metric_name == "pe")
+    assert set(growth.upstream_source_ids) == {S1, S2}
+    assert set(pe.upstream_source_ids) == {S1, S3}
+    assert growth.checksum != pe.checksum
+    assert partition_metric_bundle(bundle) == partitions
 
 
 def test_quarterly_growth_requires_prior_year_comparable_not_previous_quarter() -> None:

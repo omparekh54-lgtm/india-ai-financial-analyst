@@ -1,0 +1,179 @@
+"""Import one genuine official EOD session and backfill metrics for the prepared universe.
+
+No classification guesses, usage approval overrides, new providers or invented facts.
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import hashlib
+import json
+import subprocess
+import tempfile
+from datetime import UTC, date, datetime
+from pathlib import Path
+
+from sqlalchemy import text
+
+from app.core.config import get_settings
+from app.core.data_readiness import load_data_coverage
+from app.core.prepared_security_readiness import persist_prepared_security_readiness
+from app.core.security_readiness import evaluate_security_readiness, load_security_agent_coverage
+from app.db import create_database_engine
+from app.ingestion.derived_metric_ingestion import DerivedSecurityMetricIngestor
+from app.ingestion.derived_metrics import derive_peer_metrics, partition_metric_bundle
+from app.ingestion.market import MarketBarIngestor
+from app.ingestion.nse_bhavcopy import MAX_FILE_BYTES, bhavcopy_url, parse_bhavcopy
+from app.ingestion.reference_provenance import upsert_reference_source
+
+if __package__:
+    from scripts.backfill_derived_security_metrics import _facts, _market
+else:
+    from backfill_derived_security_metrics import _facts, _market
+
+
+async def collect(session: date, dry_run: bool) -> int:
+    settings = get_settings()
+    if not settings.database_url or not settings.enable_external_data_calls:
+        raise RuntimeError("Existing database and external-data configuration are required")
+    if session >= datetime.now(UTC).date() or (datetime.now(UTC).date() - session).days > 7:
+        raise ValueError("Choose a completed EOD session within seven days")
+    engine = create_database_engine(settings.database_url)
+    try:
+        async with engine.connect() as connection:
+            targets = (await connection.execute(text("""
+                select s.id, s.nse_symbol, s.isin from securities s
+                where s.id in (select distinct security_id from security_agent_readiness_status)
+                order by s.nse_symbol
+            """))).mappings().all()
+            db_size = await connection.scalar(text("select pg_database_size(current_database())"))
+        if not targets or len(targets) > 50:
+            raise ValueError("Prepared-universe import requires between one and fifty targets")
+        if db_size >= 450_000_000:
+            raise RuntimeError("Existing free-tier storage guard reached")
+        url = bhavcopy_url(session)
+        with tempfile.TemporaryDirectory(prefix="nse-peer-input-") as folder:
+            path = Path(folder) / "bhavcopy.zip"
+            result = await asyncio.to_thread(subprocess.run, [
+                "curl", "--fail", "--silent", "--show-error", "--proto", "=https",
+                "--connect-timeout", "10", "--max-time", "60",
+                "--max-filesize", str(MAX_FILE_BYTES), "--output", str(path),
+                "--write-out", "%{http_code}", url,
+            ], capture_output=True, timeout=75, check=False)
+            if result.returncode:
+                status = result.stdout.decode(errors="replace").strip()
+                if len(status) != 3 or not status.isdigit():
+                    status = "unknown"
+                raise RuntimeError(f"Official bhavcopy failed: curl={result.returncode}, http={status}")
+            content = path.read_bytes()
+        bars = parse_bhavcopy(content, session=session, targets={
+            str(row["nse_symbol"]): str(row["isin"]) for row in targets
+        })
+        checksum = hashlib.sha256(content).hexdigest()
+        print(json.dumps({"event": "validated_official_eod", "session": session.isoformat(),
+                          "source_uri": url, "sha256": checksum, "securities": len(bars),
+                          "dry_run": dry_run}), flush=True)
+        if dry_run:
+            return 0
+        market_ingestor = MarketBarIngestor(engine)
+        metric_ingestor = DerivedSecurityMetricIngestor(engine)
+        for target in targets:
+            symbol, security_id = str(target["nse_symbol"]), target["id"]
+            source_id = await upsert_reference_source(
+                engine, security_id=security_id, source_type="reference_market_data",
+                source_uri=url, title=f"NSE UDiFF EQ final EOD — {symbol}",
+                published_at=None, checksum=checksum, approval_reference=None,
+                metadata={"importer": "collect_official_peer_inputs", "symbol": symbol,
+                          "isin": str(target["isin"]), "session": session.isoformat(),
+                          "provider": "nse", "is_adjusted": False, "row_count": 1},
+            )
+            await market_ingestor.ingest_security_bars(
+                security_id=security_id, source_id=source_id, bars=[bars[symbol]],
+            )
+            facts, market = await _facts(engine, security_id), await _market(engine, security_id)
+            bundle = derive_peer_metrics(facts, market=market)
+            for partition in partition_metric_bundle(bundle):
+                await metric_ingestor.ingest(
+                    security_id=security_id, symbol=symbol, bundle=partition,
+                )
+            print(json.dumps({"event": "metrics_imported", "symbol": symbol,
+                              "metrics": [m.metric_name for m in bundle.metrics],
+                              "comparable_count": bundle.industry_comparable_count}), flush=True)
+        corpus = await load_data_coverage(engine)
+        for target in targets:
+            coverage, symbol = await load_security_agent_coverage(engine, target["id"])
+            readiness = evaluate_security_readiness(
+                target["id"], symbol, coverage, corpus, settings, as_of=datetime.now(UTC),
+            )
+            await persist_prepared_security_readiness(engine, readiness)
+        print(json.dumps({"status": "completed", "securities": len(targets),
+                          "classification_data_written": False}), flush=True)
+        return 0
+    finally:
+        await engine.dispose()
+
+
+async def collect_stored_metrics(dry_run: bool) -> int:
+    """Complete independent calculations even if an official price download is unavailable."""
+    settings = get_settings()
+    if not settings.database_url:
+        raise RuntimeError("Existing database configuration is required")
+    engine = create_database_engine(settings.database_url)
+    try:
+        async with engine.connect() as connection:
+            targets = (await connection.execute(text("""
+                select s.id, s.nse_symbol from securities s
+                where s.id in (select distinct security_id from security_agent_readiness_status)
+                order by s.nse_symbol
+            """))).mappings().all()
+            db_size = await connection.scalar(text("select pg_database_size(current_database())"))
+        if not targets or len(targets) > 50 or db_size >= 450_000_000:
+            raise RuntimeError("Prepared-universe or storage guard failed")
+        ingestor = DerivedSecurityMetricIngestor(engine)
+        for target in targets:
+            facts = await _facts(engine, target["id"])
+            market = await _market(engine, target["id"])
+            bundle = derive_peer_metrics(facts, market=market)
+            partitions = partition_metric_bundle(bundle)
+            if not dry_run:
+                for partition in partitions:
+                    await ingestor.ingest(security_id=target["id"],
+                                          symbol=target["nse_symbol"], bundle=partition)
+            print(json.dumps({"symbol": target["nse_symbol"], "dry_run": dry_run,
+                              "metrics": [m.metric_name for m in bundle.metrics],
+                              "partitions": len(partitions),
+                              "industry_comparable_count": bundle.industry_comparable_count}),
+                  flush=True)
+        if not dry_run:
+            corpus = await load_data_coverage(engine)
+            for target in targets:
+                coverage, symbol = await load_security_agent_coverage(engine, target["id"])
+                readiness = evaluate_security_readiness(
+                    target["id"], symbol, coverage, corpus, settings, as_of=datetime.now(UTC),
+                )
+                await persist_prepared_security_readiness(engine, readiness)
+        print(json.dumps({"status": "dry_run" if dry_run else "completed",
+                          "securities": len(targets), "source_permission_overrides": False}),
+              flush=True)
+        return 0
+    finally:
+        await engine.dispose()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--session", type=date.fromisoformat)
+    parser.add_argument("--stored-metrics-only", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    if args.stored_metrics_only:
+        if args.session:
+            parser.error("--session cannot be combined with --stored-metrics-only")
+        return asyncio.run(collect_stored_metrics(args.dry_run))
+    if not args.session:
+        parser.error("--session is required for official EOD input collection")
+    return asyncio.run(collect(args.session, args.dry_run))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

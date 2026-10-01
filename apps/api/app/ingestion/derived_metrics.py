@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from uuid import UUID
@@ -59,6 +59,8 @@ class MetricFinancialFact:
     value: Decimal
     unit: str | None
     source_id: UUID
+    period_start: date | None = None
+    data: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -92,9 +94,15 @@ def derive_peer_metrics(
     if market is not None and market.price <= 0:
         raise ValueError("market price must be positive")
 
+    aliases = {
+        "assets": "total_assets",
+        "profit_loss_for_the_period": "pat",
+        "basic_earnings_per_share_after_extraordinary_items": "eps_basic",
+        "diluted_earnings_per_share_after_extraordinary_items": "eps_diluted",
+    }
     by_name: dict[str, list[MetricFinancialFact]] = {}
     for fact in facts:
-        by_name.setdefault(fact.fact_name, []).append(fact)
+        by_name.setdefault(aliases.get(fact.fact_name, fact.fact_name), []).append(fact)
     for rows in by_name.values():
         rows.sort(key=lambda item: item.period_end, reverse=True)
 
@@ -200,6 +208,31 @@ def _growth_metric(
 def _margin_metric(by_name: dict[str, list[MetricFinancialFact]]) -> SecurityMetricInput | None:
     pair = _same_period_pair(by_name, "ebitda", "revenue")
     if pair is None:
+        for pbt in by_name.get("pbt", []):
+            if pbt.period_type != "annual" or pbt.data.get("xbrl_element") not in {
+                None, "ProfitBeforeTax",
+            }:
+                continue
+            inputs = [_matching_flow(by_name, name, pbt) for name in (
+                "interest_expense", "depreciation_amortization", "revenue",
+            )]
+            if any(item is None for item in inputs):
+                continue
+            interest, depreciation, revenue = inputs
+            assert interest is not None and depreciation is not None and revenue is not None
+            if (interest.value < 0 or depreciation.value < 0 or revenue.value <= 0
+                    or not _units_compatible(
+                        pbt.unit, interest.unit, depreciation.unit, revenue.unit,
+                    )):
+                continue
+            return _metric(
+                "ebitda_margin", pbt.period_end,
+                (pbt.value + interest.value + depreciation.value) / revenue.value,
+                "ratio", "annual_pbt_plus_finance_costs_plus_da_divided_by_revenue",
+                [pbt, interest, depreciation, revenue],
+                accounting_basis="reported_profit_before_tax_including_non_operating_items",
+                financial_period_type="annual",
+            )
         return None
     ebitda, revenue = pair
     if revenue.value == 0 or not _units_compatible(ebitda.unit, revenue.unit):
@@ -215,12 +248,37 @@ def _margin_metric(by_name: dict[str, list[MetricFinancialFact]]) -> SecurityMet
 
 
 def _roce_metric(by_name: dict[str, list[MetricFinancialFact]]) -> SecurityMetricInput | None:
-    latest_ebit = _latest(by_name, "ebit")
-    if latest_ebit is None:
-        return None
+    latest_ebit = next((item for item in by_name.get("ebit", [])
+                        if item.period_type in {"annual", "ttm"}), None)
+    inputs: list[MetricFinancialFact]
+    formula = "ebit_divided_by_total_assets_minus_current_liabilities"
+    if latest_ebit is not None:
+        inputs = [latest_ebit]
+        ebit_value = latest_ebit.value
+    else:
+        for pbt in by_name.get("pbt", []):
+            if pbt.period_type != "annual" or pbt.data.get("xbrl_element") not in {
+                None, "ProfitBeforeTax",
+            }:
+                continue
+            interest = _matching_flow(by_name, "interest_expense", pbt)
+            if (interest is not None and interest.value >= 0
+                    and _units_compatible(pbt.unit, interest.unit)):
+                latest_ebit = pbt
+                inputs = [pbt, interest]
+                ebit_value = pbt.value + interest.value
+                formula = "annual_pbt_plus_finance_costs_divided_by_assets_minus_current_liabilities"
+                break
+        else:
+            return None
     assets = _at_or_before(by_name.get("total_assets", []), latest_ebit.period_end)
     liabilities = _at_or_before(by_name.get("current_liabilities", []), latest_ebit.period_end)
     if assets is None or liabilities is None:
+        return None
+    if (assets.period_end != latest_ebit.period_end
+            or liabilities.period_end != latest_ebit.period_end
+            or assets.source_id != liabilities.source_id
+            or assets.source_id != latest_ebit.source_id):
         return None
     if not _units_compatible(latest_ebit.unit, assets.unit, liabilities.unit):
         return None
@@ -230,10 +288,11 @@ def _roce_metric(by_name: dict[str, list[MetricFinancialFact]]) -> SecurityMetri
     return _metric(
         "roce",
         latest_ebit.period_end,
-        latest_ebit.value / capital_employed,
+        ebit_value / capital_employed,
         "ratio",
-        "ebit_divided_by_total_assets_minus_current_liabilities",
-        [latest_ebit, assets, liabilities],
+        formula,
+        [*inputs, assets, liabilities],
+        financial_period_type=latest_ebit.period_type,
     )
 
 
@@ -468,6 +527,47 @@ def _latest(
 ) -> MetricFinancialFact | None:
     rows = by_name.get(name, [])
     return rows[0] if rows else None
+
+
+def _matching_flow(
+    by_name: dict[str, list[MetricFinancialFact]], name: str, reference: MetricFinancialFact,
+) -> MetricFinancialFact | None:
+    """Use the same filed period and context; do not combine segment or restated inputs."""
+    return next((item for item in by_name.get(name, [])
+                 if item.period_end == reference.period_end
+                 and item.period_type == reference.period_type
+                 and item.period_start == reference.period_start
+                 and item.source_id == reference.source_id
+                 and item.data.get("xbrl_context_id")
+                 == reference.data.get("xbrl_context_id")), None)
+
+
+def partition_metric_bundle(bundle: DerivedMetricBundle) -> tuple[DerivedMetricBundle, ...]:
+    """Keep each metric's usage approval attached to exactly its own source inputs."""
+    groups: dict[tuple[UUID, ...], list[SecurityMetricInput]] = {}
+    for metric in bundle.metrics:
+        raw = metric.metadata.get("upstream_source_ids")
+        if not isinstance(raw, list) or not raw:
+            raise ValueError("metric is missing upstream source IDs")
+        ids = tuple(sorted({UUID(str(item)) for item in raw}, key=str))
+        if not set(ids).issubset(bundle.upstream_source_ids):
+            raise ValueError("metric references inputs outside its validated bundle")
+        groups.setdefault(ids, []).append(metric)
+    if len(groups) == 1 and next(iter(groups)) == bundle.upstream_source_ids:
+        return (bundle,)
+    output = []
+    for ids, metrics in groups.items():
+        payload = {
+            "partition_version": 1, "upstream_source_ids": [str(item) for item in ids],
+            "metrics": [{"name": item.metric_name, "date": item.as_of_date.isoformat(),
+                         "value": str(item.value), "unit": item.unit,
+                         "metadata": item.metadata} for item in metrics],
+        }
+        checksum = hashlib.sha256(json.dumps(
+            payload, sort_keys=True, separators=(",", ":"),
+        ).encode()).hexdigest()
+        output.append(DerivedMetricBundle(tuple(metrics), ids, checksum))
+    return tuple(output)
 
 
 def _same_period_pair(

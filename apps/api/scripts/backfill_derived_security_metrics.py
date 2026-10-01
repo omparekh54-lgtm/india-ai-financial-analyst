@@ -27,6 +27,7 @@ from app.ingestion.derived_metrics import (
     MetricFinancialFact,
     MetricMarketClose,
     derive_peer_metrics,
+    partition_metric_bundle,
 )
 from app.ingestion.reference_provenance import resolve_security
 
@@ -118,7 +119,8 @@ async def _facts(engine: AsyncEngine, security_id: UUID) -> list[MetricFinancial
                 text(
                     """
                     with ranked as (
-                      select ff.fact_name, ff.period_end, ff.period_type, ff.value, ff.unit,
+                      select ff.fact_name, ff.period_start, ff.period_end, ff.period_type,
+                             ff.value, ff.unit, ff.data,
                              ff.source_id,
                              row_number() over (
                                partition by ff.fact_name, ff.period_type
@@ -128,7 +130,8 @@ async def _facts(engine: AsyncEngine, security_id: UUID) -> list[MetricFinancial
                       where ff.security_id = :security_id
                         and ff.source_id is not null
                     )
-                    select fact_name, period_end, period_type, value, unit, source_id
+                    select fact_name, period_start, period_end, period_type,
+                           value, unit, source_id, data
                     from ranked
                     where rn <= 8
                     order by fact_name, period_end desc
@@ -145,6 +148,8 @@ async def _facts(engine: AsyncEngine, security_id: UUID) -> list[MetricFinancial
             value=Decimal(str(row["value"])),
             unit=str(row["unit"]) if row["unit"] is not None else None,
             source_id=UUID(str(row["source_id"])),
+            period_start=_date(row["period_start"]) if row["period_start"] else None,
+            data=dict(row["data"] or {}),
         )
         for row in rows
     ]
@@ -156,13 +161,14 @@ async def _market(engine: AsyncEngine, security_id: UUID) -> MetricMarketClose |
             await connection.execute(
                 text(
                     """
-                    select ts, close, source_id
-                    from market_bars
-                    where security_id = :security_id
+                    select mb.ts, mb.close, mb.source_id
+                    from market_bars mb join sources src on src.id = mb.source_id
+                    where mb.security_id = :security_id
                       and interval in ('1d', 'day', 'daily')
                       and source_id is not null
                       and close is not null
-                    order by ts desc
+                    order by ts desc,
+                             (coalesce(src.metadata->>'production_approved', 'false')='true') desc
                     limit 1
                     """
                 ),
@@ -264,11 +270,9 @@ async def _run() -> int:
                     result["status"] = "dry_run"
                 else:
                     result["status"] = "completed"
-                    result["ingestion"] = await ingestor.ingest(
-                        security_id=security_id,
-                        symbol=symbol,
-                        bundle=bundle,
-                    )
+                    result["ingestion"] = [await ingestor.ingest(
+                        security_id=security_id, symbol=symbol, bundle=partition,
+                    ) for partition in partition_metric_bundle(bundle)]
                 results.append(result)
             except (ValueError, TypeError) as exc:
                 failures += 1
