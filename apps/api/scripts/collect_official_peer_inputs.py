@@ -53,7 +53,7 @@ async def download_official_archive(url: str) -> bytes:
         raise RuntimeError(f"Official bhavcopy transport failed: {type(exc).__name__}") from exc
 
 
-async def collect(session: date, dry_run: bool) -> int:
+async def collect(session: date, dry_run: bool, *, refresh_readiness: bool = True) -> int:
     settings = get_settings()
     if not settings.database_url or not settings.enable_external_data_calls:
         raise RuntimeError("Existing database and external-data configuration are required")
@@ -107,13 +107,14 @@ async def collect(session: date, dry_run: bool) -> int:
             print(json.dumps({"event": "metrics_imported", "symbol": symbol,
                               "metrics": [m.metric_name for m in bundle.metrics],
                               "comparable_count": bundle.industry_comparable_count}), flush=True)
-        corpus = await load_data_coverage(engine)
-        for target in targets:
-            coverage, symbol = await load_security_agent_coverage(engine, target["id"])
-            readiness = evaluate_security_readiness(
-                target["id"], symbol, coverage, corpus, settings, as_of=datetime.now(UTC),
-            )
-            await persist_prepared_security_readiness(engine, readiness)
+        if refresh_readiness:
+            corpus = await load_data_coverage(engine)
+            for target in targets:
+                coverage, symbol = await load_security_agent_coverage(engine, target["id"])
+                readiness = evaluate_security_readiness(
+                    target["id"], symbol, coverage, corpus, settings, as_of=datetime.now(UTC),
+                )
+                await persist_prepared_security_readiness(engine, readiness)
         print(json.dumps({"status": "completed", "securities": len(targets),
                           "classification_data_written": False}), flush=True)
         return 0
@@ -168,19 +169,52 @@ async def collect_stored_metrics(dry_run: bool) -> int:
         await engine.dispose()
 
 
+async def refresh_prepared_readiness() -> int:
+    settings = get_settings()
+    if not settings.database_url:
+        raise RuntimeError("Existing database configuration is required")
+    engine = create_database_engine(settings.database_url)
+    try:
+        async with engine.connect() as connection:
+            targets = list((await connection.execute(text(
+                "select distinct security_id from security_agent_readiness_status"
+            ))).scalars())
+        if not 1 <= len(targets) <= 50:
+            raise RuntimeError("Prepared-universe refresh guard failed")
+        corpus = await load_data_coverage(engine)
+        for security_id in targets:
+            coverage, symbol = await load_security_agent_coverage(engine, security_id)
+            readiness = evaluate_security_readiness(
+                security_id, symbol, coverage, corpus, settings, as_of=datetime.now(UTC),
+            )
+            await persist_prepared_security_readiness(engine, readiness)
+        print(json.dumps({"status": "readiness_refreshed", "securities": len(targets)}), flush=True)
+        return 0
+    finally:
+        await engine.dispose()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--session", type=date.fromisoformat)
     parser.add_argument("--stored-metrics-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--skip-readiness-refresh", action="store_true",
+                        help="Import only; refresh readiness separately in the configured worker")
+    parser.add_argument("--refresh-readiness-only", action="store_true")
     args = parser.parse_args()
+    if args.refresh_readiness_only:
+        if args.session or args.stored_metrics_only or args.dry_run or args.skip_readiness_refresh:
+            parser.error("Readiness-only refresh cannot use import options")
+        return asyncio.run(refresh_prepared_readiness())
     if args.stored_metrics_only:
-        if args.session:
-            parser.error("--session cannot be combined with --stored-metrics-only")
+        if args.session or args.skip_readiness_refresh:
+            parser.error("Stored-metrics mode cannot use session or skip-readiness options")
         return asyncio.run(collect_stored_metrics(args.dry_run))
     if not args.session:
         parser.error("--session is required for official EOD input collection")
-    return asyncio.run(collect(args.session, args.dry_run))
+    return asyncio.run(collect(args.session, args.dry_run,
+                               refresh_readiness=not args.skip_readiness_refresh))
 
 
 if __name__ == "__main__":
