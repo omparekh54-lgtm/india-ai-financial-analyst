@@ -18,12 +18,17 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.connectors.http_fetcher import SourceFetchError
-from app.connectors.nse_financial_results import NseFinancialResultsFetcher, normalize_xbrl_url
+from app.connectors.nse_financial_results import (
+    NseFinancialResultRecord,
+    NseFinancialResultsFetcher,
+    normalize_xbrl_url,
+)
 from app.connectors.nse_xbrl import MAX_XBRL_BYTES, NseFinancialXbrlFetcher, validate_xbrl_payload
 from app.core.config import get_settings
 from app.core.financial_history_coverage import load_financial_history_coverage
 from app.core.prepared_security_readiness import refresh_prepared_security_readiness
 from app.db import create_database_engine
+from app.ingestion.nse_financial_corpus import select_financial_result_records
 
 if __package__:
     from scripts.backfill_nse_financial_results import _process_target, _target_for_identifier
@@ -31,6 +36,41 @@ else:
     from backfill_nse_financial_results import _process_target, _target_for_identifier
 
 LT_ISIN = "INE018A01030"
+
+
+class SingleRecordIndex(NseFinancialResultsFetcher):
+    """Pass one already validated index record to the unchanged importer."""
+
+    def __init__(self, record: NseFinancialResultRecord) -> None:
+        super().__init__()
+        self.record = record
+
+    async def fetch_history(self, symbol: str) -> list[NseFinancialResultRecord]:
+        if symbol != "LT" or self.record.symbol != "LT":
+            raise SourceFetchError("Recovery index does not match LT")
+        return [self.record]
+
+
+async def recover_selected_documents(*, engine, target, selected, stored_urls,
+                                     documents, dry_run):
+    results = []
+    for item in selected:
+        url = item.record.xbrl_url
+        if url in stored_urls:
+            results.append({"source_uri": url, "status": "already_stored"})
+            continue
+        try:
+            result = await _process_target(
+                engine=engine, target=target,
+                results_fetcher=SingleRecordIndex(item.record), xbrl_fetcher=documents,
+                max_periods=1, min_selected_periods=0, document_delay_seconds=0,
+                dry_run=dry_run, collect_available_history=True,
+            )
+            results.append(result)
+        except (SourceFetchError, ValueError, httpx.HTTPError) as exc:
+            results.append({"source_uri": url, "status": "failed",
+                            "error_type": type(exc).__name__})
+    return results
 
 
 def validate_lt_issuer(content: bytes) -> None:
@@ -120,14 +160,28 @@ async def recover(*, dry_run: bool, refresh_readiness_only: bool) -> int:
         if history.complete:
             print(json.dumps({"symbol": "LT", "status": "already_complete"}, sort_keys=True))
             return 0
+        async with engine.connect() as connection:
+            stored_urls = set((await connection.execute(text("""
+                select source_uri from sources s where s.security_id = :id
+                and s.source_type = 'exchange_filing'
+                and exists (select 1 from financial_facts f where f.source_id = s.id)
+                and exists (select 1 from evidence_chunks ec where ec.source_id = s.id)
+            """), {"id": target.security_id})).scalars().all())
         async with NseFinancialResultsFetcher() as index, CurlLtXbrlFetcher() as documents:
-            result = await _process_target(
-                engine=engine, target=target, results_fetcher=index, xbrl_fetcher=documents,
-                max_periods=10, min_selected_periods=0, document_delay_seconds=0.2,
-                dry_run=dry_run,
+            records = await index.fetch_history("LT")
+            selected = select_financial_result_records(records, max_periods=10)
+            if not selected:
+                raise SourceFetchError("No verified LT index records are available")
+            results = await recover_selected_documents(
+                engine=engine, target=target, selected=selected, stored_urls=stored_urls,
+                documents=documents, dry_run=dry_run,
             )
-        print(json.dumps(result, sort_keys=True, default=str))
-        return 0
+        failures = sum(item["status"] == "failed" for item in results)
+        print(json.dumps({"symbol": "LT", "results": results,
+                          "failure_count": failures,
+                          "status": "dry_run" if dry_run else "completed_with_gaps"
+                          if failures else "completed"}, sort_keys=True, default=str))
+        return int(failures > 0)
     finally:
         await engine.dispose()
 
