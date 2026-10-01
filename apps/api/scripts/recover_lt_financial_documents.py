@@ -68,8 +68,11 @@ async def recover_selected_documents(*, engine, target, selected, stored_urls,
             )
             results.append(result)
         except (SourceFetchError, ValueError, httpx.HTTPError) as exc:
-            results.append({"source_uri": url, "status": "failed",
-                            "error_type": type(exc).__name__})
+            failure = {"source_uri": url, "status": "failed",
+                       "error_type": type(exc).__name__}
+            if isinstance(exc, SourceFetchError):
+                failure["source_error"] = str(exc)
+            results.append(failure)
     return results
 
 
@@ -111,19 +114,23 @@ class CurlLtXbrlFetcher(NseFinancialXbrlFetcher):
                     "--retry", "2", "--retry-delay", "2", "--retry-max-time", "120",
                     "--max-filesize", str(MAX_XBRL_BYTES), "--proto", "=https",
                     "--user-agent", "Mozilla/5.0 IndiaAIFinancialAnalyst/0.7",
-                    "--output", str(path), "--write-out", "%{content_type}",
+                    "--output", str(path), "--write-out", "%{http_code} %{content_type}",
                     normalized,
                 ],
                 capture_output=True, check=False, timeout=150,
             )
+            status, _, declared = result.stdout.decode("utf-8", errors="replace").partition(" ")
+            safe_status = status if len(status) == 3 and status.isdigit() else "unknown"
             if result.returncode != 0 or not path.exists():
-                raise SourceFetchError("Bounded NSE archive recovery request failed")
+                raise SourceFetchError(
+                    "Bounded NSE archive recovery request failed "
+                    f"(curl_exit={result.returncode}, http_status={safe_status})"
+                )
             if path.stat().st_size > MAX_XBRL_BYTES:
                 raise SourceFetchError("Recovery document exceeds the existing size limit")
             content = path.read_bytes()
-            declared = result.stdout.decode("utf-8", errors="replace").strip()
             media_type = validate_xbrl_payload(
-                content, content_type=declared, source_url=normalized,
+                content, content_type=declared.strip(), source_url=normalized,
             )
             if media_type not in {"application/xml", "text/xml", "application/xbrl+xml"}:
                 raise SourceFetchError("LT recovery requires a validated XML instance")

@@ -1,1 +1,1 @@
-2026-10-01: Resume only missing verified LT filings; skip stored evidence and continue bounded per-document recovery without relaxing strict readiness.
+2026-10-01: Diagnose bounded missing LT archive attempts with public HTTP status and curl exit codes; preserve strict issuer and readiness checks.
