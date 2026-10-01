@@ -3,6 +3,8 @@ from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
+import pytest
+
 from app.ingestion.derived_metrics import (
     MetricFinancialFact,
     MetricMarketClose,
@@ -14,6 +16,65 @@ S1 = UUID("11111111-1111-1111-1111-111111111111")
 S2 = UUID("22222222-2222-2222-2222-222222222222")
 S3 = UUID("33333333-3333-3333-3333-333333333333")
 S4 = UUID("44444444-4444-4444-4444-444444444444")
+
+
+def _filed(name: str, element: str, value: str, end: date, *, source: UUID = S1,
+           period_type: str = "annual", context: str = "FourD") -> MetricFinancialFact:
+    return MetricFinancialFact(name, end, period_type, Decimal(value), "INR", source,
+                               date(end.year - 1, 4, 1) if period_type == "annual" else None,
+                               {"xbrl_element": element, "xbrl_context_id": context})
+
+
+def test_bank_nii_growth_uses_matched_reported_components() -> None:
+    current, previous = date(2026, 3, 31), date(2025, 3, 31)
+    facts = [_filed("interest_income", "InterestEarned", "150", current),
+             _filed("interest_expense", "InterestExpended", "90", current),
+             _filed("interest_income", "InterestEarned", "120", previous, source=S2),
+             _filed("interest_expense", "InterestExpended", "70", previous, source=S2)]
+    metric = _metrics(derive_peer_metrics(facts))["revenue_growth"]
+    assert metric.value == Decimal("0.2")
+    assert metric.metadata["basis_fact"] == "net_interest_income"
+    assert metric.metadata["upstream_source_ids"] == [str(S1), str(S2)]
+
+
+@pytest.mark.parametrize("field,value", [("source_id", S3), ("unit", "INR crore"),
+                                        ("period_start", date(2026, 1, 1)),
+                                        ("data", {"xbrl_element": "FinanceCosts"})])
+def test_bank_nii_rejects_mismatched_components(field: str, value: object) -> None:
+    current, previous = date(2026, 3, 31), date(2025, 3, 31)
+    cost = _filed("interest_expense", "InterestExpended", "90", current)
+    facts = [_filed("interest_income", "InterestEarned", "150", current),
+             replace(cost, **{field: value}),
+             _filed("interest_income", "InterestEarned", "120", previous, source=S2),
+             _filed("interest_expense", "InterestExpended", "70", previous, source=S2)]
+    assert "revenue_growth" not in _metrics(derive_peer_metrics(facts))
+
+
+def test_bank_pb_requires_same_filing_and_date_for_reported_shares() -> None:
+    end = date(2026, 3, 31)
+    facts = [_filed("capital", "Capital", "10", end, period_type="point_in_time", context="OneI"),
+             _filed("reserves_and_surplus", "ReservesAndSurplus", "90", end,
+                    period_type="point_in_time", context="OneI"),
+             MetricFinancialFact("shares_outstanding", end, "annual", Decimal(5), "shares", S1,
+                                 data={"share_count_basis": "paid_up_equity_capital"})]
+    market = MetricMarketClose(date(2026, 9, 30), Decimal(40), S3)
+    assert _metrics(derive_peer_metrics(facts, market=market))["pb"].value == 2
+    facts[-1] = replace(facts[-1], source_id=S2)
+    assert "pb" not in _metrics(derive_peer_metrics(facts, market=market))
+
+
+def test_insurance_eps_keeps_annual_basis_and_gross_premium_growth() -> None:
+    eps_name = "basic_and_diluted_eps_after_extraordinary_items_net_of_tax_expense_for_the_period_not_to_be_annualized"
+    eps_element = "BasicAndDilutedEPSAfterExtraordinaryItemsNetOfTaxExpenseForThePeriodNotToBeAnnualized"
+    end = date(2026, 3, 31)
+    facts = [_filed(eps_name, eps_element, "8", end),
+             _filed(eps_name, eps_element, "3", date(2026, 6, 30), period_type="quarterly"),
+             _filed("gross_premium_income", "GrossPremiumIncome", "120", end),
+             _filed("gross_premium_income", "GrossPremiumIncome", "100", date(2025, 3, 31), source=S2)]
+    metrics = _metrics(derive_peer_metrics(facts, market=MetricMarketClose(date(2026, 9, 30), Decimal(80), S3)))
+    assert metrics["pe"].value == 10
+    assert metrics["revenue_growth"].value == Decimal("0.2")
+    assert metrics["revenue_growth"].metadata["basis_fact"] == "reported_gross_premium_income"
 
 
 def _fact(
