@@ -119,6 +119,10 @@ def derive_peer_metrics(
         if (fact.fact_name == "gross_premium_income"
                 and fact.data.get("xbrl_element") == "GrossPremiumIncome"):
             name = "reported_gross_premium_income"
+        if (fact.fact_name == "shareholders_funds"
+                and fact.data.get("xbrl_element") == "ShareholdersFunds"
+                and fact.period_type == "point_in_time" and fact.unit == "INR"):
+            name = "total_equity"
         by_name.setdefault(name, []).append(fact)
     for rows in by_name.values():
         rows.sort(key=lambda item: item.period_end, reverse=True)
