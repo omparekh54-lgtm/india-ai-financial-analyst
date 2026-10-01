@@ -8,11 +8,9 @@ import argparse
 import asyncio
 import hashlib
 import json
-import subprocess
-import tempfile
 from datetime import UTC, date, datetime
-from pathlib import Path
 
+import httpx
 from sqlalchemy import text
 
 from app.core.config import get_settings
@@ -30,6 +28,29 @@ if __package__:
     from scripts.backfill_derived_security_metrics import _facts, _market
 else:
     from backfill_derived_security_metrics import _facts, _market
+
+
+async def read_official_archive(client: httpx.AsyncClient, url: str) -> bytes:
+    async with client.stream("GET", url) as response:
+        if response.status_code != 200:
+            raise RuntimeError(f"Official bhavcopy failed: http={response.status_code}")
+        content = bytearray()
+        async for chunk in response.aiter_bytes():
+            content.extend(chunk)
+            if len(content) > MAX_FILE_BYTES:
+                raise ValueError("Official bhavcopy exceeds the archive size guard")
+        return bytes(content)
+
+
+async def download_official_archive(url: str) -> bytes:
+    try:
+        async with asyncio.timeout(75):
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(60, connect=10), follow_redirects=False,
+            ) as client:
+                return await read_official_archive(client, url)
+    except (httpx.HTTPError, TimeoutError) as exc:
+        raise RuntimeError(f"Official bhavcopy transport failed: {type(exc).__name__}") from exc
 
 
 async def collect(session: date, dry_run: bool) -> int:
@@ -52,20 +73,7 @@ async def collect(session: date, dry_run: bool) -> int:
         if db_size >= 450_000_000:
             raise RuntimeError("Existing free-tier storage guard reached")
         url = bhavcopy_url(session)
-        with tempfile.TemporaryDirectory(prefix="nse-peer-input-") as folder:
-            path = Path(folder) / "bhavcopy.zip"
-            result = await asyncio.to_thread(subprocess.run, [
-                "curl", "--fail", "--silent", "--show-error", "--proto", "=https",
-                "--connect-timeout", "10", "--max-time", "60",
-                "--max-filesize", str(MAX_FILE_BYTES), "--output", str(path),
-                "--write-out", "%{http_code}", url,
-            ], capture_output=True, timeout=75, check=False)
-            if result.returncode:
-                status = result.stdout.decode(errors="replace").strip()
-                if len(status) != 3 or not status.isdigit():
-                    status = "unknown"
-                raise RuntimeError(f"Official bhavcopy failed: curl={result.returncode}, http={status}")
-            content = path.read_bytes()
+        content = await download_official_archive(url)
         bars = parse_bhavcopy(content, session=session, targets={
             str(row["nse_symbol"]): str(row["isin"]) for row in targets
         })
