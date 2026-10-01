@@ -1,7 +1,34 @@
+from datetime import date
+from pathlib import Path
+
 import httpx
 import pytest
 
 from scripts import collect_official_peer_inputs as collector
+
+
+def test_reviewed_inputs_verify_real_download_checksums() -> None:
+    content, identities = collector.reviewed_inputs(date(2026, 9, 30), "full-delivery")
+    assert len(content) == 399899
+    assert len(identities) == 3344
+
+
+@pytest.mark.parametrize("session,report", [(date(2026, 9, 29), "full-delivery"),
+                                         (date(2026, 9, 30), "udiff")])
+def test_reviewed_inputs_reject_other_sessions_and_reports(session: date, report: str) -> None:
+    with pytest.raises(ValueError, match="only cover"):
+        collector.reviewed_inputs(session, report)
+
+
+def test_reviewed_inputs_reject_same_size_tampering(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    content, identities = collector.reviewed_inputs(date(2026, 9, 30), "full-delivery")
+    directory = tmp_path / "official_inputs" / "20260930"
+    directory.mkdir(parents=True)
+    (directory / "full-delivery.csv").write_bytes(b"X" + content[1:])
+    (directory / "nifty50-identity.csv").write_bytes(identities)
+    monkeypatch.setattr(collector, "__file__", str(tmp_path / "collector.py"))
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        collector.reviewed_inputs(date(2026, 9, 30), "full-delivery")
 
 
 @pytest.mark.asyncio
