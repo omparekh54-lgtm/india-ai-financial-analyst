@@ -6,9 +6,11 @@ import asyncio
 import hashlib
 import json
 import re
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from lxml import etree
 from sqlalchemy import text
@@ -17,14 +19,18 @@ from app.core.config import get_settings
 from app.core.prepared_security_readiness import refresh_prepared_security_readiness
 from app.db import create_database_engine
 from app.ingestion.derived_metric_ingestion import DerivedSecurityMetricIngestor
-from app.ingestion.derived_metrics import derive_peer_metrics, partition_metric_bundle
+from app.ingestion.derived_metrics import (
+    MetricMarketClose,
+    derive_peer_metrics,
+    partition_metric_bundle,
+)
 from app.ingestion.financials import FinancialFactIngestor, RawFinancialFact
 from app.ingestion.reference_provenance import resolve_security, upsert_reference_source
 
 if __package__:
-    from scripts.backfill_derived_security_metrics import _facts, _market
+    from scripts.backfill_derived_security_metrics import _facts
 else:
-    from backfill_derived_security_metrics import _facts, _market
+    from backfill_derived_security_metrics import _facts
 
 END = date(2026, 3, 31)
 DIRECTORY = Path(__file__).parent / "official_inputs" / "insurer-shares-20260331"
@@ -36,6 +42,16 @@ SBI_URL = "https://nsearchives.nseindia.com/corporate/xbrl/INTEGRATED_FILING_LI_
 SBI_SHA = "1ec804878eccf10bd21d54602bc79bf5a3d58d566d421659634549947c406221"
 TARGETS = ("AXISBANK", "BAJAJFINSV", "BAJFINANCE", "HDFCBANK", "HDFCLIFE", "ICICIBANK",
            "JIOFIN", "KOTAKBANK", "SBILIFE", "SBIN", "SHRIRAMFIN")
+
+
+def approved_close(timestamp: datetime, price: Decimal, source_id: UUID,
+                   *, today: date) -> MetricMarketClose:
+    if timestamp.utcoffset() is None:
+        raise ValueError("Approved EOD timestamp must include its timezone")
+    session = timestamp.astimezone(ZoneInfo("Asia/Kolkata")).date()
+    if not 0 <= (today - session).days <= 7 or not price.is_finite() or price <= 0:
+        raise ValueError("Approved EOD price failed freshness or value guard")
+    return MetricMarketClose(session, price, source_id)
 
 
 def reviewed_shares() -> dict[str, RawFinancialFact]:
@@ -138,16 +154,26 @@ async def complete(dry_run: bool, approval_reference: str) -> None:
         ingestor = DerivedSecurityMetricIngestor(engine)
         for symbol in TARGETS:
             security_id, _ = await resolve_security(engine, symbol)
-            facts, market = await _facts(engine, security_id), await _market(engine, security_id)
+            facts = await _facts(engine, security_id)
             async with engine.connect() as connection:
                 approved = set((await connection.execute(text("""
                     select id from sources where security_id=:id
                       and metadata->>'production_approved'='true'
                 """), {"id": security_id})).scalars())
+                row = (await connection.execute(text("""
+                    select mb.ts,mb.close,mb.source_id from market_bars mb
+                      join sources src on src.id=mb.source_id
+                    where mb.security_id=:id and mb.close>0
+                      and src.metadata->>'production_approved'='true'
+                      and mb.interval='1d'
+                    order by mb.ts desc limit 1
+                """), {"id": security_id})).mappings().first()
             # Restricted legacy facts must not win concept selection over filed inputs.
             facts = [fact for fact in facts if fact.source_id in approved]
-            if market is None or market.source_id not in approved:
+            if row is None:
                 raise ValueError(f"Approved EOD price is required for {symbol}")
+            market = approved_close(row["ts"], Decimal(str(row["close"])), row["source_id"],
+                                    today=datetime.now(UTC).astimezone(ZoneInfo("Asia/Kolkata")).date())
             bundle = derive_peer_metrics(facts, market=market)
             for partition in partition_metric_bundle(bundle):
                 await ingestor.ingest(security_id=security_id, symbol=symbol, bundle=partition)

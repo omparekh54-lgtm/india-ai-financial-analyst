@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -7,6 +7,25 @@ import pytest
 from app.ingestion.derived_metrics import MetricMarketClose, derive_peer_metrics
 from scripts import complete_remaining_peer_metrics as recovery
 from tests.test_derived_metrics import S1, S2, _filed, _metrics
+
+
+def test_approved_eod_close_uses_ist_session_date() -> None:
+    market = recovery.approved_close(datetime(2026, 9, 29, 18, 30, tzinfo=UTC),
+                                     Decimal(100), S1, today=date(2026, 10, 1))
+    assert market.as_of_date == date(2026, 9, 30)
+    assert market.source_id == S1
+
+
+@pytest.mark.parametrize("timestamp,price", [
+    (datetime(2026, 9, 20, tzinfo=UTC), Decimal(100)),
+    (datetime(2026, 10, 2, tzinfo=UTC), Decimal(100)),
+    (datetime(2026, 9, 30, tzinfo=UTC), Decimal("NaN")),
+    (datetime(2026, 9, 30, tzinfo=UTC), Decimal(0)),
+    (datetime(2026, 9, 30, tzinfo=UTC).replace(tzinfo=None), Decimal(100)),
+])
+def test_approved_eod_close_rejects_stale_future_invalid_or_naive_inputs(timestamp: datetime, price: Decimal) -> None:
+    with pytest.raises(ValueError):
+        recovery.approved_close(timestamp, price, S1, today=date(2026, 10, 1))
 
 
 def test_actual_reviewed_share_inputs_reconcile() -> None:
