@@ -102,7 +102,15 @@ def derive_peer_metrics(
     }
     by_name: dict[str, list[MetricFinancialFact]] = {}
     for fact in facts:
-        by_name.setdefault(aliases.get(fact.fact_name, fact.fact_name), []).append(fact)
+        name = aliases.get(fact.fact_name, fact.fact_name)
+        if (
+            fact.fact_name == "depreciation_depletion_and_amortisation_expense"
+            and fact.data.get("xbrl_element") == "DepreciationDepletionAndAmortisationExpense"
+        ):
+            # The filed P&L expense is distinct from cash-flow reconciliation adjustments.
+            # Keep the original fact intact so provenance records its exact reported name.
+            name = "depreciation_amortization"
+        by_name.setdefault(name, []).append(fact)
     for rows in by_name.values():
         rows.sort(key=lambda item: item.period_end, reverse=True)
 

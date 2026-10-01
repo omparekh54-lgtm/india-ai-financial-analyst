@@ -115,6 +115,38 @@ def test_annual_margin_requires_exact_xbrl_context_and_start_date():
         assert "ebitda_margin" not in _metrics(derive_peer_metrics([facts[0], changed, *facts[2:]]))
 
 
+def test_filed_depreciation_expense_alias_requires_exact_element_and_matching_flow():
+    annual = date(2026, 3, 31)
+    facts = [replace(_fact(name, annual, value), period_start=date(2025, 4, 1),
+                     data={"xbrl_context_id": "FourD"})
+             for name, value in (("pbt", "100"), ("interest_expense", "20"),
+                                 ("revenue", "600"))]
+    depreciation = replace(
+        _fact("depreciation_depletion_and_amortisation_expense", annual, "30"),
+        period_start=date(2025, 4, 1),
+        data={"xbrl_context_id": "FourD",
+              "xbrl_element": "DepreciationDepletionAndAmortisationExpense"},
+    )
+    bundle = derive_peer_metrics([*facts, depreciation])
+    margin = _metrics(bundle)["ebitda_margin"]
+    assert margin.value == Decimal("0.25")
+    assert set(bundle.upstream_source_ids) == {S1}
+    assert depreciation.fact_name == "depreciation_depletion_and_amortisation_expense"
+    for rejected in (
+        replace(depreciation, data={"xbrl_context_id": "FourD"}),
+        replace(depreciation, data={**depreciation.data,
+                                   "xbrl_element": "AdjustmentsForDepreciationAndAmortisationExpense"}),
+        replace(depreciation, fact_name="adjustments_for_depreciation_and_amortisation_expense"),
+        replace(depreciation, fact_name="depreciation_expense"),
+        replace(depreciation, source_id=S2),
+        replace(depreciation, period_start=date(2025, 7, 1)),
+        replace(depreciation, data={**depreciation.data, "xbrl_context_id": "Standalone"}),
+        replace(depreciation, unit="USD"),
+        replace(depreciation, value=Decimal(-1)),
+    ):
+        assert "ebitda_margin" not in _metrics(derive_peer_metrics([*facts, rejected]))
+
+
 def test_metric_partitions_keep_market_restrictions_out_of_official_growth():
     facts = [_fact("revenue", date(2026, 3, 31), "120", source_id=S1),
              _fact("revenue", date(2025, 3, 31), "100", source_id=S2),
