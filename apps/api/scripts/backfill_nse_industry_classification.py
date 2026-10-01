@@ -108,6 +108,8 @@ async def fetch_classifications(
 async def persist_classifications(
     database_url: str,
     results: dict[UUID, NseIndustryClassification],
+    *,
+    export_evidence: dict[UUID, dict[str, str]] | None = None,
 ) -> int:
     engine = create_database_engine(database_url)
     select_source = text(
@@ -125,7 +127,7 @@ async def persist_classifications(
     insert_source = text(
         """
         insert into sources (
-          security_id, source_type, source_uri, title, freshness, checksum, metadata
+          security_id, source_type, source_uri, title, freshness, checksum, metadata, retrieved_at
         ) values (
           :security_id,
           'nse_industry_classification',
@@ -133,7 +135,8 @@ async def persist_classifications(
           :title,
           'periodic',
           :checksum,
-          cast(:metadata as jsonb)
+          cast(:metadata as jsonb),
+          cast(:retrieved_at as timestamptz)
         )
         returning id
         """
@@ -145,7 +148,7 @@ async def persist_classifications(
             freshness = 'periodic',
             checksum = :checksum,
             metadata = cast(:metadata as jsonb),
-            retrieved_at = now()
+            retrieved_at = cast(:retrieved_at as timestamptz)
         where id = :source_id
         """
     )
@@ -190,12 +193,17 @@ async def persist_classifications(
                     ).encode("utf-8")
                 ).hexdigest()
                 retrieved_at = datetime.now(UTC).isoformat()
+                evidence = (export_evidence or {}).get(security_id, {})
+                if evidence:
+                    checksum = evidence["raw_response_sha256"]
+                    retrieved_at = evidence["retrieved_at"]
                 source_metadata = json.dumps(
                     {
                         "provenance_class": "official_source",
                         "production_approved": True,
                         "taxonomy": "NSE_INDICES_4_TIER",
                         **canonical_payload,
+                        **evidence,
                     },
                     sort_keys=True,
                 )
@@ -205,6 +213,7 @@ async def persist_classifications(
                     "title": f"NSE industry classification — {classification.symbol}",
                     "checksum": checksum,
                     "metadata": source_metadata,
+                    "retrieved_at": retrieved_at,
                 }
                 source_id = await connection.scalar(select_source, source_params)
                 if source_id is None:
