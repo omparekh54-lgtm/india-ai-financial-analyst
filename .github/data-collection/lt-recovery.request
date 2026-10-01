@@ -1,1 +1,1 @@
-2026-09-30: Recover only verified LT official financial history, embed missing official evidence, and verify strict LT readiness on the reviewed main commit.
+2026-10-01: Recover verified LT history through stateless official archive transport; refresh sourced metrics and missing embeddings; preserve strict readiness.
