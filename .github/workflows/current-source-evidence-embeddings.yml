@@ -61,9 +61,9 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          python scripts/backfill_derived_security_metrics.py --security LT --dry-run \\
+          python scripts/backfill_derived_security_metrics.py --security LT --dry-run \
             --skip-coverage-snapshot | tee lt-metric-validation-results.json
-          python scripts/backfill_derived_security_metrics.py --security LT \\
+          python scripts/backfill_derived_security_metrics.py --security LT \
             --skip-coverage-snapshot | tee lt-metric-results.json
       - name: Install the existing local embedding runtime on CPU
         run: |

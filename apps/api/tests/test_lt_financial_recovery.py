@@ -1,11 +1,27 @@
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
 from app.connectors.http_fetcher import SourceFetchError
-from scripts.recover_lt_financial_documents import validate_lt_issuer
+from scripts.recover_lt_financial_documents import CurlLtXbrlFetcher, validate_lt_issuer
+
+
+@pytest.mark.asyncio
+async def test_archive_transport_does_not_require_nse_website_session(monkeypatch) -> None:
+    client = AsyncMock()
+    monkeypatch.setattr(
+        "scripts.recover_lt_financial_documents.httpx.AsyncClient", lambda **_kwargs: client,
+    )
+    fetcher = CurlLtXbrlFetcher()
+    fetcher._refresh_session = AsyncMock(side_effect=SourceFetchError("Website unavailable"))
+    async with fetcher:
+        assert fetcher._client is not None
+    fetcher._refresh_session.assert_not_awaited()
+    client.aclose.assert_awaited_once()
+    assert fetcher._client is None
 
 
 def test_recovery_accepts_only_verified_lt_issuer() -> None:

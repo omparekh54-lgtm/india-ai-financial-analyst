@@ -48,6 +48,13 @@ def validate_lt_issuer(content: bytes) -> None:
 class CurlLtXbrlFetcher(NseFinancialXbrlFetcher):
     """Bounded public-archive transport; all normal payload/parser/ingestion guards remain."""
 
+    async def start(self) -> None:
+        # The public archive transport uses curl without session cookies. The base
+        # fetcher warms the NSE website before its first request; that unrelated
+        # website failure must not prevent a validated archive request.
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=45.0, follow_redirects=False)
+
     async def _request(self, url: str) -> httpx.Response:
         normalized = normalize_xbrl_url(url)
         if normalized is None:
@@ -138,8 +145,11 @@ def main() -> int:
     except (RuntimeError, ValueError, OSError, subprocess.SubprocessError,
             httpx.HTTPError, SQLAlchemyError, etree.XMLSyntaxError) as exc:
         # Diagnostics never print connection tracebacks, credential values or source text.
-        print(json.dumps({"symbol": "LT", "status": "failed",
-                          "error_type": type(exc).__name__}, sort_keys=True))
+        diagnostic = {"symbol": "LT", "status": "failed",
+                      "error_type": type(exc).__name__}
+        if isinstance(exc, SourceFetchError):
+            diagnostic["source_error"] = str(exc)
+        print(json.dumps(diagnostic, sort_keys=True))
         return 1
 
 
