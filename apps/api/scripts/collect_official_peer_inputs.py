@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import json
 from datetime import UTC, date, datetime
+from pathlib import Path
 
 import httpx
 from sqlalchemy import text
@@ -60,8 +61,29 @@ async def download_official_archive(url: str) -> bytes:
         raise RuntimeError(f"Official bhavcopy transport failed: {type(exc).__name__}") from exc
 
 
+def reviewed_inputs(session: date, report: str) -> tuple[bytes, bytes]:
+    """Read the exact reviewed official bytes; retain every normal parser guard."""
+    if session != date(2026, 9, 30) or report != "full-delivery":
+        raise ValueError("Reviewed inputs only cover the 2026-09-30 full-delivery report")
+    directory = Path(__file__).parent / "official_inputs" / "20260930"
+    expected = {
+        "full-delivery.csv": (399899, "d7c50dbb8c51d6dec20cee52bb478887a5d3c95946fa27539e89b83476ce0d89"),
+        "nifty50-identity.csv": (3344, "f5ba4027d935ae72879d5c24bbebf0e8439ec8ed504ffdf4175fde69206244b3"),
+    }
+    contents = []
+    for filename, (size, checksum) in expected.items():
+        path = directory / filename
+        if path.stat().st_size != size:
+            raise ValueError("Reviewed official file size mismatch")
+        content = path.read_bytes()
+        if hashlib.sha256(content).hexdigest() != checksum:
+            raise ValueError("Reviewed official file checksum mismatch")
+        contents.append(content)
+    return contents[0], contents[1]
+
+
 async def collect(session: date, dry_run: bool, *, refresh_readiness: bool = True,
-                  report: str = "udiff") -> int:
+                  report: str = "udiff", use_reviewed_inputs: bool = False) -> int:
     settings = get_settings()
     if not settings.database_url or not settings.enable_external_data_calls:
         raise RuntimeError("Existing database and external-data configuration are required")
@@ -83,13 +105,17 @@ async def collect(session: date, dry_run: bool, *, refresh_readiness: bool = Tru
         if report not in {"udiff", "full-delivery"}:
             raise ValueError("Unknown official EOD report")
         url = full_delivery_url(session) if report == "full-delivery" else bhavcopy_url(session)
-        content = await download_official_archive(url)
+        if use_reviewed_inputs:
+            content, identity_content = reviewed_inputs(session, report)
+        else:
+            content = await download_official_archive(url)
+            identity_content = None
         target_identities = {
             str(row["nse_symbol"]): str(row["isin"]) for row in targets
         }
-        identity_content = None
         if report == "full-delivery":
-            identity_content = await download_official_archive(NSE_NIFTY50_INDEX_CSV)
+            if identity_content is None:
+                identity_content = await download_official_archive(NSE_NIFTY50_INDEX_CSV)
             bars = parse_full_delivery(content, session=session, targets=target_identities,
                                        identity_content=identity_content)
         else:
@@ -119,7 +145,9 @@ async def collect(session: date, dry_run: bool, *, refresh_readiness: bool = Tru
                 metadata={"importer": "collect_official_peer_inputs", "symbol": symbol,
                           "isin": str(target["isin"]), "session": session.isoformat(),
                           "provider": "nse", "is_adjusted": False, "row_count": 1,
-                          "official_report": report, **identity_metadata},
+                          "official_report": report,
+                          "reviewed_input_bundle": "20260930" if use_reviewed_inputs else None,
+                          **identity_metadata},
             )
             await market_ingestor.ingest_security_bars(
                 security_id=security_id, source_id=source_id, bars=[bars[symbol]],
@@ -226,24 +254,26 @@ def main() -> int:
     parser.add_argument("--report", choices=("udiff", "full-delivery"), default="udiff")
     parser.add_argument("--stored-metrics-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--reviewed-inputs", action="store_true",
+                        help="Use checksum-pinned official files reviewed in this repository")
     parser.add_argument("--skip-readiness-refresh", action="store_true",
                         help="Import only; refresh readiness separately in the configured worker")
     parser.add_argument("--refresh-readiness-only", action="store_true")
     args = parser.parse_args()
     if args.refresh_readiness_only:
         if (args.session or args.stored_metrics_only or args.dry_run
-                or args.skip_readiness_refresh or args.report != "udiff"):
+                or args.skip_readiness_refresh or args.report != "udiff" or args.reviewed_inputs):
             parser.error("Readiness-only refresh cannot use import options")
         return asyncio.run(refresh_prepared_readiness())
     if args.stored_metrics_only:
-        if args.session or args.skip_readiness_refresh or args.report != "udiff":
+        if args.session or args.skip_readiness_refresh or args.report != "udiff" or args.reviewed_inputs:
             parser.error("Stored-metrics mode cannot use session or skip-readiness options")
         return asyncio.run(collect_stored_metrics(args.dry_run))
     if not args.session:
         parser.error("--session is required for official EOD input collection")
     return asyncio.run(collect(args.session, args.dry_run,
                                refresh_readiness=not args.skip_readiness_refresh,
-                               report=args.report))
+                               report=args.report, use_reviewed_inputs=args.reviewed_inputs))
 
 
 if __name__ == "__main__":
