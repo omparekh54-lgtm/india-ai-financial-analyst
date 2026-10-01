@@ -110,6 +110,15 @@ def derive_peer_metrics(
             # The filed P&L expense is distinct from cash-flow reconciliation adjustments.
             # Keep the original fact intact so provenance records its exact reported name.
             name = "depreciation_amortization"
+        if (
+            fact.fact_name == "basic_and_diluted_eps_after_extraordinary_items_net_of_tax_expense_for_the_period_not_to_be_annualized"
+            and fact.data.get("xbrl_element")
+            == "BasicAndDilutedEPSAfterExtraordinaryItemsNetOfTaxExpenseForThePeriodNotToBeAnnualized"
+        ):
+            name = "eps_diluted"
+        if (fact.fact_name == "gross_premium_income"
+                and fact.data.get("xbrl_element") == "GrossPremiumIncome"):
+            name = "reported_gross_premium_income"
         by_name.setdefault(name, []).append(fact)
     for rows in by_name.values():
         rows.sort(key=lambda item: item.period_end, reverse=True)
@@ -117,7 +126,7 @@ def derive_peer_metrics(
     derived: dict[str, SecurityMetricInput] = {}
     source_ids: set[UUID] = set()
 
-    growth = _growth_metric(by_name)
+    growth = _growth_metric(by_name) or _bank_nii_growth_metric(by_name)
     if growth is not None:
         _put(derived, source_ids, growth)
 
@@ -187,7 +196,7 @@ def derive_peer_metrics(
 def _growth_metric(
     by_name: dict[str, list[MetricFinancialFact]],
 ) -> SecurityMetricInput | None:
-    for basis in _GROWTH_BASES:
+    for basis in (*_GROWTH_BASES, "reported_gross_premium_income"):
         for latest in by_name.get(basis, []):
             if latest.value == 0:
                 continue
@@ -210,6 +219,72 @@ def _growth_metric(
                 comparison_period_end=previous.period_end.isoformat(),
                 comparison_period_type=latest.period_type,
             )
+    return None
+
+
+def _bank_nii_growth_metric(
+    by_name: dict[str, list[MetricFinancialFact]],
+) -> SecurityMetricInput | None:
+    """Compare reported bank interest earned minus interest expended, year on year."""
+    earned_rows = [fact for fact in by_name.get("interest_income", [])
+                   if fact.data.get("xbrl_element") == "InterestEarned"]
+    for current in earned_rows:
+        previous = _comparable_previous(earned_rows, current)
+        if previous is None or not 270 <= (current.period_end - previous.period_end).days <= 460:
+            continue
+        current_cost = _matching_flow(by_name, "interest_expense", current)
+        previous_cost = _matching_flow(by_name, "interest_expense", previous)
+        if current_cost is None or previous_cost is None:
+            continue
+        inputs = [current, current_cost, previous, previous_cost]
+        if (any(fact.unit != "INR" for fact in inputs)
+                or any(cost.data.get("xbrl_element") != "InterestExpended"
+                       or cost.value < 0 for cost in (current_cost, previous_cost))):
+            continue
+        current_nii = current.value - current_cost.value
+        previous_nii = previous.value - previous_cost.value
+        if current_nii <= 0 or previous_nii <= 0:
+            continue
+        return _metric(
+            "revenue_growth", current.period_end, current_nii / previous_nii - Decimal(1),
+            "ratio", "reported_interest_earned_minus_expended_yoy_growth", inputs,
+            basis_fact="net_interest_income",
+            comparison_period_end=previous.period_end.isoformat(),
+            comparison_period_type=current.period_type,
+        )
+    return None
+
+
+def _bank_pb_metric(
+    by_name: dict[str, list[MetricFinancialFact]], market: MetricMarketClose,
+) -> SecurityMetricInput | None:
+    """Bank book equity: filed capital plus reserves, matched to filed ordinary shares."""
+    for capital in by_name.get("capital", []):
+        if (capital.period_type != "point_in_time" or capital.unit != "INR"
+                or capital.data.get("xbrl_element") != "Capital" or capital.value <= 0):
+            continue
+        reserves = _matching_flow(by_name, "reserves_and_surplus", capital)
+        shares = next((fact for fact in by_name.get("shares_outstanding", [])
+                       if fact.period_end == capital.period_end
+                       and fact.source_id == capital.source_id
+                       and fact.unit == "shares" and fact.value > 0
+                       and fact.data.get("share_count_basis") == "paid_up_equity_capital"), None)
+        if (reserves is None or shares is None or reserves.unit != "INR"
+                or reserves.data.get("xbrl_element") != "ReservesAndSurplus"):
+            continue
+        equity = capital.value + reserves.value
+        if equity <= 0:
+            continue
+        return SecurityMetricInput(
+            metric_name="pb", as_of_date=market.as_of_date,
+            value=market.price * shares.value / equity, unit="multiple",
+            metadata=_metadata(
+                "market_price_times_paid_up_equity_shares_divided_by_capital_plus_reserves",
+                [capital.source_id, reserves.source_id, shares.source_id, market.source_id],
+                financial_period_end=capital.period_end.isoformat(),
+                accounting_basis="reported_bank_capital_plus_reserves_and_surplus",
+            ),
+        )
     return None
 
 
@@ -446,7 +521,7 @@ def _pb_metric(
             if equity is not None else None
         )
         if equity is None or shares is None or equity.value <= 0 or shares.value <= 0:
-            return None
+            return _bank_pb_metric(by_name, market)
         if shares.period_end != equity.period_end:
             return None
         if not _units_compatible_for_per_share(equity.unit, shares.unit):
