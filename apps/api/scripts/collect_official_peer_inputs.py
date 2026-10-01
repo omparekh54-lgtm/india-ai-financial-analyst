@@ -13,6 +13,7 @@ from datetime import UTC, date, datetime
 import httpx
 from sqlalchemy import text
 
+from app.connectors.nse_sectoral_indices import NSE_NIFTY50_INDEX_CSV
 from app.core.config import get_settings
 from app.core.data_readiness import load_data_coverage
 from app.core.prepared_security_readiness import persist_prepared_security_readiness
@@ -21,7 +22,13 @@ from app.db import create_database_engine
 from app.ingestion.derived_metric_ingestion import DerivedSecurityMetricIngestor
 from app.ingestion.derived_metrics import derive_peer_metrics, partition_metric_bundle
 from app.ingestion.market import MarketBarIngestor
-from app.ingestion.nse_bhavcopy import MAX_FILE_BYTES, bhavcopy_url, parse_bhavcopy
+from app.ingestion.nse_bhavcopy import (
+    MAX_FILE_BYTES,
+    bhavcopy_url,
+    full_delivery_url,
+    parse_bhavcopy,
+    parse_full_delivery,
+)
 from app.ingestion.reference_provenance import upsert_reference_source
 
 if __package__:
@@ -53,7 +60,8 @@ async def download_official_archive(url: str) -> bytes:
         raise RuntimeError(f"Official bhavcopy transport failed: {type(exc).__name__}") from exc
 
 
-async def collect(session: date, dry_run: bool, *, refresh_readiness: bool = True) -> int:
+async def collect(session: date, dry_run: bool, *, refresh_readiness: bool = True,
+                  report: str = "udiff") -> int:
     settings = get_settings()
     if not settings.database_url or not settings.enable_external_data_calls:
         raise RuntimeError("Existing database and external-data configuration are required")
@@ -72,11 +80,20 @@ async def collect(session: date, dry_run: bool, *, refresh_readiness: bool = Tru
             raise ValueError("Prepared-universe import requires between one and fifty targets")
         if db_size >= 450_000_000:
             raise RuntimeError("Existing free-tier storage guard reached")
-        url = bhavcopy_url(session)
+        if report not in {"udiff", "full-delivery"}:
+            raise ValueError("Unknown official EOD report")
+        url = full_delivery_url(session) if report == "full-delivery" else bhavcopy_url(session)
         content = await download_official_archive(url)
-        bars = parse_bhavcopy(content, session=session, targets={
+        target_identities = {
             str(row["nse_symbol"]): str(row["isin"]) for row in targets
-        })
+        }
+        identity_content = None
+        if report == "full-delivery":
+            identity_content = await download_official_archive(NSE_NIFTY50_INDEX_CSV)
+            bars = parse_full_delivery(content, session=session, targets=target_identities,
+                                       identity_content=identity_content)
+        else:
+            bars = parse_bhavcopy(content, session=session, targets=target_identities)
         checksum = hashlib.sha256(content).hexdigest()
         print(json.dumps({"event": "validated_official_eod", "session": session.isoformat(),
                           "source_uri": url, "sha256": checksum, "securities": len(bars),
@@ -87,13 +104,22 @@ async def collect(session: date, dry_run: bool, *, refresh_readiness: bool = Tru
         metric_ingestor = DerivedSecurityMetricIngestor(engine)
         for target in targets:
             symbol, security_id = str(target["nse_symbol"]), target["id"]
+            identity_metadata: dict[str, object] = {}
+            if identity_content is not None:
+                identity_metadata = {
+                    "identity_source_uri": NSE_NIFTY50_INDEX_CSV,
+                    "identity_source_sha256": hashlib.sha256(identity_content).hexdigest(),
+                    "identity_retrieved_at": datetime.now(UTC).isoformat(),
+                    "identity_match": "official_constituent_symbol_and_isin",
+                }
             source_id = await upsert_reference_source(
                 engine, security_id=security_id, source_type="reference_market_data",
-                source_uri=url, title=f"NSE UDiFF EQ final EOD — {symbol}",
+                source_uri=url, title=f"NSE {report} EQ EOD — {symbol}",
                 published_at=None, checksum=checksum, approval_reference=None,
                 metadata={"importer": "collect_official_peer_inputs", "symbol": symbol,
                           "isin": str(target["isin"]), "session": session.isoformat(),
-                          "provider": "nse", "is_adjusted": False, "row_count": 1},
+                          "provider": "nse", "is_adjusted": False, "row_count": 1,
+                          "official_report": report, **identity_metadata},
             )
             await market_ingestor.ingest_security_bars(
                 security_id=security_id, source_id=source_id, bars=[bars[symbol]],
@@ -197,6 +223,7 @@ async def refresh_prepared_readiness() -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--session", type=date.fromisoformat)
+    parser.add_argument("--report", choices=("udiff", "full-delivery"), default="udiff")
     parser.add_argument("--stored-metrics-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-readiness-refresh", action="store_true",
@@ -204,17 +231,19 @@ def main() -> int:
     parser.add_argument("--refresh-readiness-only", action="store_true")
     args = parser.parse_args()
     if args.refresh_readiness_only:
-        if args.session or args.stored_metrics_only or args.dry_run or args.skip_readiness_refresh:
+        if (args.session or args.stored_metrics_only or args.dry_run
+                or args.skip_readiness_refresh or args.report != "udiff"):
             parser.error("Readiness-only refresh cannot use import options")
         return asyncio.run(refresh_prepared_readiness())
     if args.stored_metrics_only:
-        if args.session or args.skip_readiness_refresh:
+        if args.session or args.skip_readiness_refresh or args.report != "udiff":
             parser.error("Stored-metrics mode cannot use session or skip-readiness options")
         return asyncio.run(collect_stored_metrics(args.dry_run))
     if not args.session:
         parser.error("--session is required for official EOD input collection")
     return asyncio.run(collect(args.session, args.dry_run,
-                               refresh_readiness=not args.skip_readiness_refresh))
+                               refresh_readiness=not args.skip_readiness_refresh,
+                               report=args.report))
 
 
 if __name__ == "__main__":
