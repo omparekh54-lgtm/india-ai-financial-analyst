@@ -1,12 +1,31 @@
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from app.connectors.http_fetcher import SourceFetchError
 from scripts.recover_lt_financial_documents import CurlLtXbrlFetcher, validate_lt_issuer
+
+
+@pytest.mark.asyncio
+async def test_recovery_skips_stored_filing_and_continues_after_one_failure(monkeypatch) -> None:
+    from scripts import recover_lt_financial_documents as recovery
+
+    importer = AsyncMock(side_effect=[SourceFetchError("Unavailable"), {"status": "completed"}])
+    monkeypatch.setattr(recovery, "_process_target", importer)
+    selected = [SimpleNamespace(record=SimpleNamespace(symbol="LT", xbrl_url=url))
+                for url in ("stored", "unavailable", "available")]
+    results = await recovery.recover_selected_documents(
+        engine=None, target=None, selected=selected, stored_urls={"stored"},
+        documents=None, dry_run=False,
+    )
+    assert [row["status"] for row in results] == ["already_stored", "failed", "completed"]
+    assert importer.await_count == 2
+    assert all(call.kwargs["collect_available_history"]
+               for call in importer.await_args_list)
 
 
 @pytest.mark.asyncio

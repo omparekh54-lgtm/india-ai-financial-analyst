@@ -1,1 +1,1 @@
-2026-10-01: Recover verified LT history through stateless official archive transport; refresh sourced metrics and missing embeddings; preserve strict readiness.
+2026-10-01: Resume only missing verified LT filings; skip stored evidence and continue bounded per-document recovery without relaxing strict readiness.
