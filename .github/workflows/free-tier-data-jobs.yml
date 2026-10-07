@@ -77,9 +77,13 @@ jobs:
           --all --from-listing --daily-refresh --supported-only
           --recent-history-days 400 --interval 1d --limit 10000
           --request-delay-seconds 0.5 --confirm-yahoo-research-use
+      # Benchmarks are also refreshed daily by the local research node in India
+      # (deploy/local-node). A cloud-side failure here must not mark the price refresh failed.
       - name: Refresh official NSE benchmarks
+        continue-on-error: true
         run: python scripts/backfill_nse_benchmarks.py --min-rows 2
       - name: Sync sourced India VIX benchmark into macro context
+        continue-on-error: true
         run: python scripts/sync_india_vix_macro.py --max-age-days 7
 
   classification:

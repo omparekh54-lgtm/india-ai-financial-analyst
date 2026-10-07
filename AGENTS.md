@@ -76,6 +76,11 @@ The flow is:
 4. Market-wide context (NIFTY 50, India VIX, macro, flows, daily prices) is shared by every
    stock and stays on a scheduled job.
 
+Hosting (owner decision, 7 October 2026): Railway is retired. The API runs on Render's free
+plan (`render.yaml`); the research worker and the daily shared-market refresh run on the owner's
+computer in India (`deploy/local-node`, `scripts/run_local_node.py`) because NSE blocks cloud
+hosts. See `deploy/README.md`. Treat Railway references in older phase documents as historical.
+
 Real-data-only, provenance, fail-closed publication and validation-before-synthesis rules are
 unchanged. `CLASSIFICATION_POLICY` (default `nse_four_tier`) may be set to
 `nse_sector_or_better` only by the owner, to accept NSE's official NIFTY Total Market sector
