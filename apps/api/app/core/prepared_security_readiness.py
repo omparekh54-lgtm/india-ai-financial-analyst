@@ -71,7 +71,11 @@ async def refresh_prepared_security_readiness(
 
     evaluated = _utc(evaluated_at or datetime.now(UTC))
     corpus_coverage = await load_data_coverage(engine)
-    security_coverage, symbol = await load_security_agent_coverage(engine, security_id)
+    security_coverage, symbol = await load_security_agent_coverage(
+        engine,
+        security_id,
+        classification_policy=settings.classification_policy,
+    )
     readiness = evaluate_security_readiness(
         security_id,
         symbol,

@@ -146,6 +146,12 @@ class Settings(BaseSettings):
     )
 
     max_agent_concurrency: int = Field(default=6, ge=1, le=16)
+    # Which official classification satisfies the Industry Agent's data contract.
+    # "nse_four_tier" (default): NSE quote-API macro/sector/industry/basic-industry with checksum.
+    # "nse_sector_or_better": also accepts NSE's official NIFTY Total Market sector tier
+    # (taxonomy NSE_TOTAL_MARKET_SECTOR_ONLY) when the quote API is unreachable from the host.
+    # Either way the classification must be official, checksummed and production-approved.
+    classification_policy: Literal["nse_four_tier", "nse_sector_or_better"] = "nse_four_tier"
     # Used as the basis for stale-running-job recovery (ResearchJobWorker requeues a job
     # after max(300, this * 2) seconds with no completion, assuming its worker crashed). A
     # research request for a security with no cached financial history yet triggers a live

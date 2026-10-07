@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings, get_settings
 from app.core.research_gate import SecurityNotReadyError, enforce_security_research_ready
-from app.ingestion.nse_financial_on_demand import ensure_financial_history
 from app.orchestration.plan import (
     AnalysisMode,
     EventTrigger,
@@ -20,6 +19,7 @@ from app.orchestration.plan import (
 )
 from app.repositories.research_queue import ResearchQueueRepository
 from app.research.service import ResearchService
+from app.research.stock_bundle import StockBundleResult, prepare_security_bundle
 
 
 class ResearchJobWorker:
@@ -44,6 +44,7 @@ class ResearchJobWorker:
         if job_id is None:
             return False
 
+        bundle: StockBundleResult | None = None
         try:
             mode = AnalysisMode(str(row.get("mode") or AnalysisMode.FULL.value))
             raw_metadata = row.get("metadata")
@@ -60,21 +61,12 @@ class ResearchJobWorker:
                 context["event_trigger"] = event_trigger.value
 
             security_id = _uuid(row.get("security_id"))
-            preparation = metadata.get("preparation_required")
-            preparation_steps = {
-                str(item) for item in preparation
-            } if isinstance(preparation, list) else set()
-            if (
-                security_id is not None
-                and "financial_history" in preparation_steps
-                and self.settings.enable_external_data_calls
-            ):
-                await self.service.progress.set_stage(job_id, "preparing_financials", 5)
-                context["financial_data_fetch"] = await ensure_financial_history(
-                    self.engine,
-                    security_id,
-                )
             if security_id is not None:
+                # Data is fetched for the requested stock now, not bulk-ingested ahead of time.
+                # The unchanged per-security readiness contract then decides if agents may run.
+                await self.service.progress.set_stage(job_id, "fetching_data", 5)
+                bundle = await prepare_security_bundle(self.engine, security_id, self.settings)
+                context["data_bundle"] = bundle.as_dict()
                 await enforce_security_research_ready(
                     self.engine,
                     security_id,
@@ -97,7 +89,11 @@ class ResearchJobWorker:
                 error_type=type(exc).__name__,
                 failure_code="security_not_ready",
                 blocking_agents=exc.blocking_agents,
-                blocker_details=exc.errors,
+                # Missing fetched datasets first: they say what to fix, the agent errors say why.
+                blocker_details=(
+                    *(bundle.blocker_details() if bundle is not None else ()),
+                    *exc.errors,
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - isolate one durable job from the worker loop
             await self.queue.mark_failed(job_id, error_type=type(exc).__name__)

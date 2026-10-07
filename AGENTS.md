@@ -55,6 +55,32 @@ The normal loop is:
 
 Do not bypass this loop by applying undocumented manual production fixes.
 
+## On-demand research data (owner decision, 7 October 2026)
+
+The owner changed the data strategy: research data is fetched **when a visitor requests a
+stock**, not bulk-ingested for the whole universe ahead of time. Do not reintroduce
+universe-wide backfills as a precondition for research.
+
+The flow is:
+
+1. `POST /v1/research/enqueue` resolves the stock and creates the durable job (HTTP 202) for
+   any supported NSE EQ security. It returns 404 only for unresolved or unsupported
+   securities. It no longer returns 503 for missing data.
+2. The research worker runs `app/research/stock_bundle.py::prepare_security_bundle`, which
+   reuses stored data that is still fresh and fetches only what is missing for that stock
+   (classification, financial results XBRL with filing and earnings evidence, derived peer
+   metrics), writing through the existing official importers.
+3. The worker then applies the **unchanged** per-security readiness contract. If the stock is
+   still incomplete, the job fails with the missing datasets listed first, then the
+   per-agent blockers. No agent runs on incomplete data.
+4. Market-wide context (NIFTY 50, India VIX, macro, flows, daily prices) is shared by every
+   stock and stays on a scheduled job.
+
+Real-data-only, provenance, fail-closed publication and validation-before-synthesis rules are
+unchanged. `CLASSIFICATION_POLICY` (default `nse_four_tier`) may be set to
+`nse_sector_or_better` only by the owner, to accept NSE's official NIFTY Total Market sector
+tier when the NSE quote API is unreachable from the host.
+
 ## Fixed product decisions
 
 Preserve all of these decisions unless the user explicitly changes them:
