@@ -117,11 +117,30 @@ def financial_preparation_required(
     return prospective.ready
 
 
+_FOUR_TIER_TAXONOMY = "NSE_INDICES_4_TIER"
+_SECTOR_TIER_TAXONOMY = "NSE_TOTAL_MARKET_SECTOR_ONLY"
+
+
+def accepted_classification_taxonomies(policy: str) -> tuple[str, ...]:
+    """Official NSE taxonomies that satisfy the Industry Agent under a classification policy."""
+    if policy == "nse_sector_or_better":
+        return (_FOUR_TIER_TAXONOMY, _SECTOR_TIER_TAXONOMY)
+    return (_FOUR_TIER_TAXONOMY,)
+
+
 async def load_security_agent_coverage(
     engine: AsyncEngine,
     security_id: UUID,
+    *,
+    classification_policy: str = "nse_four_tier",
 ) -> tuple[AgentDataCoverage, str]:
-    """Build an AgentDataCoverage describing exactly one security (universe size 1)."""
+    """Build an AgentDataCoverage describing exactly one security (universe size 1).
+
+    Market freshness is measured on this security's own latest sourced daily bar. The
+    classification policy only widens which *official*, checksummed, production-approved NSE
+    taxonomy is accepted; it never accepts an unsourced or third-party label.
+    """
+    taxonomies = list(accepted_classification_taxonomies(classification_policy))
     statement = text(
         """
         with target as (
@@ -168,8 +187,11 @@ async def load_security_agent_coverage(
             select count(*)
             from target n
             where nullif(btrim(coalesce(n.sector, '')), '') is not null
-              and nullif(btrim(coalesce(n.industry, '')), '') is not null
-              and n.metadata->>'classification_taxonomy' = 'NSE_INDICES_4_TIER'
+              and (
+                nullif(btrim(coalesce(n.industry, '')), '') is not null
+                or n.metadata->>'classification_taxonomy' = 'NSE_TOTAL_MARKET_SECTOR_ONLY'
+              )
+              and n.metadata->>'classification_taxonomy' = any(:taxonomies)
               and n.metadata->>'classification_provenance_class' = 'official_source'
               and n.metadata->>'classification_source_type' = 'nse_industry_classification'
               and nullif(btrim(coalesce(n.metadata->>'classification_sha256', '')), '') is not null
@@ -185,11 +207,23 @@ async def load_security_agent_coverage(
               )
           ) as classified_securities,
           (select count(*) from recent_filings) as recent_filing_evidence_securities,
-          (select count(*) from recent_earnings) as recent_earnings_evidence_securities
+          (select count(*) from recent_earnings) as recent_earnings_evidence_securities,
+          (
+            select max(mb.ts)
+            from market_bars mb
+            where mb.security_id = :security_id
+              and mb.source_id is not null
+              and mb.interval in ('1d', 'day', 'daily')
+          ) as latest_security_market_bar
         """
     )
     async with engine.connect() as connection:
-        row = (await connection.execute(statement, {"security_id": security_id})).mappings().one()
+        row = (
+            await connection.execute(
+                statement,
+                {"security_id": security_id, "taxonomies": taxonomies},
+            )
+        ).mappings().one()
         if int(row.get("universe") or 0) == 0:
             raise SecurityNotSupportedError(security_id)
 
@@ -239,6 +273,7 @@ async def load_security_agent_coverage(
         financial_history_limited_recent_securities=(
             financial_history.history_limited_recent_listings
         ),
+        latest_security_market_bar=row.get("latest_security_market_bar"),
     )
     return coverage, str(row.get("symbol") or security_id)
 

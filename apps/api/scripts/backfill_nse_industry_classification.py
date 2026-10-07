@@ -2,11 +2,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import hashlib
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
@@ -22,6 +19,7 @@ from app.connectors.nse_sectoral_indices import (
 )
 from app.core.config import get_settings
 from app.db import create_database_engine
+from app.ingestion.classification import persist_nse_classifications
 
 
 @dataclass(frozen=True)
@@ -112,138 +110,14 @@ async def persist_classifications(
     export_evidence: dict[UUID, dict[str, str]] | None = None,
 ) -> int:
     engine = create_database_engine(database_url)
-    select_source = text(
-        """
-        select id
-        from sources
-        where security_id = :security_id
-          and source_type = 'nse_industry_classification'
-          and source_uri = :source_uri
-          and published_at is null
-        order by retrieved_at desc
-        limit 1
-        """
-    )
-    insert_source = text(
-        """
-        insert into sources (
-          security_id, source_type, source_uri, title, freshness, checksum, metadata, retrieved_at
-        ) values (
-          :security_id,
-          'nse_industry_classification',
-          :source_uri,
-          :title,
-          'periodic',
-          :checksum,
-          cast(:metadata as jsonb),
-          cast(:retrieved_at as timestamptz)
-        )
-        returning id
-        """
-    )
-    update_source = text(
-        """
-        update sources
-        set title = :title,
-            freshness = 'periodic',
-            checksum = :checksum,
-            metadata = cast(:metadata as jsonb),
-            retrieved_at = cast(:retrieved_at as timestamptz)
-        where id = :source_id
-        """
-    )
-    update_security = text(
-        """
-        update securities
-        set sector = :sector,
-            industry = :industry,
-            metadata = metadata || jsonb_build_object(
-              'classification_taxonomy', 'NSE_INDICES_4_TIER',
-              'classification_provenance_class', 'official_source',
-              'classification_source_type', 'nse_industry_classification',
-              'classification_source_uri', cast(:source_uri as text),
-              'classification_source_id', cast(:source_id as text),
-              'classification_sha256', cast(:checksum as text),
-              'classification_retrieved_at', cast(:retrieved_at as text),
-              'nse_macro_sector', cast(:macro_sector as text),
-              'nse_basic_industry', cast(:basic_industry as text)
-            ),
-            updated_at = now()
-        where id = :security_id
-        """
-    )
-
-    updated = 0
     try:
-        async with engine.begin() as connection:
-            for security_id, classification in results.items():
-                canonical_payload = {
-                    "symbol": classification.symbol,
-                    "isin": classification.isin,
-                    "macro_sector": classification.macro_sector,
-                    "sector": classification.sector,
-                    "industry": classification.industry,
-                    "basic_industry": classification.basic_industry,
-                }
-                checksum = hashlib.sha256(
-                    json.dumps(
-                        canonical_payload,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ).encode("utf-8")
-                ).hexdigest()
-                retrieved_at = datetime.now(UTC).isoformat()
-                evidence = (export_evidence or {}).get(security_id, {})
-                if evidence:
-                    checksum = evidence["raw_response_sha256"]
-                    retrieved_at = evidence["retrieved_at"]
-                source_metadata = json.dumps(
-                    {
-                        "provenance_class": "official_source",
-                        "production_approved": True,
-                        "taxonomy": "NSE_INDICES_4_TIER",
-                        **canonical_payload,
-                        **evidence,
-                    },
-                    sort_keys=True,
-                )
-                source_params: dict[str, Any] = {
-                    "security_id": security_id,
-                    "source_uri": classification.source_uri,
-                    "title": f"NSE industry classification — {classification.symbol}",
-                    "checksum": checksum,
-                    "metadata": source_metadata,
-                    "retrieved_at": retrieved_at,
-                }
-                source_id = await connection.scalar(select_source, source_params)
-                if source_id is None:
-                    source_id = (
-                        await connection.execute(insert_source, source_params)
-                    ).scalar_one()
-                else:
-                    await connection.execute(
-                        update_source,
-                        {**source_params, "source_id": source_id},
-                    )
-
-                await connection.execute(
-                    update_security,
-                    {
-                        "security_id": security_id,
-                        "sector": classification.sector,
-                        "industry": classification.industry,
-                        "source_uri": classification.source_uri,
-                        "source_id": source_id,
-                        "checksum": checksum,
-                        "retrieved_at": retrieved_at,
-                        "macro_sector": classification.macro_sector,
-                        "basic_industry": classification.basic_industry,
-                    },
-                )
-                updated += 1
+        return await persist_nse_classifications(
+            engine,
+            results,
+            export_evidence=export_evidence,
+        )
     finally:
         await engine.dispose()
-    return updated
 
 
 async def coverage_snapshot(database_url: str) -> dict[str, int]:

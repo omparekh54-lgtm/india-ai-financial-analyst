@@ -56,6 +56,10 @@ class AgentDataCoverage:
     macro_series_with_sourced_observations: frozenset[str]
     history_limited_recent_securities: int = 0
     financial_history_limited_recent_securities: int = 0
+    # Set only for single-security evaluation: the requested security's own latest sourced
+    # daily bar. When present it replaces the corpus-wide latest bar in the freshness check,
+    # so a stale corpus cannot mask, and a fresh corpus cannot hide, this security's staleness.
+    latest_security_market_bar: datetime | None = None
 
     def as_dict(self) -> dict[str, object]:
         total = self.nse_eq_securities
@@ -311,7 +315,12 @@ def evaluate_agent_readiness(
     peer_ready = total > 0 and agent_coverage.peer_metric_securities == total
     benchmarks_ready = _REQUIRED_BENCHMARK_CODES <= agent_coverage.benchmark_codes_with_sourced_bars
     macro_ready = _REQUIRED_MACRO_SERIES <= agent_coverage.macro_series_with_sourced_observations
-    market_fresh = _datetime_age_days(now, corpus_coverage.latest_market_bar) <= 7
+    latest_market_bar = (
+        agent_coverage.latest_security_market_bar
+        if agent_coverage.latest_security_market_bar is not None
+        else corpus_coverage.latest_market_bar
+    )
+    market_fresh = _datetime_age_days(now, latest_market_bar) <= 7
     benchmark_fresh = _datetime_age_days(now, corpus_coverage.latest_benchmark_bar) <= 7
     macro_fresh = _date_age_days(now, corpus_coverage.latest_macro_observation) <= 45
     web_acquisition_ready = bool(settings.enable_external_data_calls and settings.tavily_api_key)

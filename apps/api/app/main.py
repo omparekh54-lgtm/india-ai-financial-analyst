@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import text
 
 from app.auth import AuthenticatedUser, require_authenticated_user
 from app.brokers.repository import BrokerRepository
@@ -444,33 +445,60 @@ async def _resolve_security_or_404(engine, query: str) -> tuple[UUID, str]:
     return security.id, (security.nse_symbol or str(security.id))
 
 
+async def _require_supported_security(engine, security_id: UUID) -> None:
+    """Raise SecurityNotSupportedError unless the security is an NSE EQ listing."""
+    async with engine.connect() as connection:
+        supported = await connection.scalar(
+            text(
+                """
+                select exists (
+                  select 1 from securities
+                  where id = :security_id
+                    and primary_exchange = 'NSE'
+                    and coalesce(metadata->>'nse_series', 'EQ') = 'EQ'
+                    and nse_symbol is not null
+                )
+                """
+            ),
+            {"security_id": security_id},
+        )
+    if not supported:
+        raise SecurityNotSupportedError(security_id)
+
+
 async def _enforce_research_ready_or_503(
     query: str,
     *,
-    allow_durable_preparation: bool = False,
-) -> tuple[UUID, str, tuple[str, ...]]:
-    """Block research only when the requested security is not ready.
+    defer_readiness_to_worker: bool = False,
+) -> tuple[UUID, str]:
+    """Resolve the security and, for inline execution, require it to be ready now.
 
     Per PROJECT_INTENT.md an incomplete security must not block a complete one, so this
     gates on the resolved security rather than on universe-wide coverage. Global provenance
     rules still fail closed inside the per-security evaluation.
+
+    With ``defer_readiness_to_worker`` (the durable /enqueue path) any supported NSE EQ
+    security is accepted: the worker fetches that stock's data on demand and then applies the
+    same unchanged readiness contract before any agent runs, failing the job with exact
+    blockers if it is still incomplete.
     """
     if not settings.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
     engine = create_database_engine(settings.database_url)
     security_id, symbol = await _resolve_security_or_404(engine, query)
     try:
+        if defer_readiness_to_worker:
+            await _require_supported_security(engine, security_id)
+            return security_id, symbol
         if settings.app_env.strip().lower() != "production":
-            return security_id, symbol, ()
+            return security_id, symbol
         assessment = await assess_security_research_readiness(
             engine,
             security_id,
             settings=settings,
         )
         if assessment.readiness.ready:
-            return security_id, symbol, ()
-        if allow_durable_preparation and assessment.preparation_required:
-            return security_id, symbol, assessment.preparation_required
+            return security_id, symbol
         raise SecurityNotReadyError(assessment.readiness)
     except SecurityNotSupportedError as exc:
         raise HTTPException(
@@ -504,9 +532,9 @@ async def enqueue_research(
     user: CurrentUser,
 ) -> dict[str, object]:
     """Create a durable job and return immediately; the research worker performs the analysis."""
-    security_id, _, preparation_required = await _enforce_research_ready_or_503(
+    security_id, _ = await _enforce_research_ready_or_503(
         request.query,
-        allow_durable_preparation=True,
+        defer_readiness_to_worker=True,
     )
     assert settings.database_url is not None
     engine = create_database_engine(settings.database_url)
@@ -521,7 +549,7 @@ async def enqueue_research(
         depth=request.depth,
         requested_by=_research_owner_id(user),
         security_id=security_id,
-        metadata={"preparation_required": list(preparation_required)},
+        metadata={"data_preparation": "on_demand"},
     )
     return {
         "job_id": str(job_id),

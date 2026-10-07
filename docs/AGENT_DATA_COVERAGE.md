@@ -71,6 +71,9 @@ The same contract is enforced in three places:
 
 1. `python scripts/run_data_coverage_audit.py` for operator/CI-style auditing.
 2. Authenticated `GET /v1/system/data-readiness` for the dashboard and operational inspection.
-3. `POST /v1/research/run` in production, which returns HTTP 503 and the blocking-agent list until the global corpus and required agent contracts pass.
+3. `POST /v1/research/run` (inline, internal) in production, which returns HTTP 503 and the blocking-agent list until the requested security passes the per-agent contract.
+4. The research worker for `POST /v1/research/enqueue`: it first fetches the requested stock's missing data on demand (`app/research/stock_bundle.py`), then evaluates this same per-security contract and fails the job with the missing datasets and blocking agents if it is still incomplete.
+
+Per-security evaluation measures market freshness on the requested security's own latest sourced daily bar, not the corpus-wide latest bar.
 
 The dashboard may show `16/16 AGENTS READY` only when these server-side checks are actually green.

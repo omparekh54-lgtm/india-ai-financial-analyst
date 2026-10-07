@@ -103,7 +103,11 @@ async def assess_security_research_readiness(
     runtime_settings = settings or get_settings()
     evaluated_at = datetime.now(UTC)
     corpus_coverage = await load_data_coverage(engine)
-    security_coverage, symbol = await load_security_agent_coverage(engine, security_id)
+    security_coverage, symbol = await load_security_agent_coverage(
+        engine,
+        security_id,
+        classification_policy=runtime_settings.classification_policy,
+    )
     readiness = evaluate_security_readiness(
         security_id,
         symbol,
