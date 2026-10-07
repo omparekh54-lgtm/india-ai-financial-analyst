@@ -1,6 +1,38 @@
 # Production deployment runbook
 
-The production system is intentionally split into four runtime surfaces:
+## Current free hosting topology (from 7 October 2026)
+
+Railway is retired. Everything runs on free plans, and the part that must reach NSE runs in India:
+
+| Surface | Host | Notes |
+| --- | --- | --- |
+| Web (`apps/web`) | Vercel | `NEXT_PUBLIC_API_BASE_URL` points at the Render API |
+| API (`apps/api`, `Dockerfile`) | Render free web service, `render.yaml` | Sleeps after 15 minutes idle; about a minute to wake |
+| Research worker + daily shared-market refresh | Owner's computer in India, `deploy/local-node` | Polls the Supabase queue; no inbound ports |
+| Database, auth, job queue | Supabase | Unchanged |
+| Cloud price refresh fallback | GitHub Actions `free-tier-data-jobs.yml` | Needs the `DATABASE_URL` repository secret |
+
+### Deploy the API on Render
+
+1. Render dashboard → **New** → **Blueprint** → pick this repository. Render reads `render.yaml`
+   and proposes `india-ai-financial-analyst-api` (free, Singapore).
+2. When asked, paste the secret values: `DATABASE_URL`, `SUPABASE_URL`,
+   `SUPABASE_PUBLISHABLE_KEY`, `TAVILY_API_KEY`, and optionally `SENTRY_DSN`.
+3. Apply. When the deploy is live, open `https://<service>.onrender.com/health`.
+
+### Point the website at it
+
+Vercel → project → Settings → Environment Variables → set `NEXT_PUBLIC_API_BASE_URL` to the
+Render URL for Production, then redeploy. Also update `apps/web/.env.production` if the Render
+URL differs from the one committed there.
+
+### Start the research node
+
+Follow `deploy/local-node/README.md` on the computer in India.
+
+## Earlier multi-service layout
+
+The production system was originally split into four runtime surfaces:
 
 1. **Web** — `apps/web`, deployed to Vercel or another Next.js host.
 2. **API** — `apps/api`, deployed from the API Dockerfile as a long-lived web service.

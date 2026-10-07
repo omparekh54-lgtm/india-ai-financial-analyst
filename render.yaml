@@ -1,0 +1,55 @@
+# Render Blueprint for the public FastAPI service (free plan).
+# The research worker does NOT run here: it runs on the owner's computer in India
+# (deploy/local-node), because NSE blocks cloud hosts. The free web service sleeps after
+# 15 minutes idle and takes about a minute to wake on the next request.
+services:
+  - type: web
+    name: india-ai-financial-analyst-api
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerContext: ./apps/api
+    dockerfilePath: ./apps/api/Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: APP_NAME
+        value: India AI Financial Analyst
+      - key: LOG_LEVEL
+        value: INFO
+      - key: WEB_APP_URL
+        value: https://india-ai-financial-analyst.vercel.app
+      - key: CORS_ORIGINS
+        value: https://india-ai-financial-analyst.vercel.app
+      - key: FREE_ONLY
+        value: "true"
+      - key: ENABLE_LIVE_MARKET
+        value: "false"
+      - key: ENABLE_EXTERNAL_DATA_CALLS
+        value: "true"
+      - key: ENABLE_EXTERNAL_LLM_CALLS
+        value: "false"
+      - key: ENABLE_EVENT_RESEARCH
+        value: "false"
+      - key: CLASSIFICATION_POLICY
+        value: nse_four_tier
+      # The API image has no embedding/document runtimes; these run on the local node only.
+      - key: ENABLE_SEMANTIC_RETRIEVAL
+        value: "false"
+      - key: ENABLE_MULTIMODAL_DOCUMENT_ANALYSIS
+        value: "false"
+      - key: ENABLE_AUDIO_TRANSCRIPTION
+        value: "false"
+      # Secrets: set in the Render dashboard, never committed.
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: SENTRY_DSN
+        sync: false

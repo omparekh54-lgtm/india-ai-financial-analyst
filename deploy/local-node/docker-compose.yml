@@ -1,0 +1,27 @@
+# Research worker + daily shared-market refresh for the owner's own computer in India.
+# Needs no inbound ports: it polls the Supabase job queue and writes results back.
+#
+#   cd deploy/local-node
+#   cp .env.example .env        # then fill in DATABASE_URL and keys
+#   docker compose run --rm node python scripts/check_nse_reachability.py
+#   docker compose up -d --build
+#   docker compose logs -f
+services:
+  node:
+    build:
+      context: ../../apps/api
+      dockerfile: Dockerfile.market-imports
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      LOCAL_NODE_STATE_FILE: /state/local-node-state.json
+    command: ["python", "scripts/run_local_node.py"]
+    volumes:
+      - node-state:/state
+    init: true
+    stop_grace_period: 45s
+    restart: unless-stopped
+
+volumes:
+  node-state:
